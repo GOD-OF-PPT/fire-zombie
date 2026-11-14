@@ -59,17 +59,42 @@ if (scenario === 'workshop') {
     console.log('after retry', await state());
     await shot('r-retry');
   }
+} else if (scenario === 'mid') {
+  // jump to runway progress PROG (default 0.35) with autopilot, then capture real-time frames
+  const sector = process.env.SECTOR ?? '1';
+  const prog = Number(process.env.PROG ?? '0.35');
+  await page.goto(base + `?play=1&unlock=1&sector=${sector}`);
+  await page.waitForTimeout(800);
+  await drag();
+  await page.evaluate((p) => {
+    const g = window.__prism;
+    g.autoplay = true;
+    for (let i = 0; i < 400 && g.sim.getSnapshot().runwayProgress < p; i++) g.fastForward(0.5, true);
+  }, prog);
+  for (let i = 0; i < 4; i++) {
+    await page.waitForTimeout(1200);
+    console.log('mid', i, await state());
+    await shot(`m${i}`);
+  }
 } else if (scenario === 'boss') {
   const sector = process.env.SECTOR ?? '1';
   await page.goto(base + `?play=1&unlock=1&sector=${sector}`);
   await page.waitForTimeout(800);
   await drag();
   // jump to just before the boss, then watch in real time with autopilot
-  await page.evaluate(() => {
+  await page.evaluate((skip) => {
     const g = window.__prism;
     for (let i = 0; i < 400 && g.sim.getSnapshot().runwayProgress < 0.94; i++) g.fastForward(0.5);
+    if (skip !== null) {
+      for (let i = 0; i < 80; i++) {
+        const b = g.sim.getSnapshot().boss;
+        if (b && b.introProgress >= 1) break;
+        g.fastForward(0.5);
+      }
+      g.fastForward(Number(skip || 0));
+    }
     g.autoplay = true;
-  });
+  }, process.env.SKIPINTRO ?? null);
   for (let i = 0; i < 8; i++) {
     await page.waitForTimeout(1500);
     console.log('rt', i, await state());

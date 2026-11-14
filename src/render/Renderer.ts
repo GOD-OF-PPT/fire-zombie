@@ -26,6 +26,11 @@ import {
   paintLensPlate,
   paintVaultPlate,
 } from './textures';
+import { InstancedRig, makeCharacterMaterial } from './models/rig';
+import { buildBladeGeo, buildBoltGeo, buildRewardDisplayGeo, buildSoldierModels, type SoldierModel } from './models/soldiers';
+import { buildMonsterModels, poseMonster, type MonsterModel } from './models/monsters';
+import { buildBossRigs, type BossRig } from './models/bosses';
+import { GeoBuilder, box, cyl, sph, tor } from './models/kit';
 
 export const WEAPON_COLOR: Record<WeaponId, number> = {
   pulse: 0x3ef3ff,
@@ -40,9 +45,13 @@ const TRACK_CENTER_Z = -60;
 const MAX_DRONES = 48;
 const MAX_PROJ = 900;
 const MAX_ENEMY_PER_KIND = 72;
+const MAX_SHADOWS = 320;
+/** visual-only upscale of squad members so individual soldiers read on phones */
+const SOLDIER_SCALE = 1.25;
 
-const COLOR_SLOW = new THREE.Color(0x9fe6ff);
-const COLOR_WHITE = new THREE.Color(0xffffff);
+const ENEMY_ANIM_SPEED: Record<EnemyKind, number> = { crawler: 11, dasher: 12, bastion: 4.5, mitosis: 4, siphon: 3 };
+const ENEMY_BAR_H: Record<EnemyKind, number> = { crawler: 1.15, dasher: 1.4, bastion: 2.55, mitosis: 1.8, siphon: 2.2 };
+const TINT_SLOW = new THREE.Color(0.62, 0.92, 1.55);
 
 interface GateView {
   id: number;
@@ -68,7 +77,10 @@ interface VaultView {
   crystal: THREE.Mesh;
   crystalMat: THREE.MeshStandardMaterial;
   core: THREE.Mesh;
-  coreMat: THREE.MeshBasicMaterial;
+  coreMat: THREE.MeshStandardMaterial;
+  frame: THREE.Mesh;
+  ringMat: THREE.MeshBasicMaterial;
+  reward: string;
   plate: THREE.Mesh;
   ctx: CanvasRenderingContext2D;
   tex: THREE.CanvasTexture;
@@ -81,6 +93,8 @@ interface BarrelView {
   group: THREE.Group;
   body: THREE.Mesh;
   bodyMat: THREE.MeshStandardMaterial;
+  light: THREE.Mesh;
+  lightMat: THREE.MeshBasicMaterial;
   ring: THREE.Mesh;
   fill: THREE.Mesh;
   ringMat: THREE.MeshBasicMaterial;
@@ -107,11 +121,7 @@ interface HazardView {
 }
 
 interface BossView {
-  root: THREE.Group;
-  body: THREE.Group;
-  mats: THREE.MeshStandardMaterial[];
-  spinners: THREE.Object3D[];
-  secondary?: THREE.Group;
+  rig: BossRig;
   pylons?: THREE.Group[];
   beams?: THREE.Mesh[];
   shield: THREE.Mesh;
@@ -166,19 +176,33 @@ export class Renderer {
   private hemi!: THREE.HemisphereLight;
 
   // squad
-  private droneMeshes: THREE.InstancedMesh[] = [];
-  private droneMats: THREE.MeshStandardMaterial[] = [];
-  private droneCur: Array<{ x: number; z: number; s: number; alive: boolean }> = [];
+  private charMat!: THREE.MeshStandardMaterial;
+  private soldierModels: SoldierModel[] = [];
+  private soldierRigs: InstancedRig[] = [];
+  private soldierWeapon: WeaponId | null = null;
+  private droneCur: Array<{ x: number; z: number; s: number; alive: boolean; ph: number; vx: number }> = [];
   private squadGlow!: THREE.Mesh;
   private squadGlowMat!: THREE.MeshBasicMaterial;
   private blades!: THREE.InstancedMesh;
-  private muzzle!: THREE.Mesh;
-  private muzzleMat!: THREE.MeshBasicMaterial;
+  private flashes!: THREE.InstancedMesh;
+  private flashMat!: THREE.MeshBasicMaterial;
   private muzzleFlash = 0;
+  private shadows!: THREE.InstancedMesh;
+  private shadowCount = 0;
+  private rot18 = new Float32Array(18);
+  private off18 = new Float32Array(18);
+  private rootM = new THREE.Matrix4();
+  private rootQ = new THREE.Quaternion();
+  private rootP = new THREE.Vector3();
+  private rootS = new THREE.Vector3();
+  private yAxis = new THREE.Vector3(0, 1, 0);
+  private tint = new THREE.Color();
 
   // entities
-  private enemyMeshes = new Map<EnemyKind, THREE.InstancedMesh>();
-  private enemyBaseRadius: Record<EnemyKind, number> = { crawler: 0.48, dasher: 0.58, bastion: 1.15, mitosis: 0.72, siphon: 0.68 };
+  private monsterModels!: Record<EnemyKind, MonsterModel>;
+  private enemyRigs = new Map<EnemyKind, InstancedRig>();
+  private enemyPose = new Map<EnemyKind, { rot: Float32Array; scl: Float32Array; off: Float32Array }>();
+  private enemyCounts: Record<EnemyKind, number> = { crawler: 0, dasher: 0, bastion: 0, mitosis: 0, siphon: 0 };
   private hpBg!: THREE.InstancedMesh;
   private hpFg!: THREE.InstancedMesh;
   private telegraphs!: THREE.InstancedMesh;
@@ -202,6 +226,11 @@ export class Renderer {
   // shared
   private glowTex = makeGlowTexture();
   private stripeTex = makeStripeTexture();
+  private propMat = makeCharacterMaterial(0xbfe8ff, 0.35, 1.8);
+  private rewardGeos = new Map<string, THREE.BufferGeometry>();
+  private vaultFrameGeo!: THREE.BufferGeometry;
+  private barrelGeo!: THREE.BufferGeometry;
+  private towerMat!: THREE.ShaderMaterial;
   private lensTex: THREE.CanvasTexture;
   private dummy = new THREE.Object3D();
   private tmpColor = new THREE.Color();
@@ -243,6 +272,10 @@ export class Renderer {
     const dir = new THREE.DirectionalLight(0xffffff, 1.6);
     dir.position.set(4, 12, 8);
     this.scene.add(dir);
+    // back light from down-track: rims the soldiers' silhouettes and the monsters' tops
+    const back = new THREE.DirectionalLight(0x9fd8ff, 0.9);
+    back.position.set(-3, 7, -14);
+    this.scene.add(back);
   }
 
   private buildEnvironment(): void {
@@ -341,12 +374,57 @@ export class Renderer {
     this.posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.7, 0.16), this.postMat, 64);
     this.scene.add(this.posts);
 
-    // skyline towers
+    // skyline towers: lit window grids computed in the shader (no textures)
     const towerGeo = new THREE.BoxGeometry(1, 1, 1);
     towerGeo.translate(0, 0.5, 0);
-    const towerMat = new THREE.MeshStandardMaterial({ color: 0x0b1230, roughness: 0.8, metalness: 0.2, emissive: 0x050a20, emissiveIntensity: 1 });
+    this.towerMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uBase: { value: new THREE.Color(0x0b1230) },
+        uWinA: { value: new THREE.Color(0x3ef3ff) },
+        uWinB: { value: new THREE.Color(0xff3fd2) },
+        uFog: { value: new THREE.Color(0x0a1640) },
+        uTime: { value: 0 },
+      },
+      vertexShader: /* glsl */ `
+        varying vec3 vL; varying vec3 vN; varying vec3 vW; varying float vSeed; varying float vH;
+        void main() {
+          vec3 sc = vec3(length(instanceMatrix[0].xyz), length(instanceMatrix[1].xyz), length(instanceMatrix[2].xyz));
+          vL = position * sc;
+          vH = sc.y;
+          vN = normal;
+          vSeed = instanceMatrix[3].x * 7.31 + sc.x * 3.7;
+          vec4 w = modelMatrix * instanceMatrix * vec4(position, 1.0);
+          vW = w.xyz;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uBase; uniform vec3 uWinA; uniform vec3 uWinB; uniform vec3 uFog; uniform float uTime;
+        varying vec3 vL; varying vec3 vN; varying vec3 vW; varying float vSeed; varying float vH;
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        void main() {
+          vec3 n = abs(vN);
+          vec3 c = uBase * (0.55 + 0.6 * clamp(vL.y / max(vH, 1.0), 0.0, 1.0));
+          if (n.y < 0.5) {
+            float u = (n.x > 0.5 ? vL.z : vL.x) / 0.55;
+            float v = vL.y / 0.7;
+            vec2 cell = floor(vec2(u, v));
+            vec2 f = fract(vec2(u, v));
+            float win = step(0.22, f.x) * step(f.x, 0.78) * step(0.25, f.y) * step(f.y, 0.75);
+            float h = hash(cell + vSeed);
+            float lit = step(0.62, h) * win * step(0.6, vL.y);
+            vec3 wc = mix(uWinA, uWinB, step(0.86, h));
+            c += wc * lit * (0.55 + 0.45 * sin(uTime * 0.7 + h * 40.0));
+            // thin vertical neon trims every few window columns
+            c += uWinA * 0.3 * smoothstep(0.47, 0.5, abs(fract(u * 0.125) - 0.5));
+          } else {
+            c = uWinA * 0.25;
+          }
+          float fog = smoothstep(30.0, 112.0, -vW.z) * 0.85 + 0.1;
+          gl_FragColor = vec4(mix(c, uFog, fog), 1.0);
+        }`,
+    });
     const n = 72;
-    this.towers = new THREE.InstancedMesh(towerGeo, towerMat, n);
+    this.towers = new THREE.InstancedMesh(towerGeo, this.towerMat, n);
     this.towerCapMat = new THREE.MeshBasicMaterial({ color: 0x3ef3ff, toneMapped: false });
     this.towerCaps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.08, 1), this.towerCapMat, n);
     let seed = 7;
@@ -364,29 +442,19 @@ export class Renderer {
         h: 1.5 + rnd() * rnd() * 22,
       });
     }
+    this.towers.frustumCulled = false;
+    this.towerCaps.frustumCulled = false;
     this.scene.add(this.towers, this.towerCaps);
   }
 
   private buildSquad(): void {
-    const geos = [
-      new THREE.ConeGeometry(0.15, 0.48, 3),
-      new THREE.ConeGeometry(0.22, 0.66, 4),
-      new THREE.OctahedronGeometry(0.36, 0),
-    ];
-    geos[0]!.rotateX(-Math.PI / 2);
-    geos[1]!.rotateX(-Math.PI / 2);
-    geos[2]!.scale(1, 0.55, 1.5);
-    const colors = [0x3ef3ff, 0x9ffcff, 0xffe27a];
-    for (let t = 0; t < 3; t++) {
-      const mat = std(colors[t]!, t === 2 ? 0.9 : 0.6, { metalness: 0.4 });
-      const m = new THREE.InstancedMesh(geos[t]!, mat, MAX_DRONES);
-      m.frustumCulled = false;
-      m.count = 0;
-      this.droneMats.push(mat);
-      this.droneMeshes.push(m);
-      this.scene.add(m);
+    // 「棱镜战士」: tier 1 trooper, tier 2 heavy trooper (=5), tier 3 Prism mech (=25)
+    this.charMat = makeCharacterMaterial(0x7fe9ff, 0.6, 1.7, 0.22);
+    this.soldierModels = buildSoldierModels();
+    for (const model of this.soldierModels) {
+      this.soldierRigs.push(new InstancedRig(model.parts, this.charMat, MAX_DRONES, this.scene));
     }
-    for (let i = 0; i < MAX_DRONES; i++) this.droneCur.push({ x: 0, z: PLAYER_Z, s: 0, alive: false });
+    for (let i = 0; i < MAX_DRONES; i++) this.droneCur.push({ x: 0, z: PLAYER_Z, s: 0, alive: false, ph: i * 0.37, vx: 0 });
 
     this.squadGlowMat = additive(0x3ef3ff, 0.5, this.glowTex);
     this.squadGlow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.squadGlowMat);
@@ -394,35 +462,38 @@ export class Renderer {
     this.squadGlow.position.y = 0.04;
     this.scene.add(this.squadGlow);
 
-    const bladeGeo = new THREE.OctahedronGeometry(0.42, 0);
-    bladeGeo.scale(1, 0.18, 0.45);
-    this.blades = new THREE.InstancedMesh(bladeGeo, std(0xffd84a, 1.0, { metalness: 0.7 }), 4);
+    // soft blob shadows under every character (soldiers + monsters), one draw call
+    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, map: this.glowTex, transparent: true, opacity: 0.55, depthWrite: false });
+    this.shadows = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), shadowMat, MAX_SHADOWS);
+    this.shadows.count = 0;
+    this.shadows.frustumCulled = false;
+    this.shadows.renderOrder = 1;
+    this.scene.add(this.shadows);
+
+    this.blades = new THREE.InstancedMesh(buildBladeGeo(), this.charMat, 4);
     this.blades.count = 0;
     this.blades.frustumCulled = false;
     this.scene.add(this.blades);
 
-    this.muzzleMat = additive(0x3ef3ff, 0, this.glowTex);
-    this.muzzle = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.muzzleMat);
-    this.muzzle.rotation.x = -Math.PI / 2;
-    this.scene.add(this.muzzle);
+    // per-soldier muzzle flashes (camera-facing additive sprites)
+    this.flashMat = additive(0xffffff, 0.95, this.glowTex);
+    this.flashes = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), this.flashMat, MAX_DRONES);
+    this.flashes.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_DRONES * 3), 3);
+    this.flashes.count = 0;
+    this.flashes.frustumCulled = false;
+    this.flashes.renderOrder = 3;
+    this.scene.add(this.flashes);
   }
 
   private buildEnemies(): void {
-    const defs: Array<[EnemyKind, THREE.BufferGeometry]> = [
-      ['crawler', new THREE.IcosahedronGeometry(0.48, 0)],
-      ['dasher', new THREE.ConeGeometry(0.58, 1.35, 4).rotateX(Math.PI / 2)],
-      ['bastion', new THREE.BoxGeometry(2.3, 1.7, 0.75)],
-      ['mitosis', new THREE.DodecahedronGeometry(0.72, 0)],
-      ['siphon', new THREE.TorusGeometry(0.48, 0.18, 6, 12)],
-    ];
-    for (const [kind, geo] of defs) {
-      const mat = std(0xffffff, 0.55, { metalness: 0.2 });
-      const m = new THREE.InstancedMesh(geo, mat, MAX_ENEMY_PER_KIND);
-      m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_ENEMY_PER_KIND * 3), 3);
-      m.count = 0;
-      m.frustumCulled = false;
-      this.enemyMeshes.set(kind, m);
-      this.scene.add(m);
+    // 「故障病毒」 monsters: one multi-part instanced rig per kind
+    const enemyMat = makeCharacterMaterial(0xff8ac0, 0.85, 1.9, 0.6);
+    this.monsterModels = buildMonsterModels();
+    for (const kind of Object.keys(this.monsterModels) as EnemyKind[]) {
+      const model = this.monsterModels[kind];
+      this.enemyRigs.set(kind, new InstancedRig(model.parts, enemyMat, MAX_ENEMY_PER_KIND, this.scene));
+      const n = model.parts.length;
+      this.enemyPose.set(kind, { rot: new Float32Array(n * 3), scl: new Float32Array(n), off: new Float32Array(n * 3) });
     }
     const barGeo = new THREE.PlaneGeometry(1, 0.16);
     const fgGeo = new THREE.PlaneGeometry(1, 0.16).translate(0.5, 0, 0);
@@ -452,7 +523,7 @@ export class Renderer {
 
   private buildProjectiles(): void {
     const mat = new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
-    this.projMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, MAX_PROJ);
+    this.projMesh = new THREE.InstancedMesh(buildBoltGeo(), mat, MAX_PROJ);
     this.projMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PROJ * 3), 3);
     this.projMesh.count = 0;
     this.projMesh.frustumCulled = false;
@@ -500,94 +571,58 @@ export class Renderer {
   }
 
   private buildBosses(): void {
-    // WARDEN-01: red crystal fortress with orbiting shards
+    const rigs = buildBossRigs();
+    // WARDEN-01 赤棱守卫: crystal golem
     {
-      const root = new THREE.Group();
-      const body = new THREE.Group();
-      const coreMat = std(0xff2a4a, 0.7, { metalness: 0.5 });
-      const core = new THREE.Mesh(new THREE.OctahedronGeometry(1.7, 0), coreMat);
-      core.scale.set(1, 1.25, 1);
-      const armMat = std(0x5a0a1c, 0.35, { metalness: 0.7 });
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(2.5, 0.16, 6, 24), std(0xff6a3c, 0.8));
-      ring.rotation.x = Math.PI / 2;
-      const spin = new THREE.Group();
-      for (let i = 0; i < 4; i++) {
-        const shard = new THREE.Mesh(new THREE.TetrahedronGeometry(0.62, 0), armMat);
-        const a = (i / 4) * Math.PI * 2;
-        shard.position.set(Math.cos(a) * 2.6, 0, Math.sin(a) * 2.6);
-        spin.add(shard);
-      }
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.8, 0.5, 8), armMat);
-      base.position.y = -1.9;
-      body.add(core, ring, spin, base);
-      const shield = this.makeShield(3.2);
-      root.add(body, shield);
-      root.visible = false;
-      this.scene.add(root);
-      this.bossViews.set('warden_01', { root, body, mats: [coreMat, armMat], spinners: [spin, ring], shield });
+      const rig = rigs.warden_01;
+      const shield = this.makeShield(3.4);
+      shield.position.y = rig.coreHeight;
+      rig.root.add(shield);
+      rig.root.visible = false;
+      this.scene.add(rig.root);
+      this.bossViews.set('warden_01', { rig, shield });
     }
-    // HYDRA-02: twin-headed executor
+    // HYDRA-02 双生执政官: twin serpent heads (the cyan one splits off as the secondary core)
     {
-      const root = new THREE.Group();
-      const body = new THREE.Group();
-      const headMat = std(0xff3fd2, 0.7, { metalness: 0.5 });
-      const head = new THREE.Mesh(new THREE.DodecahedronGeometry(1.5, 0), headMat);
-      const crown = new THREE.Mesh(new THREE.TorusGeometry(2.0, 0.12, 6, 20), std(0xffd84a, 0.9));
-      crown.rotation.x = Math.PI / 2.4;
-      const fins = new THREE.Group();
-      const finMat = std(0x3a0b46, 0.3, { metalness: 0.8 });
-      for (let i = 0; i < 6; i++) {
-        const fin = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1.6, 3), finMat);
-        const a = (i / 6) * Math.PI * 2;
-        fin.position.set(Math.cos(a) * 1.9, Math.sin(a) * 1.9, 0);
-        fin.rotation.z = a - Math.PI / 2;
-        fins.add(fin);
-      }
-      body.add(head, crown, fins);
-      const shield = this.makeShield(2.6);
-      const secondary = new THREE.Group();
-      const head2Mat = std(0x5fd8ff, 0.8, { metalness: 0.5 });
-      const head2 = new THREE.Mesh(new THREE.DodecahedronGeometry(1.2, 0), head2Mat);
-      const crown2 = new THREE.Mesh(new THREE.TorusGeometry(1.6, 0.1, 6, 20), std(0xffd84a, 0.9));
-      crown2.rotation.x = Math.PI / 2.4;
-      const shield2 = this.makeShield(2.2);
-      secondary.add(head2, crown2, shield2);
-      secondary.visible = false;
-      root.add(body, shield);
-      root.visible = false;
-      this.scene.add(root, secondary);
-      this.bossViews.set('hydra_02', { root, body, mats: [headMat, finMat, head2Mat], spinners: [crown, fins, crown2], secondary, shield, shield2 });
+      const rig = rigs.hydra_02;
+      const shield = this.makeShield(2.8);
+      shield.position.y = rig.coreHeight;
+      rig.root.add(shield);
+      const shield2 = this.makeShield(2.4);
+      shield2.position.y = rig.secondaryCoreHeight ?? 3;
+      rig.secondary!.add(shield2);
+      rig.root.visible = false;
+      rig.secondary!.visible = false;
+      this.scene.add(rig.root, rig.secondary!);
+      this.bossViews.set('hydra_02', { rig, shield, shield2 });
     }
-    // OMEGA-ZERO: singularity core with gyroscope rings + shield pylons
+    // OMEGA-ZERO 奇点主脑: giant eye + shield pylons (crystal obelisks)
     {
-      const root = new THREE.Group();
-      const body = new THREE.Group();
-      const coreMat = std(0xffc531, 0.8, { metalness: 0.8 });
-      const core = new THREE.Mesh(new THREE.IcosahedronGeometry(1.9, 1), coreMat);
-      const darkMat = std(0x220510, 0.25, { metalness: 0.9 });
-      const inner = new THREE.Mesh(new THREE.IcosahedronGeometry(2.3, 0), darkMat);
-      (inner.material as THREE.MeshStandardMaterial).wireframe = true;
-      const spinners: THREE.Object3D[] = [inner];
-      for (let i = 0; i < 3; i++) {
-        const r = new THREE.Mesh(new THREE.TorusGeometry(2.7 + i * 0.45, 0.08, 6, 36), std(i === 1 ? 0xff3355 : 0xffc531, 0.9));
-        r.rotation.set(Math.random() * 3, Math.random() * 3, 0);
-        body.add(r);
-        spinners.push(r);
-      }
-      body.add(core, inner);
-      const shield = this.makeShield(3.3);
-      root.add(body, shield);
-      root.visible = false;
+      const rig = rigs.omega_zero;
+      const shield = this.makeShield(3.9);
+      shield.position.y = rig.coreHeight;
+      rig.root.add(shield);
+      rig.root.visible = false;
+      this.scene.add(rig.root);
+      const crystalB = new GeoBuilder();
+      crystalB
+        .add(new THREE.OctahedronGeometry(0.9, 0), 0x3fa8c8, 0.5, { s: [1, 2.2, 1] })
+        .add(new THREE.OctahedronGeometry(0.3, 0), 0xffffff, 2.0, { s: [1, 2.2, 1], p: [0, 0, 0.55] })
+        .add(tor(1.1, 0.06, 4, 20), 0x8ff6ff, 2.6, { r: [Math.PI / 2, 0, 0], p: [0, -0.6, 0] });
+      const crystalGeo = crystalB.build();
+      const footB = new GeoBuilder();
+      footB
+        .add(cyl(0.9, 1.25, 0.45, 6), 0x1c0f24, 0, { p: [0, 0.22, 0] })
+        .add(cyl(0.7, 0.9, 0.2, 6), 0x2c1236, 0, { p: [0, 0.55, 0] })
+        .add(tor(1.0, 0.05, 4, 6), 0x8ff6ff, 2.4, { r: [Math.PI / 2, 0, 0], p: [0, 0.46, 0] });
+      const footGeo = footB.build();
       const pylons: THREE.Group[] = [];
       const beams: THREE.Mesh[] = [];
-      const pylonMat = std(0x8ff6ff, 0.8, { metalness: 0.6 });
       for (let i = 0; i < 2; i++) {
         const p = new THREE.Group();
-        const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.9, 0), pylonMat);
-        crystal.scale.set(1, 2.2, 1);
-        crystal.position.y = 1.8;
-        const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.2, 0.4, 6), darkMat);
-        foot.position.y = 0.2;
+        const crystal = new THREE.Mesh(crystalGeo, this.propMat);
+        crystal.position.y = 2.1;
+        const foot = new THREE.Mesh(footGeo, this.propMat);
         p.add(crystal, foot);
         p.visible = false;
         pylons.push(p);
@@ -596,8 +631,7 @@ export class Renderer {
         beams.push(beam);
         this.scene.add(p, beam);
       }
-      this.scene.add(root);
-      this.bossViews.set('omega_zero', { root, body, mats: [coreMat, darkMat, pylonMat], spinners, pylons, beams, shield });
+      this.bossViews.set('omega_zero', { rig, pylons, beams, shield });
     }
   }
 
@@ -706,6 +740,7 @@ export class Renderer {
     this.trackMat.uniforms.uScroll!.value = scroll;
     this.trackMat.uniforms.uTime!.value = t;
     this.groundMat.uniforms.uScroll!.value = scroll;
+    this.towerMat.uniforms.uTime!.value = t;
 
     this.updateEnvironment(scroll);
     this.updateSquad(snap, dt, t);
@@ -754,12 +789,34 @@ export class Renderer {
     this.posts.instanceMatrix.needsUpdate = true;
   }
 
+  private pushShadow(x: number, z: number, r: number): void {
+    if (this.shadowCount >= MAX_SHADOWS) return;
+    const d = this.dummy;
+    d.position.set(x, 0.03, z);
+    d.rotation.set(0, 0, 0);
+    d.scale.set(r * 2, 1, r * 2);
+    d.updateMatrix();
+    this.shadows.setMatrixAt(this.shadowCount++, d.matrix);
+  }
+
   private updateSquad(snap: SimSnapshot, dt: number, t: number): void {
+    this.shadowCount = 0;
+    if (snap.weapon !== this.soldierWeapon) {
+      // everyone visibly switches to the newly unlocked weapon model
+      this.soldierWeapon = snap.weapon;
+      this.soldierRigs.forEach((rig, i) => rig.setPartGeometry('gun', this.soldierModels[i]!.weapons[snap.weapon]));
+    }
     const positions = snap.dronePositions;
     const follow = 1 - Math.exp(-dt * 16);
-    const counts = [0, 0, 0];
     const d = this.dummy;
     const overdrive = snap.overdriveTimer > 0;
+    const wc = WEAPON_COLOR[snap.weapon];
+    const camQuat = this.camera.quaternion;
+    const rot = this.rot18;
+    const off = this.off18;
+    this.muzzleFlash = Math.max(0, this.muzzleFlash - dt * 12);
+    let flashes = 0;
+    for (const rig of this.soldierRigs) rig.begin();
     for (let i = 0; i < MAX_DRONES; i++) {
       const cur = this.droneCur[i]!;
       const target = positions[i];
@@ -771,46 +828,78 @@ export class Renderer {
         continue;
       }
       if (!cur.alive) {
-        // new drones "fly in" from the squad center
+        // new members "drop in" from the squad center
         cur.alive = true;
         cur.x = snap.squadX;
         cur.z = PLAYER_Z + 0.6;
         cur.s = 0.01;
+        cur.vx = 0;
       }
+      const px = cur.x;
       cur.x += (target.x - cur.x) * follow;
       cur.z += (target.z - cur.z) * follow;
+      cur.vx += ((cur.x - px) / Math.max(dt, 1e-4) - cur.vx) * Math.min(1, dt * 10);
       cur.s += (1 - cur.s) * (1 - Math.exp(-dt * 10));
       const tierIdx = target.tier - 1;
-      const mesh = this.droneMeshes[tierIdx]!;
-      const bob = Math.sin(t * 6 + i * 1.7) * 0.06;
-      d.position.set(cur.x, 0.45 + bob + tierIdx * 0.12, cur.z);
-      d.rotation.set(0, 0, Math.sin(t * 3 + i) * 0.15 + (snap.squadX - cur.x) * 0.1);
-      const s = cur.s * (overdrive ? 1.12 : 1);
-      d.scale.set(s, s, s);
-      d.updateMatrix();
-      mesh.setMatrixAt(counts[tierIdx]!, d.matrix);
-      counts[tierIdx]! += 1;
+      const model = this.soldierModels[tierIdx]!;
+      const rig = this.soldierRigs[tierIdx]!;
+      const mech = tierIdx === 2;
+      cur.ph += dt * (mech ? 7 : 11);
+      const sp = Math.sin(cur.ph);
+      const legA = mech ? 0.45 : 0.75;
+      rot.fill(0);
+      off.fill(0);
+      // parts: legL, legR, body, head, arms, gun
+      rot[0] = sp * legA;
+      rot[3] = -sp * legA;
+      const bob = Math.abs(Math.cos(cur.ph)) * (mech ? 0.05 : 0.035) * model.scale;
+      const bank = THREE.MathUtils.clamp(-cur.vx * 0.02, -0.12, 0.12);
+      rot[6] = -0.05;
+      rot[8] = bank;
+      rot[9] = 0.04 + Math.sin(cur.ph * 0.5) * 0.03;
+      rot[11] = bank * 0.5;
+      const fl = this.muzzleFlash * (0.55 + 0.45 * Math.sin(i * 7.3 + t * 37));
+      const recoil = fl * 0.06 * model.scale;
+      rot[12] = -fl * 0.1;
+      rot[15] = -fl * 0.1;
+      for (let k = 2; k < 6; k++) off[k * 3 + 1] = bob;
+      off[14] += recoil;
+      off[17] += recoil;
+      const s = cur.s * (overdrive ? 1.1 : 1) * SOLDIER_SCALE;
+      this.rootP.set(cur.x, 0, cur.z);
+      this.rootQ.setFromAxisAngle(this.yAxis, THREE.MathUtils.clamp(-cur.vx * 0.03, -0.4, 0.4));
+      this.rootS.setScalar(s);
+      this.rootM.compose(this.rootP, this.rootQ, this.rootS);
+      const od = overdrive ? 0.35 + Math.sin(t * 20 + i) * 0.15 : 0;
+      this.tint.setScalar(1 + (1 - cur.s) * 2.5 + od);
+      rig.push(this.rootM, rot, this.tint, undefined, off);
+      this.pushShadow(cur.x, cur.z, 0.26 * SOLDIER_SCALE * model.scale * (mech ? 2 : 1));
+
+      if (fl > 0.08 && flashes < MAX_DRONES) {
+        this.tmpV.set(model.muzzle[0], model.muzzle[1] + bob, model.muzzle[2] + recoil).applyMatrix4(this.rootM);
+        d.position.copy(this.tmpV);
+        d.quaternion.copy(camQuat);
+        const fs = (mech ? 0.95 : 0.5) * (0.6 + fl * 0.6);
+        d.scale.set(fs, fs, fs);
+        d.updateMatrix();
+        this.flashes.setMatrixAt(flashes, d.matrix);
+        this.tmpColor.setHex(wc).multiplyScalar(0.4 + fl);
+        this.flashes.setColorAt(flashes, this.tmpColor);
+        flashes++;
+      }
     }
-    for (let ti = 0; ti < 3; ti++) {
-      const mesh = this.droneMeshes[ti]!;
-      mesh.count = counts[ti]!;
-      mesh.instanceMatrix.needsUpdate = true;
-      this.droneMats[ti]!.emissiveIntensity = (ti === 2 ? 0.9 : 0.6) + (overdrive ? 0.6 + Math.sin(t * 20) * 0.2 : 0);
-    }
-    const wc = WEAPON_COLOR[snap.weapon];
+    for (const rig of this.soldierRigs) rig.end();
+    this.flashes.count = flashes;
+    this.flashes.instanceMatrix.needsUpdate = true;
+    if (this.flashes.instanceColor) this.flashes.instanceColor.needsUpdate = true;
+    d.rotation.set(0, 0, 0);
+
     this.squadGlowMat.color.setHex(overdrive ? 0xffffff : wc);
     const gs = snap.formationRadius * 2.4 + 1.6 + (overdrive ? 0.8 : 0);
     this.squadGlow.scale.set(gs, gs, 1);
     this.squadGlow.position.set(snap.squadX, 0.04, PLAYER_Z - 0.1);
     this.squadGlow.visible = snap.squadCount > 0;
-    this.squadGlowMat.opacity = 0.45 + (overdrive ? 0.25 : 0);
-
-    this.muzzleFlash = Math.max(0, this.muzzleFlash - dt * 14);
-    this.muzzleMat.color.setHex(wc);
-    this.muzzleMat.opacity = this.muzzleFlash * 0.8;
-    const ms = 1.2 + snap.formationRadius;
-    this.muzzle.scale.set(ms, ms * 0.7, 1);
-    this.muzzle.position.set(snap.squadX, 0.6, PLAYER_Z - snap.formationRadius - 0.6);
+    this.squadGlowMat.opacity = 0.32 + (overdrive ? 0.25 : 0);
 
     // orbital blades
     const nb = snap.bladesCount;
@@ -818,8 +907,8 @@ export class Renderer {
     for (let i = 0; i < nb; i++) {
       const a = snap.bladesAngle + (i / nb) * Math.PI * 2;
       d.position.set(snap.squadX + Math.cos(a) * BLADES_ORBIT_RADIUS, 0.55, PLAYER_Z + Math.sin(a) * BLADES_ORBIT_RADIUS * 0.85);
-      d.rotation.set(0, -a * 3 + t * 12, 0);
-      d.scale.set(1, 1, 1);
+      d.rotation.set(0.25, -a * 3 + t * 14, 0);
+      d.scale.set(1.5, 1.5, 1.5);
       d.updateMatrix();
       this.blades.setMatrixAt(i, d.matrix);
     }
@@ -827,60 +916,44 @@ export class Renderer {
   }
 
   private updateEnemies(snap: SimSnapshot, t: number): void {
-    const counts = new Map<EnemyKind, number>();
     const d = this.dummy;
     let bars = 0;
     let tels = 0;
     let tetherIdx = 0;
     const camQuat = this.camera.quaternion;
+    for (const rig of this.enemyRigs.values()) rig.begin();
     for (const e of snap.enemies) {
-      const mesh = this.enemyMeshes.get(e.kind)!;
-      const idx = counts.get(e.kind) ?? 0;
-      if (idx >= MAX_ENEMY_PER_KIND) continue;
-      counts.set(e.kind, idx + 1);
-      const sc = e.radius / this.enemyBaseRadius[e.kind];
-      const wob = Math.sin(t * 9 + e.id) * 0.08;
+      const rig = this.enemyRigs.get(e.kind)!;
+      if (rig.size >= MAX_ENEMY_PER_KIND) continue;
+      const model = this.monsterModels[e.kind];
+      const pose = this.enemyPose.get(e.kind)!;
+      const sc = e.radius / model.baseRadius;
       const hit = e.hitPulse;
-      switch (e.kind) {
-        case 'crawler':
-          d.position.set(e.x, e.radius + Math.abs(Math.sin(t * 12 + e.id)) * 0.18, e.z);
-          d.rotation.set(t * 4 + e.id, t * 3, 0);
-          d.scale.setScalar(sc * (1 + hit * 0.25));
-          break;
-        case 'dasher':
-          d.position.set(e.x, 0.65, e.z);
-          d.rotation.set(0, 0, t * (e.telegraphTimer > 0 ? 30 : 6));
-          d.scale.setScalar(sc * (1 + hit * 0.2));
-          break;
-        case 'bastion':
-          d.position.set(e.x, 0.85 + wob * 0.3, e.z);
-          d.rotation.set(0, 0, 0);
-          d.scale.set(sc * (1 + hit * 0.06), sc, sc);
-          break;
-        case 'mitosis': {
-          const p = 1 + Math.sin(t * 7 + e.id) * 0.08;
-          d.position.set(e.x, e.radius + 0.1, e.z);
-          d.rotation.set(t * 1.5, t * 2 + e.id, 0);
-          d.scale.setScalar(sc * p * (1 + hit * 0.2));
-          break;
-        }
-        case 'siphon':
-          d.position.set(e.x, 1.1 + wob, e.z);
-          d.rotation.set(0, t * 3, 0);
-          d.scale.setScalar(sc * (1 + hit * 0.2));
-          break;
+      const tele = e.kind === 'dasher' && e.telegraphTimer > 0;
+      const slowed = e.slowTimer > 0;
+      const ph = t * ENEMY_ANIM_SPEED[e.kind] * (slowed ? 0.45 : 1) + e.id * 1.913;
+      poseMonster(e.kind, ph, tele, pose.rot, pose.scl, pose.off);
+      // monsters turn to face the squad
+      const yaw = THREE.MathUtils.clamp(Math.atan2(snap.squadX - e.x, PLAYER_Z - e.z), -0.7, 0.7);
+      const jitter = tele ? (Math.random() - 0.5) * 0.1 : 0;
+      this.rootP.set(e.x + jitter, 0, e.z);
+      this.rootQ.setFromAxisAngle(this.yAxis, yaw);
+      const squash = 1 + hit * 0.18;
+      this.rootS.set(sc * squash, sc * (1 - hit * 0.1), sc * squash);
+      this.rootM.compose(this.rootP, this.rootQ, this.rootS);
+      if (slowed) this.tint.copy(TINT_SLOW);
+      else this.tint.setScalar(1);
+      if (hit > 0) {
+        const k = Math.min(1, hit * 0.9);
+        this.tint.setRGB(this.tint.r + (3.2 - this.tint.r) * k, this.tint.g + (3.2 - this.tint.g) * k, this.tint.b + (3.2 - this.tint.b) * k);
       }
-      d.updateMatrix();
-      mesh.setMatrixAt(idx, d.matrix);
-      this.tmpColor.setHex(ENEMY_META[e.kind].color);
-      if (e.slowTimer > 0) this.tmpColor.lerp(COLOR_SLOW, 0.55);
-      if (hit > 0) this.tmpColor.lerp(COLOR_WHITE, Math.min(1, hit * 0.9));
-      mesh.setColorAt(idx, this.tmpColor);
+      rig.push(this.rootM, pose.rot, this.tint, pose.scl, pose.off);
+      this.pushShadow(e.x, e.z, e.radius * (e.kind === 'siphon' ? 0.75 : 1.15));
 
       // HP bars on tougher enemies
       if (e.maxHp >= 40 && e.hp < e.maxHp && bars < 64) {
         const w = Math.max(0.9, e.radius * 2);
-        const y = e.kind === 'bastion' ? 2.1 : e.kind === 'siphon' ? 2.0 : e.radius * 2 + 0.55;
+        const y = ENEMY_BAR_H[e.kind] * sc + 0.2;
         d.position.set(e.x, y, e.z);
         d.quaternion.copy(camQuat);
         d.scale.set(w + 0.08, 1.4, 1);
@@ -894,7 +967,7 @@ export class Renderer {
         d.rotation.set(0, 0, 0);
       }
       // Dasher lock-on lane telegraph
-      if (e.kind === 'dasher' && e.telegraphTimer > 0 && tels < 24) {
+      if (tele && tels < 24) {
         d.rotation.set(0, 0, 0);
         d.position.set(e.x, 0.06, e.z);
         d.scale.set(e.radius * 2.2, 1, Math.max(1, PLAYER_Z + 3 - e.z));
@@ -911,7 +984,7 @@ export class Renderer {
         const g = snap.gates.find((q) => q.id === e.linkedGateId && !q.triggered && !q.dimmed);
         if (g) {
           const tm = this.tethers[tetherIdx++]!;
-          const from = this.tmpA.set(e.x, 1.1, e.z);
+          const from = this.tmpA.set(e.x, 1.25 * sc, e.z);
           const to = this.tmpB.set(g.x, 1.5, g.z);
           const len = from.distanceTo(to);
           tm.position.copy(from);
@@ -921,17 +994,15 @@ export class Renderer {
         }
       }
     }
-    for (const [kind, mesh] of this.enemyMeshes) {
-      mesh.count = counts.get(kind) ?? 0;
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    }
+    for (const rig of this.enemyRigs.values()) rig.end();
     this.hpBg.count = this.hpFg.count = bars;
     this.hpBg.instanceMatrix.needsUpdate = this.hpFg.instanceMatrix.needsUpdate = true;
     this.telegraphs.count = tels;
     this.telegraphs.instanceMatrix.needsUpdate = true;
     if (this.telegraphs.instanceColor) this.telegraphs.instanceColor.needsUpdate = true;
     for (let i = tetherIdx; i < this.tethers.length; i++) this.tethers[i]!.visible = false;
+    this.shadows.count = this.shadowCount;
+    this.shadows.instanceMatrix.needsUpdate = true;
   }
 
   private updateProjectiles(snap: SimSnapshot): void {
@@ -1081,23 +1152,43 @@ export class Renderer {
       return pooled;
     }
     const group = new THREE.Group();
-    const crystalMat = std(0xffffff, 0.45, { transparent: true, opacity: 0.72, metalness: 0.6 });
-    const crystal = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 1.3, 6), crystalMat);
-    crystal.position.y = 0.9;
-    const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
-    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 0), coreMat);
-    core.position.y = 0.9;
+    if (!this.vaultFrameGeo) {
+      const b = new GeoBuilder();
+      b.add(cyl(1.12, 1.25, 0.3, 12), 0x1a2140, 0, { p: [0, 0.15, 0] })
+        .add(cyl(1.0, 1.1, 0.12, 12), 0x2b3560, 0, { p: [0, 0.36, 0] })
+        .add(tor(1.06, 0.045, 4, 24), 0xffffff, 2.2, { p: [0, 0.31, 0], r: [Math.PI / 2, 0, 0] })
+        .add(cyl(1.0, 0.9, 0.22, 12), 0x1a2140, 0, { p: [0, 1.74, 0] })
+        .add(tor(0.96, 0.04, 4, 24), 0xffffff, 2.2, { p: [0, 1.66, 0], r: [Math.PI / 2, 0, 0] })
+        .add(sph(0.14, 8, 6), 0xffffff, 3, { p: [0, 1.9, 0] });
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+        b.add(box(0.12, 1.3, 0.12), 0x2b3560, 0, { p: [Math.cos(a) * 1.0, 1.0, Math.sin(a) * 1.0], r: [0, -a, 0] })
+          .add(box(0.03, 1.1, 0.03), 0xffffff, 1.8, { p: [Math.cos(a) * 1.07, 1.0, Math.sin(a) * 1.07], r: [0, -a, 0] });
+      }
+      this.vaultFrameGeo = b.build();
+    }
+    const frame = new THREE.Mesh(this.vaultFrameGeo, this.propMat);
+    const crystalMat = std(0xffffff, 0.35, { transparent: true, opacity: 0.32, metalness: 0.2, roughness: 0.1, flatShading: false, depthWrite: false });
+    const crystal = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 1.3, 16, 1, true), crystalMat);
+    crystal.position.y = 1.0;
+    crystal.renderOrder = 2;
+    const coreMat = makeCharacterMaterial(0xffffff, 0.6, 2.2);
+    const core = new THREE.Mesh(buildRewardDisplayGeo('pulse'), coreMat);
+    core.position.y = 1.0;
+    const ringMat = additive(0xffffff, 0.5, this.glowTex);
+    const ring = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 3.4).rotateX(-Math.PI / 2), ringMat);
+    ring.position.y = 0.05;
     const { ctx, tex } = makeCanvasTexture(384, 192);
     const plate = new THREE.Mesh(
       new THREE.PlaneGeometry(2.6, 1.3),
       new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }),
     );
-    plate.position.set(0, 2.55, 0);
+    plate.position.set(0, 2.75, 0);
     plate.rotation.x = -0.35;
     plate.renderOrder = 4;
-    group.add(crystal, core, plate);
+    group.add(ring, frame, core, crystal, plate);
     this.scene.add(group);
-    return { id: -1, group, crystal, crystalMat, core, coreMat, plate, ctx, tex, key: '', seen: false };
+    return { id: -1, group, crystal, crystalMat, core, coreMat, frame, ringMat, reward: '', plate, ctx, tex, key: '', seen: false };
   }
 
   private releaseVault(v: VaultView): void {
@@ -1136,15 +1227,28 @@ export class Renderer {
       paintVaultPlate(v.ctx, 384, 192, s.rewardWeapon, s.displayHp, s.maxHp);
       v.tex.needsUpdate = true;
     }
+    if (v.reward !== s.rewardWeapon) {
+      v.reward = s.rewardWeapon;
+      let geo = this.rewardGeos.get(s.rewardWeapon);
+      if (!geo) {
+        geo = buildRewardDisplayGeo(s.rewardWeapon);
+        this.rewardGeos.set(s.rewardWeapon, geo);
+      }
+      v.core.geometry = geo;
+    }
+    const hp = s.hitPulse;
     v.crystalMat.color.set(meta.color);
     v.crystalMat.emissive.set(meta.color);
-    v.crystalMat.emissiveIntensity = 0.35 + s.hitPulse * 1.2;
-    v.coreMat.color.set(s.hitPulse > 0.5 ? '#ffffff' : meta.color);
-    v.crystal.rotation.y = t * 1.2;
-    v.core.rotation.set(t * 2, t * 3, 0);
-    const sc = 1 + s.hitPulse * 0.1;
-    v.crystal.scale.set(sc, sc, sc);
-    v.crystal.position.y = 0.9 + Math.sin(t * 3 + s.id) * 0.12;
+    v.crystalMat.emissiveIntensity = 0.3 + hp * 1.4;
+    v.crystalMat.opacity = 0.3 + hp * 0.25;
+    v.ringMat.color.set(meta.color);
+    v.ringMat.opacity = 0.35 + Math.sin(t * 4 + s.id) * 0.1 + hp * 0.3;
+    v.coreMat.emissive.setScalar(hp * 0.5);
+    v.core.rotation.set(0.35, t * 1.6, Math.sin(t * 2) * 0.15);
+    v.core.position.y = 1.0 + Math.sin(t * 3 + s.id) * 0.1;
+    const sc = 1 + hp * 0.08;
+    v.crystal.scale.set(sc, 1, sc);
+    v.frame.scale.set(sc, 1, sc);
   }
 
   // ---------------------------------------------------------------- barrels
@@ -1155,22 +1259,37 @@ export class Renderer {
       return pooled;
     }
     const group = new THREE.Group();
-    const bodyMat = std(0xffa21a, 0.55, { metalness: 0.4 });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 1.3, 12), bodyMat);
-    body.position.y = 0.65;
-    const band = new THREE.Mesh(new THREE.TorusGeometry(0.64, 0.07, 6, 16), std(0x201005, 0.1));
-    band.rotation.x = Math.PI / 2;
-    band.position.y = 0.65;
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.2, 8), new THREE.MeshBasicMaterial({ color: 0xfff2a0, toneMapped: false }));
-    cap.position.y = 1.38;
+    if (!this.barrelGeo) {
+      const b = new GeoBuilder();
+      const ORANGE = 0xff8a1a;
+      const DARK = 0x1a1208;
+      b.add(cyl(0.6, 0.6, 1.2, 14), ORANGE, 0.25, { p: [0, 0.7, 0] })
+        .add(cyl(0.64, 0.66, 0.16, 14), DARK, 0, { p: [0, 0.12, 0] })
+        .add(cyl(0.63, 0.63, 0.1, 14), DARK, 0, { p: [0, 0.45, 0] })
+        .add(cyl(0.63, 0.63, 0.1, 14), DARK, 0, { p: [0, 0.98, 0] })
+        .add(cyl(0.5, 0.6, 0.14, 14), DARK, 0, { p: [0, 1.36, 0] })
+        // glowing fuel window facing the squad
+        .add(box(0.34, 0.36, 0.08), 0xfff06a, 2.8, { p: [0, 0.72, 0.58] })
+        .add(box(0.34, 0.36, 0.08), 0xfff06a, 2.8, { p: [0, 0.72, -0.58] })
+        // hazard chevrons
+        .add(box(0.12, 0.05, 0.03), DARK, 0, { p: [-0.36, 0.72, 0.5], r: [0, 0.6, 0.6] })
+        .add(box(0.12, 0.05, 0.03), DARK, 0, { p: [0.36, 0.72, 0.5], r: [0, -0.6, -0.6] })
+        .add(cyl(0.05, 0.05, 0.22, 6), DARK, 0, { p: [0.28, 1.5, 0] });
+      this.barrelGeo = b.build();
+    }
+    const bodyMat = makeCharacterMaterial(0xffc06a, 0.4, 1.6);
+    const body = new THREE.Mesh(this.barrelGeo, bodyMat);
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0xff3b3b, toneMapped: false });
+    const light = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), lightMat);
+    light.position.y = 1.5;
     const ringMat = additive(0xff9a1a, 0.4);
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.93, 1, 48).rotateX(-Math.PI / 2), ringMat);
     ring.position.y = 0.05;
     const fill = new THREE.Mesh(new THREE.CircleGeometry(1, 36).rotateX(-Math.PI / 2), additive(0xff9a1a, 0.05));
     fill.position.y = 0.04;
-    group.add(body, band, cap, ring, fill);
+    group.add(body, light, ring, fill);
     this.scene.add(group);
-    return { id: -1, group, body, bodyMat, ring, fill, ringMat, seen: false };
+    return { id: -1, group, body, bodyMat, light, lightMat, ring, fill, ringMat, seen: false };
   }
 
   private releaseBarrel(v: BarrelView): void {
@@ -1204,9 +1323,13 @@ export class Renderer {
     v.ring.scale.set(b.blastRadius, 1, b.blastRadius);
     v.fill.scale.set(b.blastRadius, 1, b.blastRadius);
     v.ringMat.opacity = 0.3 + Math.sin(t * 6 + b.id) * 0.12;
-    v.bodyMat.emissiveIntensity = 0.5 + b.hitPulse * 1.5 + (1 - b.hp / 15) * 0.6;
+    const dmg = 1 - b.hp / 15;
+    v.bodyMat.emissive.setRGB(1, 0.55, 0.1).multiplyScalar(b.hitPulse * 0.8 + dmg * 0.25);
+    const blink = Math.sin(t * (6 + dmg * 18) + b.id) > 0 ? 1 : 0.25;
+    v.lightMat.color.setRGB(1 * blink + b.hitPulse, 0.23 * blink + b.hitPulse, 0.23 * blink + b.hitPulse);
     const s = 1 + b.hitPulse * 0.15;
     v.body.scale.set(s, s, s);
+    v.light.position.y = 1.5 * s;
   }
 
   // ---------------------------------------------------------------- lenses
@@ -1279,8 +1402,8 @@ export class Renderer {
     const b = snap.boss;
     for (const [id, view] of this.bossViews) {
       if (!b || b.id !== id) {
-        view.root.visible = false;
-        if (view.secondary) view.secondary.visible = false;
+        view.rig.root.visible = false;
+        if (view.rig.secondary) view.rig.secondary.visible = false;
         view.pylons?.forEach((p) => (p.visible = false));
         view.beams?.forEach((p) => (p.visible = false));
       }
@@ -1292,38 +1415,31 @@ export class Renderer {
     }
     this.bossBlend = Math.min(1, this.bossBlend + dt * 0.8);
     const view = this.bossViews.get(b.id)!;
+    const rig = view.rig;
     if (this.bossDeathT >= 0) this.bossDeathT += dt;
     const dying = !b.active;
     const show = !this.bossHidden;
-    view.root.visible = show;
+    rig.root.visible = show;
     const jitter = dying ? (Math.random() - 0.5) * 0.5 : 0;
-    const hover = 2.3 + Math.sin(t * 1.8) * 0.25;
-    view.root.position.set(b.x + jitter, hover, b.z + jitter);
     const intro = b.introProgress;
-    // 1.2x keeps the core silhouette aligned with the sim hit half-width (~2.1)
-    const scl = 1.2 * (0.4 + 0.6 * intro) * (dying ? Math.max(0.2, 1 - this.bossDeathT * 0.3) : 1);
-    view.root.scale.setScalar(scl);
+    // the creature rises out of the data floor during its intro and sinks/shrinks while dying
+    const rise = -(1 - intro) * 5;
+    const deathK = dying ? Math.max(0.2, 1 - this.bossDeathT * 0.3) : 1;
+    rig.root.position.set(b.x + jitter, rise, b.z + jitter);
+    rig.root.scale.setScalar((0.75 + 0.25 * intro) * deathK);
     const flash = b.hitPulse;
-    const phaseHeat = b.phase - 1;
-    view.mats.forEach((m, i) => {
-      if (i === 0) m.emissiveIntensity = 0.6 + flash * 0.9 + phaseHeat * 0.35 + (dying ? Math.random() * 2 : 0);
-    });
-    const spinRate = 1 + phaseHeat * 0.8;
-    view.spinners.forEach((s, i) => {
-      s.rotation.y += dt * spinRate * (i % 2 ? -1.3 : 1);
-      if (b.id === 'omega_zero') s.rotation.x += dt * 0.6 * (i + 1) * spinRate;
-    });
-    view.body.rotation.y = Math.sin(t * 0.7) * 0.3;
+    const sc = b.secondaryCore ?? null;
+    rig.update({ t, dt, phase: b.phase, flash, dying, squadX: snap.squadX, x: b.x, z: b.z, secondary: sc ? { x: sc.x, z: sc.z } : null });
     view.shield.visible = show && b.shielded && b.active;
     view.shield.rotation.y = t;
     (view.shield.material as THREE.MeshBasicMaterial).opacity = 0.14 + Math.sin(t * 8) * 0.05 + flash * 0.1;
+    const coreY = rise + rig.coreHeight * (0.75 + 0.25 * intro);
 
-    if (view.secondary) {
-      const sc = b.secondaryCore;
-      view.secondary.visible = Boolean(sc) && show;
+    if (rig.secondary) {
+      rig.secondary.visible = Boolean(sc) && show;
       if (sc) {
-        view.secondary.position.set(sc.x, 2.1 + Math.cos(t * 1.8) * 0.25, sc.z);
-        view.secondary.rotation.y = -t * 0.8;
+        rig.secondary.position.set(sc.x, rise, sc.z);
+        rig.secondary.scale.setScalar(rig.root.scale.x);
         if (view.shield2) view.shield2.visible = sc.shielded;
       }
     }
@@ -1336,8 +1452,8 @@ export class Renderer {
           pv.visible = true;
           pv.position.set(p.x, 0, p.z);
           pv.children[0]!.rotation.y = t * 2;
-          const from = this.tmpA.set(p.x, 2.2, p.z);
-          const to = this.tmpB.set(b.x, hover, b.z);
+          const from = this.tmpA.set(p.x, 2.6, p.z);
+          const to = this.tmpB.set(b.x, coreY, b.z);
           beam.position.copy(from);
           beam.lookAt(to);
           beam.scale.set(1 + Math.sin(t * 30) * 0.5, 1 + Math.sin(t * 30) * 0.5, from.distanceTo(to));

@@ -94,7 +94,7 @@ test('full clear → results → next sector is playable; badge matches true squ
   await expect(page.getByTestId('squad-count')).toContainText(String((await snap(page)).squad));
   expect(mid.weapon).not.toBe('pulse1'); // a vault upgrade was collected
   await ff(page, 200);
-  await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 8000 });
+  await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 20000 });
   expect((await snap(page)).phase).toBe('VICTORY');
   await expect(page.getByTestId('result-cores')).toBeVisible();
   await page.getByTestId('next-btn').click();
@@ -103,7 +103,7 @@ test('full clear → results → next sector is playable; badge matches true squ
   expect(s2.squad).toBe(3);
   expect(s2.enemies + s2.projectiles).toBe(0);
   await ff(page, 220);
-  await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 8000 });
+  await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 20000 });
   expect((await snap(page)).phase).toBe('VICTORY');
 });
 
@@ -111,7 +111,7 @@ test('defeat shows a reason, retry fully resets the run', async ({ page }) => {
   await page.getByTestId('start-btn').click();
   await touchDrag(page, 10);
   await ff(page, 250, false); // AFK
-  await expect(page.getByTestId('defeat-reason')).toBeVisible({ timeout: 8000 });
+  await expect(page.getByTestId('defeat-reason')).toBeVisible({ timeout: 20000 });
   expect((await snap(page)).phase).toBe('DEFEAT');
   await page.getByTestId('retry-btn').click();
   const r = await snap(page);

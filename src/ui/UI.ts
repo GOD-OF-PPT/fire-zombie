@@ -209,7 +209,7 @@ export class UI {
         <h2>作战手册</h2>
         <ul class="help-list">
           <li><i class="hi move">⇆</i><div><b>左右拖动</b>移动蜂群，射击全自动</div></li>
-          <li><i class="hi pos">+</i><div><b>绿门</b>增加无人机；<b class="neg">红门</b>减少——人数归零即失败</div></li>
+          <li><i class="hi pos">+</i><div><b>绿门</b>增加战士；<b class="neg">红门</b>减少——人数归零即失败</div></li>
           <li><i class="hi gold">▣</i><div><b>金框门</b>可以被射击：提前瞄准，把 -5 打成 +6！带锁的 ÷ 门破锁后变 ×2</div></li>
           <li><i class="hi vault">⬢</i><div><b>能量舱</b>击破获得新武器：散射 / 穿透 / 爆破 / 冰冻 / 环轨刃，重复获得会升级</div></li>
           <li><i class="hi barrel">◉</i><div><b>电容桶</b>射爆后范围爆炸，可连锁，还会提升附近金框门数值</div></li>

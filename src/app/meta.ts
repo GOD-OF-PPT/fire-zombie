@@ -17,7 +17,7 @@ export const REWARD_META: Record<RewardId, RewardMeta> = {
   rail: { name: '超导贯穿', short: '穿透', desc: '一发贯穿多个目标，克制排队敌人', color: '#b98cff', glyph: '➤' },
   plasma: { name: '新星迫击', short: '爆破', desc: '命中后范围爆炸，克制密集敌群', color: '#ff9a3c', glyph: '✹' },
   cryo: { name: '绝对零度', short: '冰冻', desc: '命中减速并使敌人易伤 +25%', color: '#8fdcff', glyph: '❄' },
-  blades: { name: '环轨刃', short: '护卫', desc: '环绕旋刃切割近敌，并 +6 架无人机', color: '#ffd84a', glyph: '✦' },
+  blades: { name: '环轨刃', short: '护卫', desc: '环绕旋刃切割近敌，并 +6 名战士', color: '#ffd84a', glyph: '✦' },
 };
 
 export interface EnemyMeta {
@@ -155,7 +155,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     color: '#3ef3ff',
     max: 5,
     costs: [60, 110, 170, 240, 320],
-    effect: (lv) => `开局 +${lv * 2} 架`,
+    effect: (lv) => `开局 +${lv * 2} 名战士`,
   },
   {
     id: 'power',
