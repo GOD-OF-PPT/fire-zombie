@@ -1,0 +1,31 @@
+{
+  "name": "prism-swarm-neon-protocol",
+  "private": true,
+  "version": "1.0.0",
+  "description": "PRISM SWARM: Neon Protocol — Stylized 3D vertical gate-runner auto-shooter",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@types/node": "^24.19.2",
+    "@types/three": "^0.187.0",
+    "jsdom": "^31.0.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

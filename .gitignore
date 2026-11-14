@@ -1,0 +1,24 @@
+# Autonomous agent workspace metadata (never commit)
+.agents/
+
+# Dependencies & build outputs
+node_modules/
+dist/
+dist-ssr/
+coverage/
+
+# Test & Playwright artifacts
+playwright-report/
+blob-report/
+test-results/
+playwright/.cache/
+
+# TypeScript & bundler caches
+*.tsbuildinfo
+.vite/
+
+# Logs, env overrides & OS metadata
+*.log
+npm-debug.log*
+*.local
+.DS_Store
