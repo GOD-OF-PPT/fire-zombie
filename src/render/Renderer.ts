@@ -1,18 +1,23 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type {
   BarrelSnapshot,
   BossSnapshot,
   EnemyKind,
   GateSnapshot,
   PrismLensSnapshot,
+  RewardId,
   SectorId,
   SimSnapshot,
   VaultSnapshot,
   WeaponId,
 } from '../types/game';
-import { BLADES_ORBIT_RADIUS, PLAYER_Z, TRACK_HALF_WIDTH } from '../config/constants';
+import { BLADES_ORBIT_RADIUS, GOLDEN_ANGLE_RAD, PLAYER_Z, TRACK_HALF_WIDTH } from '../config/constants';
 import { SECTORS } from '../config/sectors';
-import { ENEMY_META, REWARD_META, SECTOR_META } from '../app/meta';
+import { REWARD_META, SECTOR_META } from '../app/meta';
 import { Effects } from './Effects';
 import {
   COLORS,
@@ -26,11 +31,16 @@ import {
   paintLensPlate,
   paintVaultPlate,
 } from './textures';
-import { InstancedRig, makeCharacterMaterial } from './models/rig';
-import { buildBladeGeo, buildBoltGeo, buildRewardDisplayGeo, buildSoldierModels, type SoldierModel } from './models/soldiers';
-import { buildMonsterModels, poseMonster, type MonsterModel } from './models/monsters';
-import { buildBossRigs, type BossRig } from './models/bosses';
+import { makeCharacterMaterial } from './models/rig';
+import { buildBladeGeo, buildBoltGeo, buildRewardDisplayGeo } from './models/soldiers';
 import { GeoBuilder, box, cyl, sph, tor } from './models/kit';
+import {
+  AnimatedActor,
+  loadGltfLibrary,
+  spawnActor,
+  type GltfLibrary,
+} from './models/gltfLibrary';
+import { createToonCharMaterial, getOutlineMaterial } from './models/toon';
 
 export const WEAPON_COLOR: Record<WeaponId, number> = {
   pulse: 0x3ef3ff,
@@ -42,16 +52,31 @@ export const WEAPON_COLOR: Record<WeaponId, number> = {
 
 const TRACK_LEN = 150;
 const TRACK_CENTER_Z = -60;
-const MAX_DRONES = 48;
+/** Max rendered squad actors so every chibi trooper & weapon stays distinct (never a mushy overlap blob) */
+const MAX_RENDER_SQUAD = 20;
+const SQUAD_POOL_SIZES: [number, number, number] = [20, 14, 5];
 const MAX_PROJ = 900;
-const MAX_ENEMY_PER_KIND = 72;
 const MAX_SHADOWS = 320;
-/** visual-only upscale of squad members so individual soldiers read on phones */
-const SOLDIER_SCALE = 1.25;
 
-const ENEMY_ANIM_SPEED: Record<EnemyKind, number> = { crawler: 11, dasher: 12, bastion: 4.5, mitosis: 4, siphon: 3 };
-const ENEMY_BAR_H: Record<EnemyKind, number> = { crawler: 1.15, dasher: 1.4, bastion: 2.55, mitosis: 1.8, siphon: 2.2 };
-const TINT_SLOW = new THREE.Color(0.62, 0.92, 1.55);
+const ENEMY_POOL_SIZE: Record<EnemyKind, number> = {
+  crawler: 34,
+  dasher: 18,
+  bastion: 12,
+  mitosis: 18,
+  siphon: 12,
+};
+
+const ENEMY_BAR_H: Record<EnemyKind, number> = {
+  crawler: 1.42,
+  dasher: 1.88,
+  bastion: 2.95,
+  mitosis: 1.92,
+  siphon: 2.45,
+};
+
+const CAM_BASE_Y = 10.6;
+const CAM_BASE_Z = 16.0;
+const CAM_DIST_TO_PLAYER = Math.hypot(CAM_BASE_Y, CAM_BASE_Z - PLAYER_Z);
 
 interface GateView {
   id: number;
@@ -76,8 +101,10 @@ interface VaultView {
   group: THREE.Group;
   crystal: THREE.Mesh;
   crystalMat: THREE.MeshStandardMaterial;
+  coreGroup: THREE.Group;
   core: THREE.Mesh;
-  coreMat: THREE.MeshStandardMaterial;
+  coreOutline: THREE.Mesh;
+  coreMat: THREE.Material;
   frame: THREE.Mesh;
   ringMat: THREE.MeshBasicMaterial;
   reward: string;
@@ -120,15 +147,55 @@ interface HazardView {
   edgeR: THREE.Mesh;
 }
 
-interface BossView {
-  rig: BossRig;
+interface SquadSlotState {
+  x: number;
+  z: number;
+  s: number;
+  alive: boolean;
+  vx: number;
+  tier: 1 | 2 | 3;
+  actor: AnimatedActor | null;
+}
+
+interface ActiveEnemyEntry {
+  kind: EnemyKind;
+  actor: AnimatedActor;
+  x: number;
+  z: number;
+  scale: number;
+  seen: boolean;
+}
+
+interface DyingEnemyEntry {
+  kind: EnemyKind;
+  actor: AnimatedActor;
+  x: number;
+  z: number;
+  scale: number;
+  age: number;
+  duration: number;
+}
+
+interface BossActorView {
+  root: THREE.Group;
+  primary: AnimatedActor;
+  secondary?: AnimatedActor;
+  secondaryRoot?: THREE.Group;
+  halo?: THREE.Mesh;
+  coreHeight: number;
+  secondaryCoreHeight?: number;
   pylons?: THREE.Group[];
   beams?: THREE.Mesh[];
   shield: THREE.Mesh;
   shield2?: THREE.Mesh;
+  attackCooldown: number;
 }
 
-function std(color: number, emissive = 0.5, opts: Partial<THREE.MeshStandardMaterialParameters> = {}): THREE.MeshStandardMaterial {
+function std(
+  color: number,
+  emissive = 0.5,
+  opts: Partial<THREE.MeshStandardMaterialParameters> = {},
+): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color,
     emissive: color,
@@ -156,12 +223,35 @@ function additive(color: number, opacity: number, map?: THREE.Texture): THREE.Me
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(60, 9 / 16, 0.5, 220);
+  readonly camera = new THREE.PerspectiveCamera(58, 9 / 16, 0.5, 220);
   readonly effects = new Effects();
+  readonly assetsReady: Promise<void>;
+
+  private composer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
   private width = 1;
   private height = 1;
   private sector: SectorId = 1;
   private time = 0;
+
+  // GLTF asset library & actor pools
+  private gltfLib: GltfLibrary | null = null;
+  private squadPools: [AnimatedActor[], AnimatedActor[], AnimatedActor[]] = [[], [], []];
+  private squadSlots: SquadSlotState[] = [];
+  private currentWeapon: WeaponId = 'pulse';
+
+  private enemyPools: Record<EnemyKind, AnimatedActor[]> = {
+    crawler: [],
+    dasher: [],
+    bastion: [],
+    mitosis: [],
+    siphon: [],
+  };
+  private activeEnemies = new Map<number, ActiveEnemyEntry>();
+  private dyingEnemies: DyingEnemyEntry[] = [];
+  private bossViews = new Map<BossSnapshot['id'], BossActorView>();
+  private bossDeathT = -1;
+  private bossHidden = false;
 
   // environment
   private trackMat!: THREE.ShaderMaterial;
@@ -175,12 +265,7 @@ export class Renderer {
   private postMat!: THREE.MeshBasicMaterial;
   private hemi!: THREE.HemisphereLight;
 
-  // squad
-  private charMat!: THREE.MeshStandardMaterial;
-  private soldierModels: SoldierModel[] = [];
-  private soldierRigs: InstancedRig[] = [];
-  private soldierWeapon: WeaponId | null = null;
-  private droneCur: Array<{ x: number; z: number; s: number; alive: boolean; ph: number; vx: number }> = [];
+  // squad & shared VFX meshes
   private squadGlow!: THREE.Mesh;
   private squadGlowMat!: THREE.MeshBasicMaterial;
   private blades!: THREE.InstancedMesh;
@@ -189,20 +274,8 @@ export class Renderer {
   private muzzleFlash = 0;
   private shadows!: THREE.InstancedMesh;
   private shadowCount = 0;
-  private rot18 = new Float32Array(18);
-  private off18 = new Float32Array(18);
-  private rootM = new THREE.Matrix4();
-  private rootQ = new THREE.Quaternion();
-  private rootP = new THREE.Vector3();
-  private rootS = new THREE.Vector3();
-  private yAxis = new THREE.Vector3(0, 1, 0);
-  private tint = new THREE.Color();
 
-  // entities
-  private monsterModels!: Record<EnemyKind, MonsterModel>;
-  private enemyRigs = new Map<EnemyKind, InstancedRig>();
-  private enemyPose = new Map<EnemyKind, { rot: Float32Array; scl: Float32Array; off: Float32Array }>();
-  private enemyCounts: Record<EnemyKind, number> = { crawler: 0, dasher: 0, bastion: 0, mitosis: 0, siphon: 0 };
+  // HUD / telegraph / projectile instanced meshes
   private hpBg!: THREE.InstancedMesh;
   private hpFg!: THREE.InstancedMesh;
   private telegraphs!: THREE.InstancedMesh;
@@ -219,15 +292,13 @@ export class Renderer {
   private lensViews = new Map<number, LensView>();
   private lensPool: LensView[] = [];
   private hazardViews: HazardView[] = [];
-  private bossViews = new Map<BossSnapshot['id'], BossView>();
-  private bossDeathT = -1;
-  private bossHidden = false;
 
-  // shared
+  // shared props
   private glowTex = makeGlowTexture();
   private stripeTex = makeStripeTexture();
-  private propMat = makeCharacterMaterial(0xbfe8ff, 0.35, 1.8);
-  private rewardGeos = new Map<string, THREE.BufferGeometry>();
+  private propMat = makeCharacterMaterial(0xbfe8ff, 0.35, 1.6);
+  private vaultToonMat = createToonCharMaterial({ rimColor: 0xffffff, rimStrength: 0.55 });
+  private fallbackRewardGeos = new Map<string, THREE.BufferGeometry>();
   private vaultFrameGeo!: THREE.BufferGeometry;
   private barrelGeo!: THREE.BufferGeometry;
   private towerMat!: THREE.ShaderMaterial;
@@ -242,10 +313,14 @@ export class Renderer {
   private camX = 0;
   private trauma = 0;
   private bossBlend = 0;
-  private fov = 60;
+  private fov = 58;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.scene.add(this.effects.group);
@@ -257,37 +332,255 @@ export class Renderer {
 
     this.buildLights();
     this.buildEnvironment();
-    this.buildSquad();
-    this.buildEnemies();
+    this.buildSquadShell();
+    this.buildEnemyShell();
     this.buildProjectiles();
     this.buildHazards();
-    this.buildBosses();
+    this.initPostProcessing();
     this.setSector(1);
+
+    this.assetsReady = loadGltfLibrary()
+      .then((lib) => {
+        this.initGltfPools(lib);
+        this.gltfLib = lib;
+      })
+      .catch((err) => {
+        console.error('Failed loading 3D GLTF library:', err);
+      });
   }
 
-  // ------------------------------------------------------------------ build
+  private initPostProcessing(): void {
+    try {
+      const composer = new EffectComposer(this.renderer);
+      const renderPass = new RenderPass(this.scene, this.camera);
+      // High threshold (0.93) keeps cartoon outlines, character faces, and gate numbers razor-sharp
+      // while giving HDR projectiles, muzzle flashes, and explosions a crisp neon bloom!
+      const bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.28, 0.35, 0.93);
+      const outputPass = new OutputPass();
+      composer.addPass(renderPass);
+      composer.addPass(bloomPass);
+      composer.addPass(outputPass);
+      this.composer = composer;
+      this.bloomPass = bloomPass;
+    } catch {
+      this.composer = null;
+      this.bloomPass = null;
+    }
+  }
+
+  private initGltfPools(lib: GltfLibrary): void {
+    // 1. Pre-warm hero squad pools (Tier 1 trooper, Tier 2 gold heavy, Tier 3 assault mech)
+    const heroRims: [number, number, number] = [0x9beeff, 0xffe484, 0x8ff6ff];
+    const heroOutlines: [number, number, number] = [0.0054, 0.0056, 0.0058];
+    for (let tierIdx = 0; tierIdx < 3; tierIdx++) {
+      const count = SQUAD_POOL_SIZES[tierIdx]!;
+      const tmpl = lib.heroes[tierIdx]!;
+      for (let i = 0; i < count; i++) {
+        const actor = spawnActor(tmpl, {
+          rimColor: heroRims[tierIdx],
+          rimStrength: 0.42,
+          outlineWidth: heroOutlines[tierIdx],
+          weapons: tierIdx < 2 ? lib.weapons : undefined,
+          initialWeapon: this.currentWeapon,
+        });
+        actor.root.visible = false;
+        this.scene.add(actor.root);
+        this.squadPools[tierIdx]!.push(actor);
+      }
+    }
+
+    // 2. Pre-warm monster pools per archetype
+    const enemyRims: Record<EnemyKind, number> = {
+      crawler: 0xff9eb2,
+      dasher: 0xffcf70,
+      bastion: 0xff8598,
+      mitosis: 0xffb3f0,
+      siphon: 0xd4a6ff,
+    };
+    for (const kind of Object.keys(ENEMY_POOL_SIZE) as EnemyKind[]) {
+      const count = ENEMY_POOL_SIZE[kind];
+      const tmpl = lib.enemies[kind];
+      for (let i = 0; i < count; i++) {
+        const actor = spawnActor(tmpl, {
+          rimColor: enemyRims[kind],
+          rimStrength: 0.44,
+          outlineWidth: kind === 'bastion' ? 0.0058 : 0.0052,
+        });
+        actor.root.visible = false;
+        this.scene.add(actor.root);
+        this.enemyPools[kind].push(actor);
+      }
+    }
+
+    // 3. Build the 3 sculpted CC0 sector bosses
+    this.buildGltfBosses(lib);
+
+    // 4. Refresh any active Reward Vaults to show the 3D Toon weapon + outline
+    for (const v of this.vaultViews.values()) {
+      v.reward = '';
+    }
+  }
+
+  private buildGltfBosses(lib: GltfLibrary): void {
+    // Sector 1: WARDEN-01《赤焰魔像王》
+    {
+      const root = new THREE.Group();
+      const primary = spawnActor(lib.bosses.warden, {
+        rimColor: 0xffb36b,
+        rimStrength: 0.5,
+        outlineWidth: 0.0062,
+      });
+      primary.play('Fast_Flying', { timeScale: 0.95 });
+      const shield = this.makeShield(3.2);
+      shield.position.y = 2.6;
+      const halo = new THREE.Mesh(
+        new THREE.RingGeometry(2.1, 2.55, 36).rotateX(-Math.PI / 2),
+        additive(0xff5238, 0.45),
+      );
+      halo.position.y = 0.06;
+      root.add(primary.root, shield, halo);
+      root.visible = false;
+      this.scene.add(root);
+      this.bossViews.set('warden_01', {
+        root,
+        primary,
+        halo,
+        coreHeight: 2.65,
+        shield,
+        attackCooldown: 0,
+      });
+    }
+
+    // Sector 2: HYDRA-02《双生魔龙》
+    {
+      const root = new THREE.Group();
+      const primary = spawnActor(lib.bosses.hydraA, {
+        rimColor: 0xff94ec,
+        rimStrength: 0.5,
+        outlineWidth: 0.006,
+      });
+      primary.play('Fast_Flying', { timeScale: 1.0 });
+      const shield = this.makeShield(2.8);
+      shield.position.y = 2.7;
+      root.add(primary.root, shield);
+      root.visible = false;
+
+      const secondaryRoot = new THREE.Group();
+      const secondary = spawnActor(lib.bosses.hydraB, {
+        rimColor: 0x8ff6ff,
+        rimStrength: 0.5,
+        outlineWidth: 0.0058,
+      });
+      secondary.play('Fast_Flying', { timeScale: 1.1, startOffset: 0.4 });
+      const shield2 = this.makeShield(2.35);
+      shield2.position.y = 2.3;
+      secondaryRoot.add(secondary.root, shield2);
+      secondaryRoot.visible = false;
+
+      this.scene.add(root, secondaryRoot);
+      this.bossViews.set('hydra_02', {
+        root,
+        primary,
+        secondary,
+        secondaryRoot,
+        coreHeight: 2.7,
+        secondaryCoreHeight: 2.3,
+        shield,
+        shield2,
+        attackCooldown: 0,
+      });
+    }
+
+    // Sector 3: OMEGA-ZERO《深渊魔王》 + Singularity Halo + 2 Crystal Shield Pylons
+    {
+      const root = new THREE.Group();
+      const primary = spawnActor(lib.bosses.omega, {
+        rimColor: 0xffd86b,
+        rimStrength: 0.55,
+        outlineWidth: 0.0064,
+      });
+      primary.play('Idle', { timeScale: 1.0 });
+
+      // Cosmic singularity halo floating behind the Demon Overlord's wings
+      const haloGeo = new GeoBuilder()
+        .add(tor(2.35, 0.085, 6, 36), 0xffc531, 0.48)
+        .add(tor(1.85, 0.055, 5, 28), 0xff3b6b, 0.45)
+        .build();
+      const halo = new THREE.Mesh(haloGeo, this.propMat);
+      halo.position.set(0, 3.1, -1.05);
+
+      const shield = this.makeShield(3.45);
+      shield.position.y = 2.75;
+      root.add(halo, primary.root, shield);
+      root.visible = false;
+      this.scene.add(root);
+
+      const crystalGeo = new GeoBuilder()
+        .add(new THREE.OctahedronGeometry(0.85, 0), 0x3fa8c8, 0.5, { s: [1, 2.1, 1] })
+        .add(new THREE.OctahedronGeometry(0.3, 0), 0xffffff, 1.8, { s: [1, 2.1, 1], p: [0, 0, 0.52] })
+        .add(tor(1.05, 0.06, 4, 20), 0x8ff6ff, 2.2, { r: [Math.PI / 2, 0, 0], p: [0, -0.55, 0] })
+        .build();
+      const footGeo = new GeoBuilder()
+        .add(cyl(0.88, 1.2, 0.42, 6), 0x1c0f24, 0, { p: [0, 0.21, 0] })
+        .add(cyl(0.68, 0.88, 0.2, 6), 0x2c1236, 0, { p: [0, 0.52, 0] })
+        .add(tor(0.96, 0.05, 4, 6), 0x8ff6ff, 2.0, { r: [Math.PI / 2, 0, 0], p: [0, 0.44, 0] })
+        .build();
+
+      const pylons: THREE.Group[] = [];
+      const beams: THREE.Mesh[] = [];
+      for (let i = 0; i < 2; i++) {
+        const p = new THREE.Group();
+        const crystal = new THREE.Mesh(crystalGeo, this.propMat);
+        crystal.position.y = 2.05;
+        const foot = new THREE.Mesh(footGeo, this.propMat);
+        p.add(crystal, foot);
+        p.visible = false;
+        pylons.push(p);
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.08, 0.08, 1, 6).translate(0, 0.5, 0).rotateX(Math.PI / 2),
+          additive(0x8ff6ff, 0.8),
+        );
+        beam.visible = false;
+        beams.push(beam);
+        this.scene.add(p, beam);
+      }
+
+      this.bossViews.set('omega_zero', {
+        root,
+        primary,
+        halo,
+        pylons,
+        beams,
+        coreHeight: 2.85,
+        shield,
+        attackCooldown: 0,
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------ scene setup
   private buildLights(): void {
-    this.hemi = new THREE.HemisphereLight(0xbfdcff, 0x10061a, 1.4);
+    // Bright commercial cartoon lighting so cel bands & silhouettes pop cleanly
+    this.hemi = new THREE.HemisphereLight(0xdcf0ff, 0x3b2c6e, 1.45);
     this.scene.add(this.hemi);
-    const dir = new THREE.DirectionalLight(0xffffff, 1.6);
-    dir.position.set(4, 12, 8);
+    const dir = new THREE.DirectionalLight(0xfffaf2, 1.95);
+    dir.position.set(5, 14, 10);
     this.scene.add(dir);
-    // back light from down-track: rims the soldiers' silhouettes and the monsters' tops
-    const back = new THREE.DirectionalLight(0x9fd8ff, 0.9);
-    back.position.set(-3, 7, -14);
+    const back = new THREE.DirectionalLight(0x9be8ff, 0.85);
+    back.position.set(-4, 8, -14);
     this.scene.add(back);
   }
 
   private buildEnvironment(): void {
-    // Track
+    // Stylized luminous bridge deck so dark cartoon outlines & blob shadows read crisply
     this.trackMat = new THREE.ShaderMaterial({
       uniforms: {
         uScroll: { value: 0 },
         uTime: { value: 0 },
-        uTrack: { value: new THREE.Color(0x0b1126) },
-        uGrid: { value: new THREE.Color(0x1f6dff) },
-        uEdge: { value: new THREE.Color(0x3ef3ff) },
-        uFog: { value: new THREE.Color(0x0a1640) },
+        uTrack: { value: new THREE.Color(0x1c3468) },
+        uGrid: { value: new THREE.Color(0x3f8cff) },
+        uEdge: { value: new THREE.Color(0x48f5ff) },
+        uFog: { value: new THREE.Color(0x122a68) },
         uHalf: { value: TRACK_HALF_WIDTH },
       },
       vertexShader: /* glsl */ `
@@ -305,26 +598,28 @@ export class Renderer {
         void main() {
           float zz = vW.z - uScroll;
           float ax = abs(vW.x);
-          vec3 c = uTrack;
-          // cross lines every 4u, lane marks
-          float cross = line(zz / 4.0, 0.035);
-          c += uGrid * cross * 0.35;
-          float lanes = line((vW.x + uHalf) / (uHalf * 2.0 / 3.0), 0.012) * step(0.5, fract(zz / 6.0));
-          c += uGrid * lanes * 0.25;
-          // center seam
-          c += uGrid * smoothstep(0.06, 0.0, ax) * 0.25;
-          // chevrons scrolling
-          float chev = fract((zz + ax * 0.9) / 10.0);
-          c += uEdge * smoothstep(0.03, 0.0, abs(chev - 0.5)) * smoothstep(uHalf, uHalf - 1.2, ax) * smoothstep(uHalf - 2.2, uHalf - 1.4, ax) * 0.5;
-          // edge glow
-          float edge = smoothstep(uHalf - 0.35, uHalf, ax);
-          c = mix(c, uEdge, edge * 0.85);
-          float fog = smoothstep(18.0, 95.0, -vW.z);
+          // Subtle center highlight gives the runway a toy-like beveled deck sheen
+          vec3 c = uTrack * (1.14 - 0.22 * (ax / uHalf));
+          // Stylized deck plates every 4u + dashed lane dividers
+          float cross = line(zz / 4.0, 0.03);
+          c += uGrid * cross * 0.24;
+          float lanes = line((vW.x + uHalf) / (uHalf * 2.0 / 3.0), 0.014) * step(0.45, fract(zz / 5.0));
+          c += uGrid * lanes * 0.30;
+          // Forward speed chevrons
+          float chev = fract((zz + ax * 0.85) / 10.0);
+          c += uEdge * smoothstep(0.032, 0.0, abs(chev - 0.5)) * smoothstep(uHalf, uHalf - 1.1, ax) * smoothstep(uHalf - 2.3, uHalf - 1.4, ax) * 0.36;
+          // Crisp glowing side curbs
+          float edge = smoothstep(uHalf - 0.32, uHalf, ax);
+          c = mix(c, uEdge * 0.9, edge * 0.82);
+          float fog = smoothstep(22.0, 96.0, -vW.z);
           c = mix(c, uFog, fog);
           gl_FragColor = vec4(c, 1.0);
         }`,
     });
-    const track = new THREE.Mesh(new THREE.PlaneGeometry(TRACK_HALF_WIDTH * 2 + 0.2, TRACK_LEN), this.trackMat);
+    const track = new THREE.Mesh(
+      new THREE.PlaneGeometry(TRACK_HALF_WIDTH * 2 + 0.2, TRACK_LEN),
+      this.trackMat,
+    );
     track.rotation.x = -Math.PI / 2;
     track.position.z = TRACK_CENTER_Z;
     this.scene.add(track);
@@ -332,9 +627,9 @@ export class Renderer {
     this.groundMat = new THREE.ShaderMaterial({
       uniforms: {
         uScroll: { value: 0 },
-        uGrid: { value: new THREE.Color(0x1f6dff) },
-        uFog: { value: new THREE.Color(0x0a1640) },
-        uBase: { value: new THREE.Color(0x03050c) },
+        uGrid: { value: new THREE.Color(0x3f8cff) },
+        uFog: { value: new THREE.Color(0x122a68) },
+        uBase: { value: new THREE.Color(0x060c22) },
       },
       vertexShader: /* glsl */ `
         varying vec3 vW;
@@ -343,11 +638,11 @@ export class Renderer {
         uniform float uScroll; uniform vec3 uGrid; uniform vec3 uFog; uniform vec3 uBase;
         varying vec3 vW;
         void main() {
-          vec2 p = vec2(vW.x, vW.z - uScroll) / 3.0;
+          vec2 p = vec2(vW.x, vW.z - uScroll) / 3.5;
           vec2 g = abs(fract(p) - 0.5);
           float l = smoothstep(0.47, 0.5, max(g.x, g.y));
-          vec3 c = uBase + uGrid * l * 0.18;
-          float fog = smoothstep(10.0, 90.0, -vW.z + abs(vW.x) * 0.4);
+          vec3 c = uBase + uGrid * l * 0.16;
+          float fog = smoothstep(12.0, 90.0, -vW.z + abs(vW.x) * 0.4);
           gl_FragColor = vec4(mix(c, uFog, fog), 1.0);
         }`,
     });
@@ -356,33 +651,31 @@ export class Renderer {
     ground.position.set(0, -0.6, TRACK_CENTER_Z);
     this.scene.add(ground);
 
-    // track side walls (the runway is a raised data bridge)
-    const wallMat = std(0x0a0f22, 0.05, { flatShading: false });
+    const wallMat = std(0x111d42, 0.08, { flatShading: false });
     for (const s of [-1, 1]) {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.7, TRACK_LEN), wallMat);
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.72, TRACK_LEN), wallMat);
       wall.position.set(s * (TRACK_HALF_WIDTH + 0.25), -0.25, TRACK_CENTER_Z);
       this.scene.add(wall);
     }
-    this.railMat = new THREE.MeshBasicMaterial({ color: 0x3ef3ff, toneMapped: false });
+    this.railMat = new THREE.MeshBasicMaterial({ color: 0x48f5ff });
     for (const s of [-1, 1]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, TRACK_LEN), this.railMat);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, TRACK_LEN), this.railMat);
       rail.position.set(s * (TRACK_HALF_WIDTH + 0.25), 0.18, TRACK_CENTER_Z);
       this.scene.add(rail);
     }
-    // moving rail posts
-    this.postMat = new THREE.MeshBasicMaterial({ color: 0x3ef3ff, toneMapped: false });
-    this.posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.7, 0.16), this.postMat, 64);
+    this.postMat = new THREE.MeshBasicMaterial({ color: 0x48f5ff });
+    this.posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.18, 0.72, 0.18), this.postMat, 64);
     this.scene.add(this.posts);
 
-    // skyline towers: lit window grids computed in the shader (no textures)
+    // Stylized city skyline towers
     const towerGeo = new THREE.BoxGeometry(1, 1, 1);
     towerGeo.translate(0, 0.5, 0);
     this.towerMat = new THREE.ShaderMaterial({
       uniforms: {
-        uBase: { value: new THREE.Color(0x0b1230) },
+        uBase: { value: new THREE.Color(0x0f1e4a) },
         uWinA: { value: new THREE.Color(0x3ef3ff) },
-        uWinB: { value: new THREE.Color(0xff3fd2) },
-        uFog: { value: new THREE.Color(0x0a1640) },
+        uWinB: { value: new THREE.Color(0xff5ce0) },
+        uFog: { value: new THREE.Color(0x122a68) },
         uTime: { value: 0 },
       },
       vertexShader: /* glsl */ `
@@ -403,29 +696,28 @@ export class Renderer {
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         void main() {
           vec3 n = abs(vN);
-          vec3 c = uBase * (0.55 + 0.6 * clamp(vL.y / max(vH, 1.0), 0.0, 1.0));
+          vec3 c = uBase * (0.6 + 0.55 * clamp(vL.y / max(vH, 1.0), 0.0, 1.0));
           if (n.y < 0.5) {
-            float u = (n.x > 0.5 ? vL.z : vL.x) / 0.55;
-            float v = vL.y / 0.7;
+            float u = (n.x > 0.5 ? vL.z : vL.x) / 0.6;
+            float v = vL.y / 0.75;
             vec2 cell = floor(vec2(u, v));
             vec2 f = fract(vec2(u, v));
-            float win = step(0.22, f.x) * step(f.x, 0.78) * step(0.25, f.y) * step(f.y, 0.75);
+            float win = step(0.24, f.x) * step(f.x, 0.76) * step(0.26, f.y) * step(f.y, 0.74);
             float h = hash(cell + vSeed);
-            float lit = step(0.62, h) * win * step(0.6, vL.y);
+            float lit = step(0.66, h) * win * step(0.6, vL.y);
             vec3 wc = mix(uWinA, uWinB, step(0.86, h));
-            c += wc * lit * (0.55 + 0.45 * sin(uTime * 0.7 + h * 40.0));
-            // thin vertical neon trims every few window columns
-            c += uWinA * 0.3 * smoothstep(0.47, 0.5, abs(fract(u * 0.125) - 0.5));
+            c += wc * lit * (0.45 + 0.35 * sin(uTime * 0.7 + h * 40.0));
+            c += uWinA * 0.22 * smoothstep(0.47, 0.5, abs(fract(u * 0.125) - 0.5));
           } else {
-            c = uWinA * 0.25;
+            c = uWinA * 0.22;
           }
-          float fog = smoothstep(30.0, 112.0, -vW.z) * 0.85 + 0.1;
+          float fog = smoothstep(26.0, 108.0, -vW.z) * 0.88 + 0.12;
           gl_FragColor = vec4(mix(c, uFog, fog), 1.0);
         }`,
     });
     const n = 72;
     this.towers = new THREE.InstancedMesh(towerGeo, this.towerMat, n);
-    this.towerCapMat = new THREE.MeshBasicMaterial({ color: 0x3ef3ff, toneMapped: false });
+    this.towerCapMat = new THREE.MeshBasicMaterial({ color: 0x3f8cff });
     this.towerCaps = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.08, 1), this.towerCapMat, n);
     let seed = 7;
     const rnd = (): number => {
@@ -435,11 +727,11 @@ export class Renderer {
     for (let i = 0; i < n; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       this.towerData.push({
-        x: side * (7.5 + rnd() * 16),
+        x: side * (7.8 + rnd() * 16),
         z: rnd() * 130,
         w: 1.5 + rnd() * 3,
         d: 1.5 + rnd() * 3,
-        h: 1.5 + rnd() * rnd() * 22,
+        h: 1.5 + rnd() * rnd() * 20,
       });
     }
     this.towers.frustumCulled = false;
@@ -447,58 +739,73 @@ export class Renderer {
     this.scene.add(this.towers, this.towerCaps);
   }
 
-  private buildSquad(): void {
-    // 「棱镜战士」: tier 1 trooper, tier 2 heavy trooper (=5), tier 3 Prism mech (=25)
-    this.charMat = makeCharacterMaterial(0x7fe9ff, 0.6, 1.7, 0.22);
-    this.soldierModels = buildSoldierModels();
-    for (const model of this.soldierModels) {
-      this.soldierRigs.push(new InstancedRig(model.parts, this.charMat, MAX_DRONES, this.scene));
+  private buildSquadShell(): void {
+    for (let i = 0; i < MAX_RENDER_SQUAD; i++) {
+      this.squadSlots.push({
+        x: 0,
+        z: PLAYER_Z,
+        s: 0,
+        alive: false,
+        vx: 0,
+        tier: 1,
+        actor: null,
+      });
     }
-    for (let i = 0; i < MAX_DRONES; i++) this.droneCur.push({ x: 0, z: PLAYER_Z, s: 0, alive: false, ph: i * 0.37, vx: 0 });
 
-    this.squadGlowMat = additive(0x3ef3ff, 0.5, this.glowTex);
+    this.squadGlowMat = additive(0x3ef3ff, 0.35, this.glowTex);
     this.squadGlow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.squadGlowMat);
     this.squadGlow.rotation.x = -Math.PI / 2;
-    this.squadGlow.position.y = 0.04;
+    this.squadGlow.position.y = 0.03;
     this.scene.add(this.squadGlow);
 
-    // soft blob shadows under every character (soldiers + monsters), one draw call
-    const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, map: this.glowTex, transparent: true, opacity: 0.55, depthWrite: false });
-    this.shadows = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), shadowMat, MAX_SHADOWS);
+    // Crisp contact shadows under every soldier & monster so characters sit solidly on the bridge deck
+    const shadowMat = new THREE.MeshBasicMaterial({
+      color: 0x030614,
+      map: this.glowTex,
+      transparent: true,
+      opacity: 0.68,
+      depthWrite: false,
+    });
+    this.shadows = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      shadowMat,
+      MAX_SHADOWS,
+    );
     this.shadows.count = 0;
     this.shadows.frustumCulled = false;
     this.shadows.renderOrder = 1;
     this.scene.add(this.shadows);
 
-    this.blades = new THREE.InstancedMesh(buildBladeGeo(), this.charMat, 4);
+    this.blades = new THREE.InstancedMesh(buildBladeGeo(), this.propMat, 4);
     this.blades.count = 0;
     this.blades.frustumCulled = false;
     this.scene.add(this.blades);
 
-    // per-soldier muzzle flashes (camera-facing additive sprites)
     this.flashMat = additive(0xffffff, 0.95, this.glowTex);
-    this.flashes = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), this.flashMat, MAX_DRONES);
-    this.flashes.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_DRONES * 3), 3);
+    this.flashes = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), this.flashMat, MAX_RENDER_SQUAD);
+    this.flashes.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(MAX_RENDER_SQUAD * 3),
+      3,
+    );
     this.flashes.count = 0;
     this.flashes.frustumCulled = false;
     this.flashes.renderOrder = 3;
     this.scene.add(this.flashes);
   }
 
-  private buildEnemies(): void {
-    // 「故障病毒」 monsters: one multi-part instanced rig per kind
-    const enemyMat = makeCharacterMaterial(0xff8ac0, 0.85, 1.9, 0.6);
-    this.monsterModels = buildMonsterModels();
-    for (const kind of Object.keys(this.monsterModels) as EnemyKind[]) {
-      const model = this.monsterModels[kind];
-      this.enemyRigs.set(kind, new InstancedRig(model.parts, enemyMat, MAX_ENEMY_PER_KIND, this.scene));
-      const n = model.parts.length;
-      this.enemyPose.set(kind, { rot: new Float32Array(n * 3), scl: new Float32Array(n), off: new Float32Array(n * 3) });
-    }
-    const barGeo = new THREE.PlaneGeometry(1, 0.16);
-    const fgGeo = new THREE.PlaneGeometry(1, 0.16).translate(0.5, 0, 0);
-    this.hpBg = new THREE.InstancedMesh(barGeo, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.7, depthWrite: false }), 64);
-    this.hpFg = new THREE.InstancedMesh(fgGeo, new THREE.MeshBasicMaterial({ color: 0xff3b5c, toneMapped: false, depthWrite: false }), 64);
+  private buildEnemyShell(): void {
+    const barGeo = new THREE.PlaneGeometry(1, 0.17);
+    const fgGeo = new THREE.PlaneGeometry(1, 0.17).translate(0.5, 0, 0);
+    this.hpBg = new THREE.InstancedMesh(
+      barGeo,
+      new THREE.MeshBasicMaterial({ color: 0x060814, transparent: true, opacity: 0.78, depthWrite: false }),
+      64,
+    );
+    this.hpFg = new THREE.InstancedMesh(
+      fgGeo,
+      new THREE.MeshBasicMaterial({ color: 0xff3b5c, toneMapped: false, depthWrite: false }),
+      64,
+    );
     this.hpBg.renderOrder = 5;
     this.hpFg.renderOrder = 6;
     this.hpBg.frustumCulled = this.hpFg.frustumCulled = false;
@@ -506,15 +813,15 @@ export class Renderer {
     this.scene.add(this.hpBg, this.hpFg);
 
     const telGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, 0, 0.5);
-    this.telegraphs = new THREE.InstancedMesh(telGeo, additive(0xffffff, 0.55, this.stripeTex), 24);
+    this.telegraphs = new THREE.InstancedMesh(telGeo, additive(0xffffff, 0.6, this.stripeTex), 24);
     this.telegraphs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(24 * 3), 3);
     this.telegraphs.count = 0;
     this.telegraphs.frustumCulled = false;
     this.scene.add(this.telegraphs);
 
-    const tGeo = new THREE.CylinderGeometry(0.06, 0.06, 1, 6).translate(0, 0.5, 0).rotateX(Math.PI / 2);
+    const tGeo = new THREE.CylinderGeometry(0.07, 0.07, 1, 6).translate(0, 0.5, 0).rotateX(Math.PI / 2);
     for (let i = 0; i < 6; i++) {
-      const t = new THREE.Mesh(tGeo, additive(0xb04dff, 0.85));
+      const t = new THREE.Mesh(tGeo, additive(0xb85cff, 0.88));
       t.visible = false;
       this.tethers.push(t);
       this.scene.add(t);
@@ -522,17 +829,30 @@ export class Renderer {
   }
 
   private buildProjectiles(): void {
-    const mat = new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const mat = new THREE.MeshBasicMaterial({
+      toneMapped: false,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
     this.projMesh = new THREE.InstancedMesh(buildBoltGeo(), mat, MAX_PROJ);
     this.projMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PROJ * 3), 3);
     this.projMesh.count = 0;
     this.projMesh.frustumCulled = false;
     this.scene.add(this.projMesh);
 
-    this.orbMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.36, 1), new THREE.MeshBasicMaterial({ color: 0xff2a55, toneMapped: false }), 64);
+    this.orbMesh = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(0.38, 1),
+      new THREE.MeshBasicMaterial({ color: 0xff3864, toneMapped: false }),
+      64,
+    );
     this.orbMesh.count = 0;
     this.orbMesh.frustumCulled = false;
-    this.orbMarks = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), additive(0xff2a55, 0.7, this.glowTex), 64);
+    this.orbMarks = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      additive(0xff2a55, 0.72, this.glowTex),
+      64,
+    );
     this.orbMarks.count = 0;
     this.orbMarks.frustumCulled = false;
     this.scene.add(this.orbMesh, this.orbMarks);
@@ -542,16 +862,17 @@ export class Renderer {
     const flat = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
     for (let i = 0; i < 8; i++) {
       const group = new THREE.Group();
-      const fillMat = additive(0xff2040, 0.18);
+      const fillMat = additive(0xff2040, 0.2);
       const fill = new THREE.Mesh(flat, fillMat);
       const stripe = this.stripeTex.clone();
       stripe.needsUpdate = true;
       stripe.repeat.set(2, 10);
-      const progressMat = additive(0xff2040, 0.55, stripe);
+      const progressMat = additive(0xff2040, 0.58, stripe);
       const progress = new THREE.Mesh(flat, progressMat);
-      const columnMat = additive(0xffd0d8, 0.0);
+      const columnMat = additive(0xff2958, 0.0);
+      columnMat.side = THREE.FrontSide;
       const column = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), columnMat);
-      const edgeMat = additive(0xff4060, 0.9);
+      const edgeMat = additive(0xff4060, 0.92);
       const edgeL = new THREE.Mesh(flat, edgeMat);
       const edgeR = new THREE.Mesh(flat, edgeMat);
       fill.position.y = 0.05;
@@ -560,79 +881,32 @@ export class Renderer {
       group.add(fill, progress, column, edgeL, edgeR);
       group.visible = false;
       this.scene.add(group);
-      this.hazardViews.push({ group, fill, fillMat, progress, progressMat, column, columnMat, edgeL, edgeR });
+      this.hazardViews.push({
+        group,
+        fill,
+        fillMat,
+        progress,
+        progressMat,
+        column,
+        columnMat,
+        edgeL,
+        edgeR,
+      });
     }
   }
 
   private makeShield(r: number): THREE.Mesh {
-    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 2), additive(0x8ff6ff, 0.16));
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x62f4ff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const m = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), mat);
     m.visible = false;
     return m;
-  }
-
-  private buildBosses(): void {
-    const rigs = buildBossRigs();
-    // WARDEN-01 赤棱守卫: crystal golem
-    {
-      const rig = rigs.warden_01;
-      const shield = this.makeShield(3.4);
-      shield.position.y = rig.coreHeight;
-      rig.root.add(shield);
-      rig.root.visible = false;
-      this.scene.add(rig.root);
-      this.bossViews.set('warden_01', { rig, shield });
-    }
-    // HYDRA-02 双生执政官: twin serpent heads (the cyan one splits off as the secondary core)
-    {
-      const rig = rigs.hydra_02;
-      const shield = this.makeShield(2.8);
-      shield.position.y = rig.coreHeight;
-      rig.root.add(shield);
-      const shield2 = this.makeShield(2.4);
-      shield2.position.y = rig.secondaryCoreHeight ?? 3;
-      rig.secondary!.add(shield2);
-      rig.root.visible = false;
-      rig.secondary!.visible = false;
-      this.scene.add(rig.root, rig.secondary!);
-      this.bossViews.set('hydra_02', { rig, shield, shield2 });
-    }
-    // OMEGA-ZERO 奇点主脑: giant eye + shield pylons (crystal obelisks)
-    {
-      const rig = rigs.omega_zero;
-      const shield = this.makeShield(3.9);
-      shield.position.y = rig.coreHeight;
-      rig.root.add(shield);
-      rig.root.visible = false;
-      this.scene.add(rig.root);
-      const crystalB = new GeoBuilder();
-      crystalB
-        .add(new THREE.OctahedronGeometry(0.9, 0), 0x3fa8c8, 0.5, { s: [1, 2.2, 1] })
-        .add(new THREE.OctahedronGeometry(0.3, 0), 0xffffff, 2.0, { s: [1, 2.2, 1], p: [0, 0, 0.55] })
-        .add(tor(1.1, 0.06, 4, 20), 0x8ff6ff, 2.6, { r: [Math.PI / 2, 0, 0], p: [0, -0.6, 0] });
-      const crystalGeo = crystalB.build();
-      const footB = new GeoBuilder();
-      footB
-        .add(cyl(0.9, 1.25, 0.45, 6), 0x1c0f24, 0, { p: [0, 0.22, 0] })
-        .add(cyl(0.7, 0.9, 0.2, 6), 0x2c1236, 0, { p: [0, 0.55, 0] })
-        .add(tor(1.0, 0.05, 4, 6), 0x8ff6ff, 2.4, { r: [Math.PI / 2, 0, 0], p: [0, 0.46, 0] });
-      const footGeo = footB.build();
-      const pylons: THREE.Group[] = [];
-      const beams: THREE.Mesh[] = [];
-      for (let i = 0; i < 2; i++) {
-        const p = new THREE.Group();
-        const crystal = new THREE.Mesh(crystalGeo, this.propMat);
-        crystal.position.y = 2.1;
-        const foot = new THREE.Mesh(footGeo, this.propMat);
-        p.add(crystal, foot);
-        p.visible = false;
-        pylons.push(p);
-        const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 1, 6).translate(0, 0.5, 0).rotateX(Math.PI / 2), additive(0x8ff6ff, 0.8));
-        beam.visible = false;
-        beams.push(beam);
-        this.scene.add(p, beam);
-      }
-      this.bossViews.set('omega_zero', { rig, pylons, beams, shield });
-    }
   }
 
   // ------------------------------------------------------------------ public API
@@ -640,13 +914,14 @@ export class Renderer {
     this.sector = sector;
     const pal = SECTOR_META[sector].palette;
     this.scene.background = makeSkyTexture(pal.sky);
-    this.scene.fog = new THREE.Fog(pal.fog, 40, 120);
+    this.scene.fog = new THREE.Fog(pal.fog, 42, 118);
     (this.trackMat.uniforms.uTrack!.value as THREE.Color).set(pal.track);
     (this.trackMat.uniforms.uGrid!.value as THREE.Color).set(pal.grid);
     (this.trackMat.uniforms.uEdge!.value as THREE.Color).set(pal.edge);
     (this.trackMat.uniforms.uFog!.value as THREE.Color).set(pal.fog);
     (this.groundMat.uniforms.uGrid!.value as THREE.Color).set(pal.grid);
     (this.groundMat.uniforms.uFog!.value as THREE.Color).set(pal.fog);
+    (this.towerMat.uniforms.uFog!.value as THREE.Color).set(pal.fog);
     this.railMat.color.set(pal.edge);
     this.postMat.color.set(pal.edge);
     this.towerCapMat.color.set(pal.grid);
@@ -655,21 +930,28 @@ export class Renderer {
   resize(w: number, h: number): void {
     this.width = Math.max(1, w);
     this.height = Math.max(1, h);
+    const pr = this.renderer.getPixelRatio();
     this.renderer.setSize(this.width, this.height, false);
+    if (this.composer) {
+      this.composer.setPixelRatio(pr);
+      this.composer.setSize(this.width, this.height);
+    }
+    if (this.bloomPass) {
+      this.bloomPass.resolution.set(Math.max(1, Math.floor(this.width / 2)), Math.max(1, Math.floor(this.height / 2)));
+    }
     const aspect = this.width / this.height;
     this.camera.aspect = aspect;
-    // keep ~12.8 world units of horizontal track visible at the squad's depth on any aspect
-    const halfTan = 0.36 / aspect;
-    this.fov = THREE.MathUtils.clamp((2 * Math.atan(halfTan) * 180) / Math.PI, 42, 72);
+    // Keep ~12.7 world units of horizontal track visible at the squad's depth across aspect ratios
+    const halfTan = 0.435 / aspect;
+    this.fov = THREE.MathUtils.clamp((2 * Math.atan(halfTan) * 180) / Math.PI, 40, 72);
     this.camera.fov = this.fov;
     this.camera.updateProjectionMatrix();
-    this.effects.setViewportScale(this.height * this.renderer.getPixelRatio(), this.fov);
+    this.effects.setViewportScale(this.height * pr, this.fov);
   }
 
-  /** visible world width at the squad depth, for drag→world mapping */
+  /** Visible world width at the squad depth, for 1:1 drag→world mapping */
   visibleWidthAtPlayer(): number {
-    const d = 18;
-    return 2 * d * Math.tan((this.fov * Math.PI) / 360) * this.camera.aspect;
+    return 2 * CAM_DIST_TO_PLAYER * Math.tan((this.fov * Math.PI) / 360) * this.camera.aspect;
   }
 
   project(x: number, y: number, z: number): { x: number; y: number; visible: boolean } {
@@ -689,15 +971,45 @@ export class Renderer {
     this.muzzleFlash = 1;
   }
 
+  private releaseSquadSlot(slot: SquadSlotState): void {
+    if (slot.actor) {
+      slot.actor.root.visible = false;
+      this.squadPools[slot.tier - 1]!.push(slot.actor);
+      slot.actor = null;
+    }
+    slot.alive = false;
+    slot.s = 0;
+  }
+
   resetRun(): void {
     this.effects.clear();
     this.bossDeathT = -1;
     this.bossHidden = false;
     this.trauma = 0;
-    for (const d of this.droneCur) {
-      d.alive = false;
-      d.s = 0;
+
+    for (const slot of this.squadSlots) {
+      this.releaseSquadSlot(slot);
     }
+    for (const entry of this.activeEnemies.values()) {
+      entry.actor.root.visible = false;
+      this.enemyPools[entry.kind].push(entry.actor);
+    }
+    this.activeEnemies.clear();
+
+    for (const dying of this.dyingEnemies) {
+      dying.actor.root.visible = false;
+      this.enemyPools[dying.kind].push(dying.actor);
+    }
+    this.dyingEnemies.length = 0;
+
+    for (const view of this.bossViews.values()) {
+      view.root.visible = false;
+      if (view.secondaryRoot) view.secondaryRoot.visible = false;
+      view.pylons?.forEach((p) => (p.visible = false));
+      view.beams?.forEach((p) => (p.visible = false));
+      view.attackCooldown = 0;
+    }
+
     for (const v of this.gateViews.values()) this.releaseGate(v);
     this.gateViews.clear();
     for (const v of this.vaultViews.values()) this.releaseVault(v);
@@ -711,20 +1023,30 @@ export class Renderer {
   startBossDeath(x: number, z: number, color: number): void {
     this.bossDeathT = 0;
     this.bossHidden = false;
+    for (const view of this.bossViews.values()) {
+      if (view.root.visible) {
+        view.primary.play('Death', { loop: false, fade: 0.08, timeScale: 0.85 });
+        view.secondary?.play('Death', { loop: false, fade: 0.08, timeScale: 0.85 });
+      }
+    }
     const fx = this.effects;
     for (let i = 0; i < 7; i++) {
       fx.after(i * 0.16, () => {
         const ox = (Math.random() - 0.5) * 4;
         const oz = (Math.random() - 0.5) * 2;
-        fx.burst(x + ox, 2 + Math.random() * 2, z + oz, i % 2 ? 0xffffff : color, 40, { speed: 9, size: 0.6, life: 0.7 });
+        fx.burst(x + ox, 2 + Math.random() * 2, z + oz, i % 2 ? 0xffffff : color, 40, {
+          speed: 9,
+          size: 0.6,
+          life: 0.7,
+        });
         fx.ring(x + ox, z + oz, color, 3.5, 0.4);
         this.shake(0.25);
       });
     }
     fx.after(1.25, () => {
       this.bossHidden = true;
-      fx.burst(x, 2.4, z, 0xffffff, 260, { speed: 22, size: 0.9, life: 1.3, up: 0.8, gravity: 6 });
-      fx.burst(x, 2.4, z, color, 260, { speed: 15, size: 0.8, life: 1.6, up: 0.9, gravity: 4 });
+      fx.burst(x, 2.4, z, 0xffffff, 240, { speed: 22, size: 0.9, life: 1.3, up: 0.8, gravity: 6 });
+      fx.burst(x, 2.4, z, color, 240, { speed: 15, size: 0.8, life: 1.6, up: 0.9, gravity: 4 });
       fx.ring(x, z, 0xffffff, 16, 0.9);
       fx.ring(x, z, color, 11, 1.2);
       this.shake(1);
@@ -742,18 +1064,27 @@ export class Renderer {
     this.groundMat.uniforms.uScroll!.value = scroll;
     this.towerMat.uniforms.uTime!.value = t;
 
+    this.shadowCount = 0;
     this.updateEnvironment(scroll);
     this.updateSquad(snap, dt, t);
-    this.updateEnemies(snap, t);
+    this.updateEnemies(snap, dt, t);
     this.updateProjectiles(snap);
     this.updateGates(snap, dt, t);
     this.updateVaults(snap, t);
     this.updateBarrels(snap, t);
     this.updateLenses(snap, t);
     this.updateBoss(snap, dt, t);
+    this.shadows.count = this.shadowCount;
+    this.shadows.instanceMatrix.needsUpdate = true;
+
     this.effects.update(dt);
     this.updateCamera(snap, dt, cinematic);
-    this.renderer.render(this.scene, this.camera);
+
+    if (this.composer) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   private updateEnvironment(scroll: number): void {
@@ -792,217 +1123,456 @@ export class Renderer {
   private pushShadow(x: number, z: number, r: number): void {
     if (this.shadowCount >= MAX_SHADOWS) return;
     const d = this.dummy;
-    d.position.set(x, 0.03, z);
+    d.position.set(x, 0.025, z);
     d.rotation.set(0, 0, 0);
-    d.scale.set(r * 2, 1, r * 2);
+    d.scale.set(r * 2.1, 1, r * 1.9);
     d.updateMatrix();
     this.shadows.setMatrixAt(this.shadowCount++, d.matrix);
   }
 
-  private updateSquad(snap: SimSnapshot, dt: number, t: number): void {
-    this.shadowCount = 0;
-    if (snap.weapon !== this.soldierWeapon) {
-      // everyone visibly switches to the newly unlocked weapon model
-      this.soldierWeapon = snap.weapon;
-      this.soldierRigs.forEach((rig, i) => rig.setPartGeometry('gun', this.soldierModels[i]!.weapons[snap.weapon]));
+  /**
+   * Selects up to MAX_RENDER_SQUAD breathable, non-overlapping visual slots so individual
+   * Q-version troopers, golden captains, and assault mechs always have clear silhouette separation.
+   */
+  private computeVisualSquadTargets(
+    snap: SimSnapshot,
+  ): Array<{ x: number; z: number; tier: 1 | 2 | 3 }> {
+    const sc = snap.squadCount;
+    const { u3, totalVisible } = snap.tiers;
+    if (sc <= 0 || totalVisible <= 0) return [];
+
+    // Smooth visual hero promotion across real run squad sizes (without touching sim math):
+    // - 14+ deploys Golden Heavy Captains (capped at 5 so Cobalt-Cyan Troopers stay dominant)
+    // - 55+ deploys towering Stan Assault Mechs on heroic rear-flanks
+    const n3 = Math.min(3, Math.max(u3, sc >= 175 ? 3 : sc >= 105 ? 2 : sc >= 55 ? 1 : 0));
+    const n2 = sc >= 85 ? 5 : sc >= 55 ? 4 : sc >= 34 ? 3 : sc >= 20 ? 2 : sc >= 14 ? 1 : 0;
+    const maxSlots = Math.max(1, MAX_RENDER_SQUAD - n3 * 2);
+    const total = Math.min(maxSlots, Math.max(n3 + n2, totalVisible));
+    const n1 = Math.max(0, total - n3 - n2);
+
+    const out: Array<{ x: number; z: number; tier: 1 | 2 | 3 }> = [];
+    const overdrive = snap.overdriveTimer > 0;
+    const maxTrackX = TRACK_HALF_WIDTH - 0.58;
+
+    // 1. Assault Mechs placed on rear-flank bodyguard positions so they tower above without blocking front row
+    const mechOffsets: Array<[number, number]> =
+      n3 === 1
+        ? [[0, 0.95]]
+        : n3 === 2
+          ? [
+              [-1.18, 0.72],
+              [1.18, 0.72],
+            ]
+          : [
+              [0, 1.08],
+              [-1.32, 0.62],
+              [1.32, 0.62],
+            ];
+    for (let m = 0; m < n3; m++) {
+      const [ox, oz] = mechOffsets[m]!;
+      out.push({
+        x: THREE.MathUtils.clamp(snap.squadX + ox, -maxTrackX, maxTrackX),
+        z: PLAYER_Z + oz,
+        tier: 3,
+      });
     }
-    const positions = snap.dronePositions;
-    const follow = 1 - Math.exp(-dt * 16);
-    const d = this.dummy;
+
+    // 2. Golden Captains + Cobalt-Cyan Troopers arranged in breathable spiral / V-Wing chevron
+    const infCount = n2 + n1;
+    const spacing = infCount <= 8 ? 0.7 : 0.65;
+    for (let k = 0; k < infCount; k++) {
+      const tier: 1 | 2 = k < n2 ? 2 : 1;
+      let ox = 0;
+      let oz = 0;
+      if (infCount > 1) {
+        if (overdrive) {
+          const rank = Math.ceil(k / 2);
+          const side = k % 2 === 1 ? 1 : -1;
+          ox = k === 0 ? 0 : side * rank * 0.44;
+          oz = k === 0 ? -0.42 : rank * 0.25 - 0.28;
+        } else {
+          const r = spacing * Math.sqrt(k + 0.35);
+          const theta = k * GOLDEN_ANGLE_RAD;
+          ox = Math.cos(theta) * r;
+          oz = Math.sin(theta) * r * 0.8 - (n3 > 0 ? 0.24 : 0);
+        }
+      } else if (n3 > 0) {
+        oz = -0.3;
+      }
+      out.push({
+        x: THREE.MathUtils.clamp(snap.squadX + ox, -maxTrackX, maxTrackX),
+        z: PLAYER_Z + oz,
+        tier,
+      });
+    }
+    return out;
+  }
+
+  private updateSquad(snap: SimSnapshot, dt: number, t: number): void {
+    const lib = this.gltfLib;
+    const weaponChanged = snap.weapon !== this.currentWeapon;
+    if (weaponChanged) {
+      this.currentWeapon = snap.weapon;
+      if (lib) {
+        for (let tierIdx = 0; tierIdx < 2; tierIdx++) {
+          for (const actor of this.squadPools[tierIdx]!) {
+            actor.setWeapon(snap.weapon, lib.weapons);
+          }
+        }
+        for (const slot of this.squadSlots) {
+          if (slot.actor && slot.tier < 3) {
+            slot.actor.setWeapon(snap.weapon, lib.weapons);
+          }
+        }
+      }
+    }
+
+    const targets = lib ? this.computeVisualSquadTargets(snap) : [];
+    const follow = 1 - Math.exp(-Math.max(dt, 0.001) * 15);
     const overdrive = snap.overdriveTimer > 0;
     const wc = WEAPON_COLOR[snap.weapon];
     const camQuat = this.camera.quaternion;
-    const rot = this.rot18;
-    const off = this.off18;
-    this.muzzleFlash = Math.max(0, this.muzzleFlash - dt * 12);
+    const d = this.dummy;
+    this.muzzleFlash = Math.max(0, this.muzzleFlash - dt * 11);
     let flashes = 0;
-    for (const rig of this.soldierRigs) rig.begin();
-    for (let i = 0; i < MAX_DRONES; i++) {
-      const cur = this.droneCur[i]!;
-      const target = positions[i];
-      if (!target) {
-        if (cur.alive) {
-          cur.alive = false;
-          cur.s = 0;
-        }
+
+    const isVictory = snap.phase === 'VICTORY';
+    const isIdleReady = snap.simTime === 0 && snap.phase === 'PLAYING';
+
+    for (let i = 0; i < MAX_RENDER_SQUAD; i++) {
+      const slot = this.squadSlots[i]!;
+      const target = targets[i];
+      if (!target || !lib) {
+        if (slot.alive) this.releaseSquadSlot(slot);
         continue;
       }
-      if (!cur.alive) {
-        // new members "drop in" from the squad center
-        cur.alive = true;
-        cur.x = snap.squadX;
-        cur.z = PLAYER_Z + 0.6;
-        cur.s = 0.01;
-        cur.vx = 0;
-      }
-      const px = cur.x;
-      cur.x += (target.x - cur.x) * follow;
-      cur.z += (target.z - cur.z) * follow;
-      cur.vx += ((cur.x - px) / Math.max(dt, 1e-4) - cur.vx) * Math.min(1, dt * 10);
-      cur.s += (1 - cur.s) * (1 - Math.exp(-dt * 10));
-      const tierIdx = target.tier - 1;
-      const model = this.soldierModels[tierIdx]!;
-      const rig = this.soldierRigs[tierIdx]!;
-      const mech = tierIdx === 2;
-      cur.ph += dt * (mech ? 7 : 11);
-      const sp = Math.sin(cur.ph);
-      const legA = mech ? 0.45 : 0.75;
-      rot.fill(0);
-      off.fill(0);
-      // parts: legL, legR, body, head, arms, gun
-      rot[0] = sp * legA;
-      rot[3] = -sp * legA;
-      const bob = Math.abs(Math.cos(cur.ph)) * (mech ? 0.05 : 0.035) * model.scale;
-      const bank = THREE.MathUtils.clamp(-cur.vx * 0.02, -0.12, 0.12);
-      rot[6] = -0.05;
-      rot[8] = bank;
-      rot[9] = 0.04 + Math.sin(cur.ph * 0.5) * 0.03;
-      rot[11] = bank * 0.5;
-      const fl = this.muzzleFlash * (0.55 + 0.45 * Math.sin(i * 7.3 + t * 37));
-      const recoil = fl * 0.06 * model.scale;
-      rot[12] = -fl * 0.1;
-      rot[15] = -fl * 0.1;
-      for (let k = 2; k < 6; k++) off[k * 3 + 1] = bob;
-      off[14] += recoil;
-      off[17] += recoil;
-      const s = cur.s * (overdrive ? 1.1 : 1) * SOLDIER_SCALE;
-      this.rootP.set(cur.x, 0, cur.z);
-      this.rootQ.setFromAxisAngle(this.yAxis, THREE.MathUtils.clamp(-cur.vx * 0.03, -0.4, 0.4));
-      this.rootS.setScalar(s);
-      this.rootM.compose(this.rootP, this.rootQ, this.rootS);
-      const od = overdrive ? 0.35 + Math.sin(t * 20 + i) * 0.15 : 0;
-      this.tint.setScalar(1 + (1 - cur.s) * 2.5 + od);
-      rig.push(this.rootM, rot, this.tint, undefined, off);
-      this.pushShadow(cur.x, cur.z, 0.26 * SOLDIER_SCALE * model.scale * (mech ? 2 : 1));
 
-      if (fl > 0.08 && flashes < MAX_DRONES) {
-        this.tmpV.set(model.muzzle[0], model.muzzle[1] + bob, model.muzzle[2] + recoil).applyMatrix4(this.rootM);
-        d.position.copy(this.tmpV);
+      // Swap pooled actor if tier upgraded/downgraded
+      if (slot.actor && slot.tier !== target.tier) {
+        slot.actor.root.visible = false;
+        this.squadPools[slot.tier - 1]!.push(slot.actor);
+        slot.actor = null;
+      }
+
+      if (!slot.actor) {
+        const pool = this.squadPools[target.tier - 1]!;
+        const acquired =
+          pool.pop() ??
+          spawnActor(lib.heroes[target.tier - 1]!, {
+            rimColor: target.tier === 2 ? 0xffe484 : 0x9beeff,
+            rimStrength: 0.42,
+            outlineWidth: 0.0054,
+            weapons: target.tier < 3 ? lib.weapons : undefined,
+            initialWeapon: this.currentWeapon,
+          });
+        if (!acquired.root.parent) this.scene.add(acquired.root);
+        if (target.tier < 3) acquired.setWeapon(this.currentWeapon, lib.weapons);
+        acquired.root.visible = true;
+        slot.actor = acquired;
+        slot.tier = target.tier;
+        if (!slot.alive) {
+          slot.alive = true;
+          slot.x = snap.squadX;
+          slot.z = PLAYER_Z + 0.5;
+          slot.s = 0.05;
+          slot.vx = 0;
+        }
+      }
+
+      const px = slot.x;
+      slot.x += (target.x - slot.x) * follow;
+      slot.z += (target.z - slot.z) * follow;
+      slot.vx += ((slot.x - px) / Math.max(dt, 1e-3) - slot.vx) * Math.min(1, dt * 10);
+      slot.s += (1 - slot.s) * (1 - Math.exp(-Math.max(dt, 0.001) * 11));
+
+      const actor = slot.actor;
+      const isMech = slot.tier === 3;
+
+      if (isVictory) {
+        // Turn toward the player & celebrate on Victory!
+        actor.play(isMech ? 'Idle' : 'Wave', { timeScale: 1.1, startOffset: (i * 0.19) % 1.2 });
+        actor.inner.rotation.y += (0 - actor.inner.rotation.y) * Math.min(1, dt * 6);
+      } else if (isIdleReady) {
+        actor.play(isMech ? 'Idle' : 'Idle_Shoot', { timeScale: 1.0, startOffset: (i * 0.13) % 0.35 });
+        actor.inner.rotation.y = Math.PI;
+      } else {
+        const runClip = isMech ? 'Run' : 'Run_Shoot';
+        const runSpeed = (isMech ? 1.15 : 1.28) * (overdrive ? 1.28 : 1);
+        actor.play(runClip, { timeScale: runSpeed, startOffset: (i * 0.17) % 0.7 });
+        actor.setTimeScale(runSpeed);
+        actor.inner.rotation.y = Math.PI;
+      }
+
+      actor.update(dt);
+
+      const fl = this.muzzleFlash * (0.55 + 0.45 * Math.sin(i * 7.3 + t * 37));
+      const recoilZ = fl * 0.06;
+      const sc = slot.s * (overdrive ? 1.08 : 1);
+      actor.root.position.set(slot.x, 0, slot.z + recoilZ);
+      const yaw = THREE.MathUtils.clamp(-slot.vx * 0.028, -0.35, 0.35);
+      const bank = THREE.MathUtils.clamp(-slot.vx * 0.014, -0.1, 0.1);
+      actor.root.rotation.set(0, yaw, bank);
+      actor.root.scale.setScalar(sc);
+
+      const spawnFlash = Math.max(0, (1 - slot.s) * 0.8);
+      if (overdrive) {
+        const od = 1.08 + Math.sin(t * 18 + i) * 0.08;
+        actor.setVisuals(spawnFlash, od * 1.08, od * 1.04, od * 0.88);
+      } else {
+        actor.setVisuals(spawnFlash, 1, 1, 1);
+      }
+
+      const shadowR = isMech ? 0.68 : slot.tier === 2 ? 0.44 : 0.36;
+      this.pushShadow(slot.x, slot.z, shadowR * slot.s);
+
+      if (fl > 0.08 && !isVictory && !isIdleReady && flashes < MAX_RENDER_SQUAD) {
+        const mx = slot.x + (isMech ? 0 : 0.16);
+        const my = isMech ? 1.45 : slot.tier === 2 ? 0.92 : 0.76;
+        const mz = slot.z - (isMech ? 0.95 : 0.72);
+        d.position.set(mx, my, mz);
         d.quaternion.copy(camQuat);
-        const fs = (mech ? 0.95 : 0.5) * (0.6 + fl * 0.6);
+        const fs = (isMech ? 0.92 : 0.52) * (0.6 + fl * 0.55);
         d.scale.set(fs, fs, fs);
         d.updateMatrix();
         this.flashes.setMatrixAt(flashes, d.matrix);
-        this.tmpColor.setHex(wc).multiplyScalar(0.4 + fl);
+        this.tmpColor.setHex(wc).multiplyScalar(0.65 + fl * 0.95);
         this.flashes.setColorAt(flashes, this.tmpColor);
         flashes++;
       }
     }
-    for (const rig of this.soldierRigs) rig.end();
+
     this.flashes.count = flashes;
     this.flashes.instanceMatrix.needsUpdate = true;
     if (this.flashes.instanceColor) this.flashes.instanceColor.needsUpdate = true;
     d.rotation.set(0, 0, 0);
 
-    this.squadGlowMat.color.setHex(overdrive ? 0xffffff : wc);
-    const gs = snap.formationRadius * 2.4 + 1.6 + (overdrive ? 0.8 : 0);
+    this.squadGlowMat.color.setHex(overdrive ? 0xffea75 : wc);
+    const gs = snap.formationRadius * 2.5 + 1.5 + (overdrive ? 0.8 : 0);
     this.squadGlow.scale.set(gs, gs, 1);
-    this.squadGlow.position.set(snap.squadX, 0.04, PLAYER_Z - 0.1);
+    this.squadGlow.position.set(snap.squadX, 0.03, PLAYER_Z - 0.05);
     this.squadGlow.visible = snap.squadCount > 0;
-    this.squadGlowMat.opacity = 0.32 + (overdrive ? 0.25 : 0);
+    this.squadGlowMat.opacity = 0.28 + (overdrive ? 0.24 : 0);
 
-    // orbital blades
     const nb = snap.bladesCount;
     this.blades.count = nb;
     for (let i = 0; i < nb; i++) {
       const a = snap.bladesAngle + (i / nb) * Math.PI * 2;
-      d.position.set(snap.squadX + Math.cos(a) * BLADES_ORBIT_RADIUS, 0.55, PLAYER_Z + Math.sin(a) * BLADES_ORBIT_RADIUS * 0.85);
+      d.position.set(
+        snap.squadX + Math.cos(a) * BLADES_ORBIT_RADIUS,
+        0.65,
+        PLAYER_Z + Math.sin(a) * BLADES_ORBIT_RADIUS * 0.85,
+      );
       d.rotation.set(0.25, -a * 3 + t * 14, 0);
-      d.scale.set(1.5, 1.5, 1.5);
+      d.scale.set(1.55, 1.55, 1.55);
       d.updateMatrix();
       this.blades.setMatrixAt(i, d.matrix);
     }
     this.blades.instanceMatrix.needsUpdate = true;
   }
 
-  private updateEnemies(snap: SimSnapshot, t: number): void {
+  private updateEnemies(snap: SimSnapshot, dt: number, t: number): void {
+    const lib = this.gltfLib;
     const d = this.dummy;
+    const camQuat = this.camera.quaternion;
     let bars = 0;
     let tels = 0;
     let tetherIdx = 0;
-    const camQuat = this.camera.quaternion;
-    for (const rig of this.enemyRigs.values()) rig.begin();
-    for (const e of snap.enemies) {
-      const rig = this.enemyRigs.get(e.kind)!;
-      if (rig.size >= MAX_ENEMY_PER_KIND) continue;
-      const model = this.monsterModels[e.kind];
-      const pose = this.enemyPose.get(e.kind)!;
-      const sc = e.radius / model.baseRadius;
-      const hit = e.hitPulse;
-      const tele = e.kind === 'dasher' && e.telegraphTimer > 0;
-      const slowed = e.slowTimer > 0;
-      const ph = t * ENEMY_ANIM_SPEED[e.kind] * (slowed ? 0.45 : 1) + e.id * 1.913;
-      poseMonster(e.kind, ph, tele, pose.rot, pose.scl, pose.off);
-      // monsters turn to face the squad
-      const yaw = THREE.MathUtils.clamp(Math.atan2(snap.squadX - e.x, PLAYER_Z - e.z), -0.7, 0.7);
-      const jitter = tele ? (Math.random() - 0.5) * 0.1 : 0;
-      this.rootP.set(e.x + jitter, 0, e.z);
-      this.rootQ.setFromAxisAngle(this.yAxis, yaw);
-      const squash = 1 + hit * 0.18;
-      this.rootS.set(sc * squash, sc * (1 - hit * 0.1), sc * squash);
-      this.rootM.compose(this.rootP, this.rootQ, this.rootS);
-      if (slowed) this.tint.copy(TINT_SLOW);
-      else this.tint.setScalar(1);
-      if (hit > 0) {
-        const k = Math.min(1, hit * 0.9);
-        this.tint.setRGB(this.tint.r + (3.2 - this.tint.r) * k, this.tint.g + (3.2 - this.tint.g) * k, this.tint.b + (3.2 - this.tint.b) * k);
-      }
-      rig.push(this.rootM, pose.rot, this.tint, pose.scl, pose.off);
-      this.pushShadow(e.x, e.z, e.radius * (e.kind === 'siphon' ? 0.75 : 1.15));
 
-      // HP bars on tougher enemies
-      if (e.maxHp >= 40 && e.hp < e.maxHp && bars < 64) {
-        const w = Math.max(0.9, e.radius * 2);
-        const y = ENEMY_BAR_H[e.kind] * sc + 0.2;
-        d.position.set(e.x, y, e.z);
-        d.quaternion.copy(camQuat);
-        d.scale.set(w + 0.08, 1.4, 1);
-        d.updateMatrix();
-        this.hpBg.setMatrixAt(bars, d.matrix);
-        d.position.set(e.x - w / 2, y, e.z + 0.01);
-        d.scale.set(Math.max(0.001, (w * e.hp) / e.maxHp), 1, 1);
-        d.updateMatrix();
-        this.hpFg.setMatrixAt(bars, d.matrix);
-        bars++;
-        d.rotation.set(0, 0, 0);
-      }
-      // Dasher lock-on lane telegraph
-      if (tele && tels < 24) {
-        d.rotation.set(0, 0, 0);
-        d.position.set(e.x, 0.06, e.z);
-        d.scale.set(e.radius * 2.2, 1, Math.max(1, PLAYER_Z + 3 - e.z));
-        d.updateMatrix();
-        this.telegraphs.setMatrixAt(tels, d.matrix);
-        const pulse = 0.5 + 0.5 * Math.sin(t * 30);
-        this.tmpColor.setRGB(1, 0.15 + pulse * 0.2, 0.2);
-        this.tmpColor.multiplyScalar(0.6 + pulse * 0.4);
-        this.telegraphs.setColorAt(tels, this.tmpColor);
-        tels++;
-      }
-      // Siphon tether to the gate it drains
-      if (e.kind === 'siphon' && e.linkedGateId !== null && tetherIdx < this.tethers.length) {
-        const g = snap.gates.find((q) => q.id === e.linkedGateId && !q.triggered && !q.dimmed);
-        if (g) {
-          const tm = this.tethers[tetherIdx++]!;
-          const from = this.tmpA.set(e.x, 1.25 * sc, e.z);
-          const to = this.tmpB.set(g.x, 1.5, g.z);
-          const len = from.distanceTo(to);
-          tm.position.copy(from);
-          tm.lookAt(to);
-          tm.scale.set(1 + Math.sin(t * 25) * 0.4, 1 + Math.sin(t * 25) * 0.4, len);
-          tm.visible = true;
+    for (const entry of this.activeEnemies.values()) entry.seen = false;
+
+    if (lib) {
+      for (const e of snap.enemies) {
+        let entry = this.activeEnemies.get(e.id);
+        if (!entry) {
+          const pool = this.enemyPools[e.kind];
+          const actor = pool.pop();
+          if (!actor) continue;
+          actor.root.visible = true;
+          actor.activeClip = '';
+          entry = {
+            kind: e.kind,
+            actor,
+            x: e.x,
+            z: e.z,
+            scale: 1,
+            seen: true,
+          };
+          this.activeEnemies.set(e.id, entry);
+        }
+        entry.seen = true;
+        entry.x = e.x;
+        entry.z = e.z;
+
+        const tmpl = lib.enemies[e.kind];
+        const sc = e.radius / tmpl.refRadius;
+        entry.scale = sc;
+
+        const hit = e.hitPulse;
+        const slowed = e.slowTimer > 0;
+        const tele = e.kind === 'dasher' && e.telegraphTimer > 0;
+        const speedMod = slowed ? 0.45 : 1;
+
+        // Pick dynamic skeletal animation clip per monster archetype & combat state
+        const phaseOffset = (e.id * 0.23) % 0.8;
+        switch (e.kind) {
+          case 'crawler': {
+            const near = e.z > PLAYER_Z - 3.8;
+            entry.actor.play(near ? 'Bite_Front' : 'Walk', {
+              timeScale: (near ? 1.35 : 1.5) * speedMod,
+              startOffset: phaseOffset,
+            });
+            break;
+          }
+          case 'dasher': {
+            if (tele) {
+              entry.actor.play('Duck', { timeScale: 1.2 * speedMod, fade: 0.08 });
+            } else {
+              const dashing = e.z > -34;
+              entry.actor.play('Run', {
+                timeScale: (dashing ? 2.15 : 1.3) * speedMod,
+                fade: 0.08,
+                startOffset: phaseOffset,
+              });
+            }
+            break;
+          }
+          case 'bastion': {
+            const swinging = e.z > PLAYER_Z - 5.2;
+            entry.actor.play(swinging ? 'Weapon' : 'Walk', {
+              timeScale: (swinging ? 1.15 : 1.05) * speedMod,
+              startOffset: phaseOffset,
+            });
+            break;
+          }
+          case 'mitosis': {
+            entry.actor.play('Walk', {
+              timeScale: 1.25 * speedMod,
+              startOffset: phaseOffset,
+            });
+            break;
+          }
+          case 'siphon': {
+            const draining = e.linkedGateId !== null;
+            entry.actor.play(draining ? 'Fast_Flying' : 'Flying_Idle', {
+              timeScale: 1.15 * speedMod,
+              startOffset: phaseOffset,
+            });
+            break;
+          }
+        }
+        entry.actor.update(dt);
+
+        const yaw = THREE.MathUtils.clamp(Math.atan2(snap.squadX - e.x, PLAYER_Z - e.z), -0.65, 0.65);
+        const jitter = tele ? (Math.random() - 0.5) * 0.08 : 0;
+        entry.actor.root.position.set(e.x + jitter, 0, e.z);
+        entry.actor.root.rotation.set(0, yaw, 0);
+
+        // Snappy cartoon squash-and-stretch on bullet impact
+        const squashXZ = sc * (1 + hit * 0.16);
+        const squashY = sc * (1 - hit * 0.1);
+        entry.actor.root.scale.set(squashXZ, squashY, squashXZ);
+
+        const hitFlash = hit > 0.6 ? (0.5 + 0.5 * Math.sin(t * 44 + e.id)) * 0.3 : hit * 0.28;
+        if (slowed) {
+          entry.actor.setVisuals(hitFlash, 0.58, 0.94, 1.42);
+        } else {
+          entry.actor.setVisuals(hitFlash, 1, 1, 1);
+        }
+
+        this.pushShadow(e.x, e.z, e.radius * (e.kind === 'siphon' ? 0.75 : 1.08));
+
+        if (e.maxHp >= 40 && e.hp < e.maxHp && bars < 64) {
+          const w = Math.max(0.95, e.radius * 2);
+          const y = ENEMY_BAR_H[e.kind] * sc + 0.15;
+          d.position.set(e.x, y, e.z);
+          d.quaternion.copy(camQuat);
+          d.scale.set(w + 0.1, 1.4, 1);
+          d.updateMatrix();
+          this.hpBg.setMatrixAt(bars, d.matrix);
+          d.position.set(e.x - w / 2, y, e.z + 0.01);
+          d.scale.set(Math.max(0.001, (w * e.hp) / e.maxHp), 1, 1);
+          d.updateMatrix();
+          this.hpFg.setMatrixAt(bars, d.matrix);
+          bars++;
+          d.rotation.set(0, 0, 0);
+        }
+
+        if (tele && tels < 24) {
+          d.rotation.set(0, 0, 0);
+          d.position.set(e.x, 0.06, e.z);
+          d.scale.set(e.radius * 2.2, 1, Math.max(1, PLAYER_Z + 3 - e.z));
+          d.updateMatrix();
+          this.telegraphs.setMatrixAt(tels, d.matrix);
+          const pulse = 0.5 + 0.5 * Math.sin(t * 30);
+          this.tmpColor.setRGB(1, 0.15 + pulse * 0.2, 0.2).multiplyScalar(0.7 + pulse * 0.45);
+          this.telegraphs.setColorAt(tels, this.tmpColor);
+          tels++;
+        }
+
+        if (e.kind === 'siphon' && e.linkedGateId !== null && tetherIdx < this.tethers.length) {
+          const g = snap.gates.find((q) => q.id === e.linkedGateId && !q.triggered && !q.dimmed);
+          if (g) {
+            const tm = this.tethers[tetherIdx++]!;
+            const from = this.tmpA.set(e.x, 1.3 * sc, e.z);
+            const to = this.tmpB.set(g.x, 1.5, g.z);
+            const len = from.distanceTo(to);
+            tm.position.copy(from);
+            tm.lookAt(to);
+            tm.scale.set(1 + Math.sin(t * 25) * 0.4, 1 + Math.sin(t * 25) * 0.4, len);
+            tm.visible = true;
+          }
         }
       }
     }
-    for (const rig of this.enemyRigs.values()) rig.end();
+
+    // Transition killed monsters into a brief juicy skeletal Death animation
+    for (const [id, entry] of this.activeEnemies) {
+      if (!entry.seen) {
+        this.activeEnemies.delete(id);
+        if (entry.z < PLAYER_Z - 0.35 && this.dyingEnemies.length < 24) {
+          entry.actor.play('Death', { loop: false, fade: 0.05, timeScale: 1.35 });
+          entry.actor.setVisuals(0.65, 1, 1, 1);
+          this.dyingEnemies.push({
+            kind: entry.kind,
+            actor: entry.actor,
+            x: entry.x,
+            z: entry.z,
+            scale: entry.scale,
+            age: 0,
+            duration: 0.46,
+          });
+        } else {
+          entry.actor.root.visible = false;
+          this.enemyPools[entry.kind].push(entry.actor);
+        }
+      }
+    }
+
+    // Advance skeletal Death tumble animations
+    for (let i = this.dyingEnemies.length - 1; i >= 0; i--) {
+      const dm = this.dyingEnemies[i]!;
+      dm.age += dt;
+      if (dm.age >= dm.duration) {
+        dm.actor.root.visible = false;
+        this.enemyPools[dm.kind].push(dm.actor);
+        this.dyingEnemies.splice(i, 1);
+        continue;
+      }
+      dm.z -= dt * 2.2;
+      const p = dm.age / dm.duration;
+      const shrink = p > 0.65 ? Math.max(0.05, 1 - (p - 0.65) / 0.35) : 1;
+      dm.actor.root.position.set(dm.x, 0, dm.z);
+      dm.actor.root.scale.setScalar(dm.scale * shrink);
+      dm.actor.setVisuals(Math.max(0, (1 - p * 3) * 0.6), 1, 1, 1);
+      dm.actor.update(dt);
+    }
+
     this.hpBg.count = this.hpFg.count = bars;
     this.hpBg.instanceMatrix.needsUpdate = this.hpFg.instanceMatrix.needsUpdate = true;
     this.telegraphs.count = tels;
     this.telegraphs.instanceMatrix.needsUpdate = true;
     if (this.telegraphs.instanceColor) this.telegraphs.instanceColor.needsUpdate = true;
     for (let i = tetherIdx; i < this.tethers.length; i++) this.tethers[i]!.visible = false;
-    this.shadows.count = this.shadowCount;
-    this.shadows.instanceMatrix.needsUpdate = true;
   }
 
   private updateProjectiles(snap: SimSnapshot): void {
@@ -1012,7 +1582,7 @@ export class Renderer {
     for (const p of snap.projectiles) {
       if (p.hostile) {
         if (orbs >= 64) continue;
-        d.position.set(p.x, 0.7, p.z);
+        d.position.set(p.x, 0.75, p.z);
         d.rotation.set(this.time * 5, this.time * 4, 0);
         d.scale.setScalar(1 + Math.sin(this.time * 20 + p.id) * 0.12);
         d.updateMatrix();
@@ -1027,22 +1597,23 @@ export class Renderer {
       }
       if (n >= MAX_PROJ) continue;
       const ps = p.powerScale;
-      let sx = 0.1;
-      let sz = 0.8;
+      let sx = 0.11;
+      let sz = 0.85;
       switch (p.weapon) {
-        case 'scatter': sx = 0.13; sz = 0.55; break;
-        case 'rail': sx = 0.15; sz = 2.4; break;
-        case 'plasma': sx = 0.42; sz = 0.42; break;
-        case 'cryo': sx = 0.12; sz = 1.0; break;
+        case 'scatter': sx = 0.14; sz = 0.58; break;
+        case 'rail': sx = 0.16; sz = 2.4; break;
+        case 'plasma': sx = 0.44; sz = 0.44; break;
+        case 'cryo': sx = 0.13; sz = 1.02; break;
         default: break;
       }
-      d.position.set(p.x, 0.55, p.z);
+      d.position.set(p.x, 0.65, p.z);
       d.rotation.set(p.weapon === 'plasma' ? this.time * 8 : 0, Math.atan2(p.vx, p.vz), 0);
       const amp = p.amplified ? 1.3 : 1;
       d.scale.set(sx * ps * amp, sx * ps * amp, sz * (0.8 + ps * 0.2) * amp);
       d.updateMatrix();
       this.projMesh.setMatrixAt(n, d.matrix);
-      this.tmpColor.setHex(p.amplified ? 0xffe27a : WEAPON_COLOR[p.weapon]);
+      // Slight >1 HDR boost so UnrealBloomPass gives projectiles a clean neon glow
+      this.tmpColor.setHex(p.amplified ? 0xffe27a : WEAPON_COLOR[p.weapon]).multiplyScalar(1.32);
       this.projMesh.setColorAt(n, this.tmpColor);
       n++;
     }
@@ -1063,23 +1634,45 @@ export class Renderer {
       return pooled;
     }
     const group = new THREE.Group();
-    const postMat = std(0xffffff, 0.8);
+    const postMat = std(0xffffff, 0.65);
     const postGeo = new THREE.BoxGeometry(0.24, 2.9, 0.24).translate(0, 1.45, 0);
     const postL = new THREE.Mesh(postGeo, postMat);
     const postR = new THREE.Mesh(postGeo, postMat);
     const beam = new THREE.Mesh(new THREE.BoxGeometry(1, 0.22, 0.24), postMat);
     beam.position.y = 2.9;
-    const curtainMat = additive(0xffffff, 0.2);
+    const curtainMat = additive(0xffffff, 0.18);
     const curtain = new THREE.Mesh(new THREE.PlaneGeometry(1, 2.8).translate(0, 1.4, 0), curtainMat);
     const { ctx, tex } = makeCanvasTexture(512, 288);
-    const plateMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false });
+    // Clamped color <= 0.90 linear so bloom threshold (0.93) never blurs gate numbers!
+    const plateMat = new THREE.MeshBasicMaterial({
+      color: 0xf4f8ff,
+      map: tex,
+      transparent: true,
+      depthWrite: false,
+    });
     const plate = new THREE.Mesh(new THREE.PlaneGeometry(1, 288 / 512), plateMat);
     plate.position.set(0, 1.55, 0.08);
-    plate.rotation.x = -0.3;
+    plate.rotation.x = -0.28;
     plate.renderOrder = 4;
     group.add(postL, postR, beam, curtain, plate);
     this.scene.add(group);
-    return { id: -1, group, postMat, curtainMat, beam, postL, postR, curtain, plate, plateMat, ctx, tex, key: '', seen: false, fade: 1 };
+    return {
+      id: -1,
+      group,
+      postMat,
+      curtainMat,
+      beam,
+      postL,
+      postR,
+      curtain,
+      plate,
+      plateMat,
+      ctx,
+      tex,
+      key: '',
+      seen: false,
+      fade: 1,
+    };
   }
 
   private releaseGate(v: GateView): void {
@@ -1134,12 +1727,12 @@ export class Renderer {
     }
     const pulse = g.hitPulse;
     const flip = g.flipPulse;
-    v.curtainMat.opacity = (0.16 + pulse * 0.12 + flip * 0.4 + Math.sin(t * 4 + g.id) * 0.03) * v.fade;
+    v.curtainMat.opacity = (0.15 + pulse * 0.1 + flip * 0.35 + Math.sin(t * 4 + g.id) * 0.03) * v.fade;
     v.plateMat.opacity = g.triggered ? v.fade : 1;
     const plateW = Math.min(w * 0.94, 4.8);
     const ps = plateW * (1 + pulse * 0.07 + flip * 0.18);
     v.plate.scale.set(ps, ps, 1);
-    v.postMat.emissiveIntensity = 0.7 + flip * 1.5 + pulse * 0.4;
+    v.postMat.emissiveIntensity = 0.55 + flip * 1.2 + pulse * 0.35;
     const ts = g.triggered ? 1 + (1 - v.fade) * 0.4 : 1;
     v.group.scale.set(ts, ts, 1);
   }
@@ -1156,39 +1749,68 @@ export class Renderer {
       const b = new GeoBuilder();
       b.add(cyl(1.12, 1.25, 0.3, 12), 0x1a2140, 0, { p: [0, 0.15, 0] })
         .add(cyl(1.0, 1.1, 0.12, 12), 0x2b3560, 0, { p: [0, 0.36, 0] })
-        .add(tor(1.06, 0.045, 4, 24), 0xffffff, 2.2, { p: [0, 0.31, 0], r: [Math.PI / 2, 0, 0] })
+        .add(tor(1.06, 0.045, 4, 24), 0xffffff, 1.8, { p: [0, 0.31, 0], r: [Math.PI / 2, 0, 0] })
         .add(cyl(1.0, 0.9, 0.22, 12), 0x1a2140, 0, { p: [0, 1.74, 0] })
-        .add(tor(0.96, 0.04, 4, 24), 0xffffff, 2.2, { p: [0, 1.66, 0], r: [Math.PI / 2, 0, 0] })
-        .add(sph(0.14, 8, 6), 0xffffff, 3, { p: [0, 1.9, 0] });
+        .add(tor(0.96, 0.04, 4, 24), 0xffffff, 1.8, { p: [0, 1.66, 0], r: [Math.PI / 2, 0, 0] })
+        .add(sph(0.14, 8, 6), 0xffffff, 2.2, { p: [0, 1.9, 0] });
       for (let i = 0; i < 4; i++) {
         const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
         b.add(box(0.12, 1.3, 0.12), 0x2b3560, 0, { p: [Math.cos(a) * 1.0, 1.0, Math.sin(a) * 1.0], r: [0, -a, 0] })
-          .add(box(0.03, 1.1, 0.03), 0xffffff, 1.8, { p: [Math.cos(a) * 1.07, 1.0, Math.sin(a) * 1.07], r: [0, -a, 0] });
+          .add(box(0.03, 1.1, 0.03), 0xffffff, 1.5, { p: [Math.cos(a) * 1.07, 1.0, Math.sin(a) * 1.07], r: [0, -a, 0] });
       }
       this.vaultFrameGeo = b.build();
     }
     const frame = new THREE.Mesh(this.vaultFrameGeo, this.propMat);
-    const crystalMat = std(0xffffff, 0.35, { transparent: true, opacity: 0.32, metalness: 0.2, roughness: 0.1, flatShading: false, depthWrite: false });
+    const crystalMat = std(0xffffff, 0.25, {
+      transparent: true,
+      opacity: 0.26,
+      metalness: 0.2,
+      roughness: 0.1,
+      flatShading: false,
+      depthWrite: false,
+    });
     const crystal = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 1.3, 16, 1, true), crystalMat);
     crystal.position.y = 1.0;
     crystal.renderOrder = 2;
-    const coreMat = makeCharacterMaterial(0xffffff, 0.6, 2.2);
-    const core = new THREE.Mesh(buildRewardDisplayGeo('pulse'), coreMat);
-    core.position.y = 1.0;
-    const ringMat = additive(0xffffff, 0.5, this.glowTex);
+
+    const coreGroup = new THREE.Group();
+    coreGroup.position.y = 1.0;
+    const core = new THREE.Mesh(buildRewardDisplayGeo('pulse'), this.vaultToonMat);
+    const coreOutline = new THREE.Mesh(new THREE.BufferGeometry(), getOutlineMaterial(0.0052));
+    coreOutline.visible = false;
+    coreGroup.add(core, coreOutline);
+
+    const ringMat = additive(0xffffff, 0.45, this.glowTex);
     const ring = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 3.4).rotateX(-Math.PI / 2), ringMat);
     ring.position.y = 0.05;
     const { ctx, tex } = makeCanvasTexture(384, 192);
     const plate = new THREE.Mesh(
       new THREE.PlaneGeometry(2.6, 1.3),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }),
+      new THREE.MeshBasicMaterial({ color: 0xf4f8ff, map: tex, transparent: true, depthWrite: false }),
     );
     plate.position.set(0, 2.75, 0);
-    plate.rotation.x = -0.35;
+    plate.rotation.x = -0.32;
     plate.renderOrder = 4;
-    group.add(ring, frame, core, crystal, plate);
+    group.add(ring, frame, coreGroup, crystal, plate);
     this.scene.add(group);
-    return { id: -1, group, crystal, crystalMat, core, coreMat, frame, ringMat, reward: '', plate, ctx, tex, key: '', seen: false };
+    return {
+      id: -1,
+      group,
+      crystal,
+      crystalMat,
+      coreGroup,
+      core,
+      coreOutline,
+      coreMat: this.vaultToonMat,
+      frame,
+      ringMat,
+      reward: '',
+      plate,
+      ctx,
+      tex,
+      key: '',
+      seen: false,
+    };
   }
 
   private releaseVault(v: VaultView): void {
@@ -1227,25 +1849,33 @@ export class Renderer {
       paintVaultPlate(v.ctx, 384, 192, s.rewardWeapon, s.displayHp, s.maxHp);
       v.tex.needsUpdate = true;
     }
-    if (v.reward !== s.rewardWeapon) {
-      v.reward = s.rewardWeapon;
-      let geo = this.rewardGeos.get(s.rewardWeapon);
-      if (!geo) {
-        geo = buildRewardDisplayGeo(s.rewardWeapon);
-        this.rewardGeos.set(s.rewardWeapon, geo);
+    const rewardKey = `${s.rewardWeapon}:${Boolean(this.gltfLib)}`;
+    if (v.reward !== rewardKey) {
+      v.reward = rewardKey;
+      const libDef = this.gltfLib?.vaultRewards[s.rewardWeapon as RewardId];
+      if (libDef) {
+        v.core.geometry = libDef.geo;
+        v.coreOutline.geometry = libDef.outlineGeo;
+        v.coreOutline.visible = true;
+      } else {
+        let geo = this.fallbackRewardGeos.get(s.rewardWeapon);
+        if (!geo) {
+          geo = buildRewardDisplayGeo(s.rewardWeapon);
+          this.fallbackRewardGeos.set(s.rewardWeapon, geo);
+        }
+        v.core.geometry = geo;
+        v.coreOutline.visible = false;
       }
-      v.core.geometry = geo;
     }
     const hp = s.hitPulse;
     v.crystalMat.color.set(meta.color);
     v.crystalMat.emissive.set(meta.color);
-    v.crystalMat.emissiveIntensity = 0.3 + hp * 1.4;
-    v.crystalMat.opacity = 0.3 + hp * 0.25;
+    v.crystalMat.emissiveIntensity = 0.25 + hp * 1.1;
+    v.crystalMat.opacity = 0.26 + hp * 0.2;
     v.ringMat.color.set(meta.color);
-    v.ringMat.opacity = 0.35 + Math.sin(t * 4 + s.id) * 0.1 + hp * 0.3;
-    v.coreMat.emissive.setScalar(hp * 0.5);
-    v.core.rotation.set(0.35, t * 1.6, Math.sin(t * 2) * 0.15);
-    v.core.position.y = 1.0 + Math.sin(t * 3 + s.id) * 0.1;
+    v.ringMat.opacity = 0.35 + Math.sin(t * 4 + s.id) * 0.1 + hp * 0.25;
+    v.coreGroup.rotation.set(0.28, t * 1.7, Math.sin(t * 2) * 0.12);
+    v.coreGroup.position.y = 1.05 + Math.sin(t * 3 + s.id) * 0.1;
     const sc = 1 + hp * 0.08;
     v.crystal.scale.set(sc, 1, sc);
     v.frame.scale.set(sc, 1, sc);
@@ -1261,31 +1891,32 @@ export class Renderer {
     const group = new THREE.Group();
     if (!this.barrelGeo) {
       const b = new GeoBuilder();
-      const ORANGE = 0xff8a1a;
-      const DARK = 0x1a1208;
-      b.add(cyl(0.6, 0.6, 1.2, 14), ORANGE, 0.25, { p: [0, 0.7, 0] })
-        .add(cyl(0.64, 0.66, 0.16, 14), DARK, 0, { p: [0, 0.12, 0] })
-        .add(cyl(0.63, 0.63, 0.1, 14), DARK, 0, { p: [0, 0.45, 0] })
-        .add(cyl(0.63, 0.63, 0.1, 14), DARK, 0, { p: [0, 0.98, 0] })
-        .add(cyl(0.5, 0.6, 0.14, 14), DARK, 0, { p: [0, 1.36, 0] })
-        // glowing fuel window facing the squad
-        .add(box(0.34, 0.36, 0.08), 0xfff06a, 2.8, { p: [0, 0.72, 0.58] })
-        .add(box(0.34, 0.36, 0.08), 0xfff06a, 2.8, { p: [0, 0.72, -0.58] })
-        // hazard chevrons
-        .add(box(0.12, 0.05, 0.03), DARK, 0, { p: [-0.36, 0.72, 0.5], r: [0, 0.6, 0.6] })
-        .add(box(0.12, 0.05, 0.03), DARK, 0, { p: [0.36, 0.72, 0.5], r: [0, -0.6, -0.6] })
+      const ORANGE = 0xff7a1a;
+      const DARK = 0x1a1426;
+      b.add(cyl(0.62, 0.62, 1.22, 16), ORANGE, 0.2, { p: [0, 0.7, 0] })
+        .add(cyl(0.66, 0.68, 0.16, 16), DARK, 0, { p: [0, 0.12, 0] })
+        .add(cyl(0.65, 0.65, 0.1, 16), DARK, 0, { p: [0, 0.45, 0] })
+        .add(cyl(0.65, 0.65, 0.1, 16), DARK, 0, { p: [0, 0.98, 0] })
+        .add(cyl(0.52, 0.62, 0.14, 16), DARK, 0, { p: [0, 1.36, 0] })
+        .add(box(0.36, 0.38, 0.08), 0xfff06a, 2.2, { p: [0, 0.72, 0.6] })
+        .add(box(0.36, 0.38, 0.08), 0xfff06a, 2.2, { p: [0, 0.72, -0.6] })
+        .add(box(0.12, 0.05, 0.03), DARK, 0, { p: [-0.36, 0.72, 0.52], r: [0, 0.6, 0.6] })
+        .add(box(0.12, 0.05, 0.03), DARK, 0, { p: [0.36, 0.72, 0.52], r: [0, -0.6, -0.6] })
         .add(cyl(0.05, 0.05, 0.22, 6), DARK, 0, { p: [0.28, 1.5, 0] });
       this.barrelGeo = b.build();
     }
-    const bodyMat = makeCharacterMaterial(0xffc06a, 0.4, 1.6);
+    const bodyMat = makeCharacterMaterial(0xffc06a, 0.4, 1.4);
     const body = new THREE.Mesh(this.barrelGeo, bodyMat);
     const lightMat = new THREE.MeshBasicMaterial({ color: 0xff3b3b, toneMapped: false });
     const light = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), lightMat);
-    light.position.y = 1.5;
-    const ringMat = additive(0xff9a1a, 0.4);
+    light.position.y = 1.52;
+    const ringMat = additive(0xff9a1a, 0.42);
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.93, 1, 48).rotateX(-Math.PI / 2), ringMat);
     ring.position.y = 0.05;
-    const fill = new THREE.Mesh(new THREE.CircleGeometry(1, 36).rotateX(-Math.PI / 2), additive(0xff9a1a, 0.05));
+    const fill = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 36).rotateX(-Math.PI / 2),
+      additive(0xff9a1a, 0.06),
+    );
     fill.position.y = 0.04;
     group.add(body, light, ring, fill);
     this.scene.add(group);
@@ -1320,16 +1951,17 @@ export class Renderer {
 
   private layoutBarrel(v: BarrelView, b: BarrelSnapshot, t: number): void {
     v.group.position.set(b.x, 0, b.z);
+    this.pushShadow(b.x, b.z, 0.72);
     v.ring.scale.set(b.blastRadius, 1, b.blastRadius);
     v.fill.scale.set(b.blastRadius, 1, b.blastRadius);
-    v.ringMat.opacity = 0.3 + Math.sin(t * 6 + b.id) * 0.12;
+    v.ringMat.opacity = 0.32 + Math.sin(t * 6 + b.id) * 0.12;
     const dmg = 1 - b.hp / 15;
-    v.bodyMat.emissive.setRGB(1, 0.55, 0.1).multiplyScalar(b.hitPulse * 0.8 + dmg * 0.25);
-    const blink = Math.sin(t * (6 + dmg * 18) + b.id) > 0 ? 1 : 0.25;
-    v.lightMat.color.setRGB(1 * blink + b.hitPulse, 0.23 * blink + b.hitPulse, 0.23 * blink + b.hitPulse);
+    v.bodyMat.emissive.setRGB(1, 0.55, 0.1).multiplyScalar(b.hitPulse * 0.65 + dmg * 0.22);
+    const blink = Math.sin(t * (6 + dmg * 18) + b.id) > 0 ? 1.2 : 0.25;
+    v.lightMat.color.setRGB(blink + b.hitPulse, 0.23 * blink + b.hitPulse, 0.23 * blink + b.hitPulse);
     const s = 1 + b.hitPulse * 0.15;
     v.body.scale.set(s, s, s);
-    v.light.position.y = 1.5 * s;
+    v.light.position.y = 1.52 * s;
   }
 
   // ---------------------------------------------------------------- lenses
@@ -1340,21 +1972,21 @@ export class Renderer {
       return pooled;
     }
     const group = new THREE.Group();
-    const frameMat = std(0xffc531, 0.9, { metalness: 0.8 });
-    const postGeo = new THREE.BoxGeometry(0.16, 2.2, 0.16).translate(0, 1.1, 0);
+    const frameMat = std(0xffc531, 0.75, { metalness: 0.8 });
+    const postGeo = new THREE.BoxGeometry(0.18, 2.2, 0.18).translate(0, 1.1, 0);
     const l = new THREE.Mesh(postGeo, frameMat);
     const r = new THREE.Mesh(postGeo, frameMat);
     l.name = 'l';
     r.name = 'r';
-    const paneMat = additive(0xffd84a, 0.28);
+    const paneMat = additive(0xffd84a, 0.26);
     const pane = new THREE.Mesh(new THREE.PlaneGeometry(1, 2.0).translate(0, 1.1, 0), paneMat);
     pane.name = 'pane';
     const label = new THREE.Mesh(
       new THREE.PlaneGeometry(2.6, 0.76),
-      new THREE.MeshBasicMaterial({ map: this.lensTex, transparent: true, depthWrite: false, toneMapped: false }),
+      new THREE.MeshBasicMaterial({ color: 0xf4f8ff, map: this.lensTex, transparent: true, depthWrite: false }),
     );
     label.position.set(0, 2.75, 0);
-    label.rotation.x = -0.35;
+    label.rotation.x = -0.32;
     label.renderOrder = 4;
     group.add(l, r, pane, label);
     this.scene.add(group);
@@ -1394,7 +2026,7 @@ export class Renderer {
     l.position.x = -s.halfWidth;
     r.position.x = s.halfWidth;
     pane.scale.x = s.halfWidth * 2;
-    v.paneMat.opacity = 0.22 + s.pulse * 0.5 + Math.sin(t * 5) * 0.05;
+    v.paneMat.opacity = 0.2 + s.pulse * 0.45 + Math.sin(t * 5) * 0.05;
   }
 
   // ---------------------------------------------------------------- boss
@@ -1402,8 +2034,8 @@ export class Renderer {
     const b = snap.boss;
     for (const [id, view] of this.bossViews) {
       if (!b || b.id !== id) {
-        view.rig.root.visible = false;
-        if (view.rig.secondary) view.rig.secondary.visible = false;
+        view.root.visible = false;
+        if (view.secondaryRoot) view.secondaryRoot.visible = false;
         view.pylons?.forEach((p) => (p.visible = false));
         view.beams?.forEach((p) => (p.visible = false));
       }
@@ -1414,58 +2046,133 @@ export class Renderer {
       return;
     }
     this.bossBlend = Math.min(1, this.bossBlend + dt * 0.8);
-    const view = this.bossViews.get(b.id)!;
-    const rig = view.rig;
-    if (this.bossDeathT >= 0) this.bossDeathT += dt;
-    const dying = !b.active;
-    const show = !this.bossHidden;
-    rig.root.visible = show;
-    const jitter = dying ? (Math.random() - 0.5) * 0.5 : 0;
-    const intro = b.introProgress;
-    // the creature rises out of the data floor during its intro and sinks/shrinks while dying
-    const rise = -(1 - intro) * 5;
-    const deathK = dying ? Math.max(0.2, 1 - this.bossDeathT * 0.3) : 1;
-    rig.root.position.set(b.x + jitter, rise, b.z + jitter);
-    rig.root.scale.setScalar((0.75 + 0.25 * intro) * deathK);
-    const flash = b.hitPulse;
-    const sc = b.secondaryCore ?? null;
-    rig.update({ t, dt, phase: b.phase, flash, dying, squadX: snap.squadX, x: b.x, z: b.z, secondary: sc ? { x: sc.x, z: sc.z } : null });
-    view.shield.visible = show && b.shielded && b.active;
-    view.shield.rotation.y = t;
-    (view.shield.material as THREE.MeshBasicMaterial).opacity = 0.14 + Math.sin(t * 8) * 0.05 + flash * 0.1;
-    const coreY = rise + rig.coreHeight * (0.75 + 0.25 * intro);
 
-    if (rig.secondary) {
-      rig.secondary.visible = Boolean(sc) && show;
-      if (sc) {
-        rig.secondary.position.set(sc.x, rise, sc.z);
-        rig.secondary.scale.setScalar(rig.root.scale.x);
-        if (view.shield2) view.shield2.visible = sc.shielded;
+    const view = this.bossViews.get(b.id);
+    if (view) {
+      if (this.bossDeathT >= 0) this.bossDeathT += dt;
+      const dying = !b.active;
+      const show = !this.bossHidden;
+      view.root.visible = show;
+
+      const jitter = dying ? (Math.random() - 0.5) * 0.4 : 0;
+      const intro = b.introProgress;
+      const rise = -(1 - intro) * 4.5;
+      const deathK = dying ? Math.max(0.25, 1 - this.bossDeathT * 0.25) : 1;
+      const scale = (0.78 + 0.22 * intro) * deathK;
+
+      view.root.position.set(b.x + jitter, rise, b.z + jitter);
+      const squash = 1 + b.hitPulse * 0.07;
+      view.root.scale.set(scale * squash, scale * (1 - b.hitPulse * 0.04), scale * squash);
+
+      // Smoothly turn boss toward the squad
+      const lookYaw = THREE.MathUtils.clamp((snap.squadX - b.x) * 0.06, -0.45, 0.45);
+      view.primary.root.rotation.y += (lookYaw - view.primary.root.rotation.y) * Math.min(1, dt * 5);
+
+      const rageSpeed = 1 + (b.phase - 1) * 0.22;
+      const hazardCharging = b.hazardZones.some((hz) => hz.warningProgress > 0.55 || hz.firing);
+      view.attackCooldown = Math.max(0, view.attackCooldown - dt);
+
+      if (!dying) {
+        if (b.id === 'warden_01') {
+          if (hazardCharging && view.attackCooldown <= 0) {
+            view.primary.play('Punch', { loop: false, fade: 0.1, timeScale: 1.15 * rageSpeed });
+            view.attackCooldown = 1.3;
+          } else if (view.attackCooldown <= 0.15) {
+            view.primary.play('Fast_Flying', { timeScale: 0.95 * rageSpeed, fade: 0.2 });
+          }
+          if (view.halo) view.halo.rotation.z = t * 1.2;
+        } else if (b.id === 'hydra_02') {
+          if (hazardCharging && view.attackCooldown <= 0) {
+            view.primary.play('Headbutt', { loop: false, fade: 0.1, timeScale: 1.2 * rageSpeed });
+            view.secondary?.play('Headbutt', { loop: false, fade: 0.1, timeScale: 1.2 * rageSpeed });
+            view.attackCooldown = 1.3;
+          } else if (view.attackCooldown <= 0.15) {
+            view.primary.play('Fast_Flying', { timeScale: 1.05 * rageSpeed, fade: 0.2 });
+            view.secondary?.play('Fast_Flying', { timeScale: 1.12 * rageSpeed, fade: 0.2 });
+          }
+        } else if (b.id === 'omega_zero') {
+          if (hazardCharging && view.attackCooldown <= 0) {
+            view.primary.play('Weapon', { loop: false, fade: 0.1, timeScale: 1.15 * rageSpeed });
+            view.attackCooldown = 1.1;
+          } else if (view.attackCooldown <= 0.15) {
+            view.primary.play(b.phase >= 2 ? 'Walk' : 'Idle', { timeScale: 1.05 * rageSpeed, fade: 0.2 });
+          }
+          if (view.halo) {
+            view.halo.rotation.z = t * (0.9 + (b.phase - 1) * 0.7);
+            view.halo.scale.setScalar(1 + Math.sin(t * 5) * 0.05);
+          }
+        }
       }
-    }
-    if (view.pylons && view.beams) {
-      for (let i = 0; i < view.pylons.length; i++) {
-        const p = b.pylons[i];
-        const pv = view.pylons[i]!;
-        const beam = view.beams[i]!;
-        if (p && !p.destroyed && b.active) {
-          pv.visible = true;
-          pv.position.set(p.x, 0, p.z);
-          pv.children[0]!.rotation.y = t * 2;
-          const from = this.tmpA.set(p.x, 2.6, p.z);
-          const to = this.tmpB.set(b.x, coreY, b.z);
-          beam.position.copy(from);
-          beam.lookAt(to);
-          beam.scale.set(1 + Math.sin(t * 30) * 0.5, 1 + Math.sin(t * 30) * 0.5, from.distanceTo(to));
-          beam.visible = true;
+
+      const heatTintR = 1 + (b.phase - 1) * 0.08;
+      const bossHitFlash =
+        b.hitPulse > 0.55 ? (0.45 + 0.55 * Math.sin(t * 42)) * 0.16 : b.hitPulse * 0.14;
+      const flashVal = bossHitFlash + (dying ? Math.random() * 0.35 : 0);
+      view.primary.setVisuals(flashVal, heatTintR, 1, 1);
+      view.primary.update(dt);
+      this.pushShadow(b.x, b.z, 2.35 * scale);
+
+      view.shield.visible = show && b.shielded && b.active;
+      view.shield.rotation.y = t * 0.8;
+      view.shield.rotation.x = t * 0.35;
+      (view.shield.material as THREE.MeshBasicMaterial).opacity =
+        0.34 + Math.sin(t * 7) * 0.08 + b.hitPulse * 0.12;
+
+      const sc = b.secondaryCore ?? null;
+      if (view.secondary && view.secondaryRoot) {
+        if (b.id === 'hydra_02' && !sc && show && !dying) {
+          // Phase 1 Twin-Dragon presentation: Cyan twin hovers beside the Violet Elder Dragon before splitting!
+          view.secondaryRoot.visible = true;
+          view.secondaryRoot.position.set(
+            b.x + 2.35 + Math.sin(t * 1.8) * 0.35,
+            rise + 0.35,
+            b.z - 1.35,
+          );
+          view.secondaryRoot.scale.setScalar(scale * 0.85);
+          if (view.shield2) view.shield2.visible = false;
         } else {
-          pv.visible = false;
-          beam.visible = false;
+          view.secondaryRoot.visible = Boolean(sc) && show;
+          if (sc) {
+            view.secondaryRoot.position.set(sc.x, rise, sc.z);
+            view.secondaryRoot.scale.setScalar(scale);
+            if (view.shield2) view.shield2.visible = sc.shielded;
+            this.pushShadow(sc.x, sc.z, 1.85 * scale);
+          }
+        }
+        view.secondary.setVisuals(flashVal * 0.85, 1, 1, 1);
+        view.secondary.update(dt);
+      }
+
+      const coreY = rise + view.coreHeight * scale;
+      if (view.pylons && view.beams) {
+        for (let i = 0; i < view.pylons.length; i++) {
+          const p = b.pylons[i];
+          const pv = view.pylons[i]!;
+          const beam = view.beams[i]!;
+          if (p && !p.destroyed && b.active) {
+            pv.visible = true;
+            pv.position.set(p.x, 0, p.z);
+            pv.children[0]!.rotation.y = t * 2;
+            this.pushShadow(p.x, p.z, 1.05);
+            const from = this.tmpA.set(p.x, 2.5, p.z);
+            const to = this.tmpB.set(b.x, coreY, b.z);
+            beam.position.copy(from);
+            beam.lookAt(to);
+            beam.scale.set(
+              1 + Math.sin(t * 30) * 0.45,
+              1 + Math.sin(t * 30) * 0.45,
+              from.distanceTo(to),
+            );
+            beam.visible = true;
+          } else {
+            pv.visible = false;
+            beam.visible = false;
+          }
         }
       }
     }
 
-    // telegraphed hazard lanes
+    // Telegraphed hazard lanes
     for (let i = 0; i < b.hazardZones.length && i < this.hazardViews.length; i++) {
       const hz = b.hazardZones[i]!;
       const hv = this.hazardViews[i]!;
@@ -1473,12 +2180,11 @@ export class Renderer {
       const w = hz.halfWidth * 2;
       hv.group.position.set(hz.x, 0, hz.z);
       hv.fill.scale.set(w, 1, hz.depth);
-      hv.fillMat.opacity = hz.firing ? 0.5 : 0.1 + hz.warningProgress * 0.15;
-      // progress fills from the far end toward the squad
+      hv.fillMat.opacity = hz.firing ? 0.24 : 0.1 + hz.warningProgress * 0.14;
       const pz = Math.max(0.001, hz.warningProgress);
       hv.progress.scale.set(w, 1, hz.depth * pz);
       hv.progress.position.z = -hz.depth / 2 + (hz.depth * pz) / 2;
-      hv.progressMat.opacity = hz.firing ? 0.9 : 0.35 + hz.warningProgress * 0.3;
+      hv.progressMat.opacity = hz.firing ? 0.48 : 0.3 + hz.warningProgress * 0.25;
       const map = hv.progressMat.map;
       if (map) map.offset.y = -t * 2;
       hv.edgeL.scale.set(0.1, 1, hz.depth);
@@ -1487,24 +2193,24 @@ export class Renderer {
       hv.edgeR.position.x = hz.halfWidth;
       hv.column.visible = hz.firing;
       if (hz.firing) {
-        hv.column.scale.set(w * (0.85 + Math.random() * 0.15), 7, hz.depth);
-        hv.column.position.y = 3.5;
-        hv.columnMat.opacity = 0.45 + Math.random() * 0.2;
+        hv.column.scale.set(w * (0.85 + Math.random() * 0.12), 6.2, hz.depth);
+        hv.column.position.y = 3.1;
+        hv.columnMat.opacity = 0.16 + Math.random() * 0.07;
       }
     }
   }
 
   // ---------------------------------------------------------------- camera
   private updateCamera(snap: SimSnapshot, dt: number, cinematic: boolean): void {
-    this.camX += (snap.squadX * 0.32 - this.camX) * (1 - Math.exp(-dt * 5));
+    this.camX += (snap.squadX * 0.34 - this.camX) * (1 - Math.exp(-Math.max(dt, 0.001) * 5.5));
     const bb = this.bossBlend;
-    const y = 12.6 + bb * 1.6 + (cinematic ? 1.2 : 0);
-    const z = 18.2 + bb * 1.8 + (cinematic ? 1.5 : 0);
+    const y = CAM_BASE_Y + bb * 1.65 + (cinematic ? 1.1 : 0);
+    const z = CAM_BASE_Z + bb * 1.9 + (cinematic ? 1.4 : 0);
     this.trauma = Math.max(0, this.trauma - dt * 1.8);
     const sh = this.trauma * this.trauma;
-    const sx = (Math.random() - 0.5) * sh * 1.1;
-    const sy = (Math.random() - 0.5) * sh * 0.8;
+    const sx = (Math.random() - 0.5) * sh * 1.05;
+    const sy = (Math.random() - 0.5) * sh * 0.75;
     this.camera.position.set(this.camX + sx, y + sy, z);
-    this.camera.lookAt(this.camX * 0.55, 0, -8 - bb * 2);
+    this.camera.lookAt(this.camX * 0.55, 0.3, -8.2 - bb * 2.2);
   }
 }

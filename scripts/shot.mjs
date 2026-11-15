@@ -10,13 +10,15 @@ const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM ?? '/usr/lib/chromium/chromium',
   args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 });
-const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+const dpr = Number(process.env.DPR ?? '1');
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: dpr, isMobile: true, hasTouch: true });
 const page = await ctx.newPage();
 const logs = [];
 page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
 
 const shot = async (name) => page.screenshot({ path: `${out}/${name}.png` });
+const waitAssets = async () => page.evaluate(() => window.__prism?.renderer?.assetsReady);
 const state = () => page.evaluate(() => {
   const g = window.__prism;
   const s = g.sim.getSnapshot();
@@ -32,10 +34,12 @@ const drag = async () => {
 
 if (scenario === 'workshop') {
   await page.goto(base);
+  await waitAssets();
   await page.evaluate(() => {
     localStorage.setItem('prism-swarm-save-v1', JSON.stringify({ unlocked: 2, records: { 1: { stars: 2, score: 5000, cleared: true } }, cores: 260, upgrades: { squad: 1, power: 0, reso: 0 } }));
   });
   await page.reload();
+  await waitAssets();
   await page.waitForTimeout(2000);
   await shot('w1-title');
   await page.click('[data-testid=workshop-btn]');
@@ -47,6 +51,7 @@ if (scenario === 'workshop') {
   console.log(await page.evaluate(() => localStorage.getItem('prism-swarm-save-v1')));
 } else if (scenario === 'result' || scenario === 'defeat') {
   await page.goto(base + `?play=1&unlock=1&sector=${process.env.SECTOR ?? '1'}`);
+  await waitAssets();
   await page.waitForTimeout(800);
   await drag();
   await page.evaluate((auto) => window.__prism.fastForward(250, auto), scenario === 'result');
@@ -64,6 +69,7 @@ if (scenario === 'workshop') {
   const sector = process.env.SECTOR ?? '1';
   const prog = Number(process.env.PROG ?? '0.35');
   await page.goto(base + `?play=1&unlock=1&sector=${sector}`);
+  await waitAssets();
   await page.waitForTimeout(800);
   await drag();
   await page.evaluate((p) => {
@@ -79,6 +85,7 @@ if (scenario === 'workshop') {
 } else if (scenario === 'boss') {
   const sector = process.env.SECTOR ?? '1';
   await page.goto(base + `?play=1&unlock=1&sector=${sector}`);
+  await waitAssets();
   await page.waitForTimeout(800);
   await drag();
   // jump to just before the boss, then watch in real time with autopilot
@@ -95,14 +102,15 @@ if (scenario === 'workshop') {
     }
     g.autoplay = true;
   }, process.env.SKIPINTRO ?? null);
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 6; i++) {
     await page.waitForTimeout(1500);
     console.log('rt', i, await state());
     await shot(`b${i}`);
   }
 } else {
   await page.goto(base);
-  await page.waitForTimeout(2500);
+  await waitAssets();
+  await page.waitForTimeout(2000);
   await shot('01-title');
   await page.click('[data-testid=start-btn]');
   await page.waitForTimeout(600);

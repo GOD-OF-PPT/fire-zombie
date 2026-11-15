@@ -883,7 +883,7 @@ export const SECTORS: Readonly<Record<SectorId, SectorScriptConfig>> = {
     startSquad: 1,
     boss: {
       id: 'warden_01',
-      name: 'WARDEN-01《赤棱守卫》',
+      name: 'WARDEN-01《赤焰魔像王》',
       maxHp: 5600,
       maxPhases: 2,
     },
@@ -898,7 +898,7 @@ export const SECTORS: Readonly<Record<SectorId, SectorScriptConfig>> = {
     startSquad: 3,
     boss: {
       id: 'hydra_02',
-      name: 'HYDRA-02《双生执政官》',
+      name: 'HYDRA-02《双生魔龙》',
       maxHp: 22000,
       maxPhases: 2,
     },
@@ -913,7 +913,7 @@ export const SECTORS: Readonly<Record<SectorId, SectorScriptConfig>> = {
     startSquad: 5,
     boss: {
       id: 'omega_zero',
-      name: 'OMEGA-ZERO《奇点主脑》',
+      name: 'OMEGA-ZERO《深渊魔王》',
       maxHp: 31000,
       maxPhases: 3,
       pylonHp: 3500,

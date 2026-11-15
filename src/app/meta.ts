@@ -27,25 +27,25 @@ export interface EnemyMeta {
 }
 
 export const ENEMY_META: Record<EnemyKind, EnemyMeta> = {
-  crawler: { name: '故障爬虫', color: 0xff3b5c, score: 10 },
-  dasher: { name: '矢量突袭者', color: 0xff7a1a, score: 25 },
-  bastion: { name: '防火墙堡垒', color: 0xc8243f, score: 60 },
-  mitosis: { name: '分裂节点', color: 0xff3fd2, score: 30 },
-  siphon: { name: '腐蚀虹吸者', color: 0xa64dff, score: 45 },
+  crawler: { name: '狂暴刺球', color: 0xff3b5c, score: 10 },
+  dasher: { name: '烈焰迅龙', color: 0xff7a1a, score: 25 },
+  bastion: { name: '重甲巨魔', color: 0xd92648, score: 60 },
+  mitosis: { name: '分裂史莱姆', color: 0xff3fd2, score: 30 },
+  siphon: { name: '噬能骷髅灵', color: 0xa64dff, score: 45 },
 };
 
 export const DEFEAT_META: Record<NonNullDefeatReason, { title: string; tip: string }> = {
   NEGATIVE_GATE: {
-    title: '穿过减员门，蜂群归零',
+    title: '穿过减员门，小队归零',
     tip: '金色边框的门可以被射击：提前对准它，把负数一点点打成正数。',
   },
   DIVISION_GATE: {
-    title: '除法门把蜂群削减为零',
+    title: '除法门把小队削减为零',
     tip: '带锁的金框 ÷ 门被打破后会翻转成 ×2；人少时千万别碰 ÷ 门。',
   },
   ENEMY_BREACH: {
-    title: '敌人冲入蜂群',
-    tip: '优先清理正前方的敌人；体型大的堡垒可以横移绕开，或用爆炸桶炸掉。',
+    title: '怪兽冲垮防线',
+    tip: '优先清理正前方的怪兽；体型巨大的重甲巨魔可以横移绕开，或用爆炸桶炸掉。',
   },
   BOSS_ATTACK: {
     title: '被首领火力击溃',
@@ -74,14 +74,14 @@ export const SECTOR_META: Record<SectorId, SectorMeta> = {
     name: '光学干线',
     subtitle: 'SECTOR 01 · OPTICAL TRUNKLINE',
     bossName: 'WARDEN-01',
-    bossTitle: '赤棱守卫',
+    bossTitle: '赤焰魔像王',
     starSquad: [35, 75],
     palette: {
-      sky: ['#02040d', '#0a1640', '#1b3a8a'],
-      fog: 0x0a1640,
-      track: 0x0b1126,
-      grid: 0x1f6dff,
-      edge: 0x3ef3ff,
+      sky: ['#071236', '#143278', '#2a62bd'],
+      fog: 0x122a68,
+      track: 0x1c3468,
+      grid: 0x3f8cff,
+      edge: 0x48f5ff,
       accent: 0x3ef3ff,
     },
   },
@@ -89,14 +89,14 @@ export const SECTOR_META: Record<SectorId, SectorMeta> = {
     name: '超频回廊',
     subtitle: 'SECTOR 02 · OVERCLOCK CONDUIT',
     bossName: 'HYDRA-02',
-    bossTitle: '双生执政官',
+    bossTitle: '双生魔龙',
     starSquad: [70, 160],
     palette: {
-      sky: ['#05020f', '#1f0b46', '#5a1a8f'],
-      fog: 0x1f0b46,
-      track: 0x120a26,
-      grid: 0x9b4dff,
-      edge: 0xff4fd8,
+      sky: ['#0c0626', '#2b1368', '#7425b5'],
+      fog: 0x241058,
+      track: 0x2c195c,
+      grid: 0xb066ff,
+      edge: 0xff5ce0,
       accent: 0xff4fd8,
     },
   },
@@ -104,23 +104,23 @@ export const SECTOR_META: Record<SectorId, SectorMeta> = {
     name: '零号奇点',
     subtitle: 'SECTOR 03 · SINGULARITY CORE',
     bossName: 'OMEGA-ZERO',
-    bossTitle: '奇点主脑',
+    bossTitle: '深渊魔王',
     starSquad: [60, 140],
     palette: {
-      sky: ['#070205', '#2a0716', '#7a1830'],
-      fog: 0x2a0716,
-      track: 0x150910,
-      grid: 0xff3355,
-      edge: 0xffc531,
+      sky: ['#12050d', '#400d26', '#992042'],
+      fog: 0x320b1e,
+      track: 0x38172b,
+      grid: 0xff476e,
+      edge: 0xffcf40,
       accent: 0xffc531,
     },
   },
 };
 
 export const BOSS_META: Record<BossId, { name: string; title: string }> = {
-  warden_01: { name: 'WARDEN-01', title: '赤棱守卫' },
-  hydra_02: { name: 'HYDRA-02', title: '双生执政官' },
-  omega_zero: { name: 'OMEGA-ZERO', title: '奇点主脑' },
+  warden_01: { name: 'WARDEN-01', title: '赤焰魔像王' },
+  hydra_02: { name: 'HYDRA-02', title: '双生魔龙' },
+  omega_zero: { name: 'OMEGA-ZERO', title: '深渊魔王' },
 };
 
 export const SCORE = {

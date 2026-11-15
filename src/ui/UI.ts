@@ -430,13 +430,28 @@ export class UI {
 
   // ------------------------------------------------------------------ feedback
   floatText(x: number, y: number, text: string, cls: string, dur = 0.9): void {
+    // Deduplicate identical callouts fired on the exact same beat
+    const dup = this.floats.find(
+      (q) => q.alive && q.t < 0.18 && q.el.textContent === text && Math.abs(q.x - x) < 90,
+    );
+    if (dup) return;
+
+    let adjY = y;
+    for (let pass = 0; pass < 4; pass++) {
+      const clash = this.floats.some(
+        (q) => q.alive && q.t < 0.5 && Math.abs(q.x - x) < 76 && Math.abs(q.y - adjY) < 26,
+      );
+      if (!clash) break;
+      adjY = Math.max(88, adjY - 27);
+    }
+
     let f = this.floats.find((q) => !q.alive);
     if (!f) f = this.floats.reduce((a, b) => (a.t / a.dur > b.t / b.dur ? a : b));
     f.alive = true;
     f.t = 0;
     f.dur = dur;
     f.x = x;
-    f.y = y;
+    f.y = adjY;
     f.vy = -60;
     f.el.className = `float ${cls}`;
     f.el.textContent = text;

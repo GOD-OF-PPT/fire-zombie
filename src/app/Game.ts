@@ -17,10 +17,10 @@ const HINTS: Record<string, string> = {
   vault: '击破<b>能量舱</b>获得新武器，重复获得会升级',
   barrel: '射爆<b>电容桶</b>：范围爆炸、可连锁，还能抬高附近金框门',
   lens: '子弹穿过<b>金色棱镜</b>会一分为二并增伤',
-  siphon: '<b>虹吸者</b>正在偷取门的数值，先击毁它！',
-  dasher: '红色锁定线：<b>突袭者</b>即将冲锋，快闪开',
+  siphon: '<b>噬能骷髅灵</b>正在偷取门的数值，先击毁它！',
+  dasher: '红色锁定线：<b>烈焰迅龙</b>即将冲锋，快闪开',
   hazard: '地面红区填满就会轰击，<b>移到安全车道</b>',
-  bastion: '<b>防火墙堡垒</b>很硬：绕开它，或引爆旁边的电容桶',
+  bastion: '<b>重甲巨魔</b>血厚攻高：绕开它，或引爆旁边的电容桶',
 };
 
 function autopilotDrag(snap: SimSnapshot): number {
@@ -277,7 +277,8 @@ export class Game {
     this.lastSnap = snap;
     this.renderer.render(snap, dt, this.state === 'outro' || this.state === 'result');
     if (this.state !== 'title') {
-      const p = this.renderer.project(snap.squadX, 1.25, PLAYER_Z - snap.formationRadius - 0.2);
+      const badgeY = snap.squadCount >= 55 ? 2.08 : snap.squadCount >= 14 ? 1.86 : 1.68;
+      const p = this.renderer.project(snap.squadX, badgeY, PLAYER_Z - snap.formationRadius - 0.25);
       this.ui.updateHud(snap, this.score, p);
     }
     this.ui.updateFloats(dt);
@@ -609,6 +610,8 @@ export class Game {
       const events = this.sim.stepFixed({ dragDeltaX: useAutopilot ? autopilotDrag(s) : 0, keyAxisX: 0 });
       this.runTime += 1 / 60;
       this.handleEvents(events, this.sim.getSnapshot(), true);
+      this.ui.updateFloats(1 / 60);
+      this.renderer.effects.update(1 / 60);
       if (this.state !== 'playing') break;
     }
   }
