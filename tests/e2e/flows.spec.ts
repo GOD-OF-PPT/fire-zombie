@@ -65,6 +65,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('title → start → touch drag moves the swarm and stays in bounds', async ({ page }) => {
+  await page.evaluate(() => (window as any).__prism.renderer.assetsReady);
+  expect(await page.evaluate(() => (window as any).__prism.renderer.modelSource)).toBe('gltf');
   await page.getByTestId('start-btn').click();
   await expect(page.getByTestId('hud')).toBeVisible();
   await touchDrag(page, -120);
@@ -139,6 +141,27 @@ test('pause freezes simulation; resume via Esc; mute persists', async ({ page })
   await page.reload();
   const muted = await page.evaluate(() => JSON.parse(localStorage.getItem('prism-swarm-save-v1')!).muted);
   expect(muted).toBe(true);
+});
+
+test('GLB load failure falls back to procedural models with a notice', async ({ page }) => {
+  await page.route('**/*.glb', (route) => route.abort());
+  await page.reload();
+  await expect(page.getByTestId('toast')).toHaveClass(/show/, { timeout: 15000 });
+  await expect(page.getByTestId('toast')).toContainText('简化模型');
+  expect(await page.evaluate(() => (window as any).__prism.renderer.modelSource)).toBe('procedural');
+  await page.getByTestId('start-btn').click();
+  await touchDrag(page, 10);
+  await ff(page, 20);
+  await page.waitForTimeout(600);
+  const shown = await page.evaluate(() => {
+    const r = (window as any).__prism.renderer;
+    return {
+      squad: r.squadSlots.filter((s: any) => s.actor?.root.visible).length,
+      enemies: r.activeEnemies.size,
+    };
+  });
+  expect(shown.squad).toBeGreaterThan(1);
+  expect(shown.enemies).toBeGreaterThan(0);
 });
 
 test('workshop purchase spends cores and boosts the next run', async ({ page }) => {

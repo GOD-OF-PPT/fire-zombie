@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { EnemyKind, RewardId, WeaponId } from '../../types/game';
+import { regradeMechTexture } from './mechPalette';
 import { buildBladeGeo } from './soldiers';
 import {
   buildOutlineGeometry,
@@ -52,13 +53,27 @@ export interface PlayClipOptions {
   startOffset?: number;
 }
 
+/**
+ * Pooled actors stay in the scene while hidden; skipping their bone hierarchies keeps the per-frame
+ * world-matrix pass proportional to what is on screen. A subtree is fully re-synced the frame it is shown.
+ */
+class ActorRoot extends THREE.Group {
+  override updateMatrixWorld(force?: boolean): void {
+    if (this.visible) super.updateMatrixWorld(force);
+  }
+}
+
 export class AnimatedActor {
-  readonly root = new THREE.Group();
+  readonly root: THREE.Group = new ActorRoot();
   readonly inner = new THREE.Group();
   readonly mixer: THREE.AnimationMixer;
   readonly actions = new Map<string, THREE.AnimationAction>();
   readonly mat: THREE.MeshToonMaterial;
   activeClip = '';
+  /** Body skin (and its outline) that carries the gun as part of the mesh, see weaponSkinsFor */
+  weaponSkin: { body: THREE.SkinnedMesh; outline: THREE.SkinnedMesh; skins: Record<WeaponId, WeaponSkin> } | null =
+    null;
+  /** Separate gun meshes on the hand bone, used when the gun cannot be baked into the skin */
   weaponMesh: THREE.Mesh | null = null;
   weaponOutline: THREE.Mesh | null = null;
 
@@ -114,12 +129,26 @@ export class AnimatedActor {
     }
   }
 
+  /** Stops every action (including a clamped one-shot like Death) so a pooled actor starts clean. */
+  resetAnimation(): void {
+    this.mixer.stopAllAction();
+    this.activeClip = '';
+  }
+
   setTimeScale(speed: number): void {
     const cur = this.activeClip ? this.actions.get(this.activeClip) : undefined;
     if (cur) cur.timeScale = speed;
   }
 
   setWeapon(weapon: WeaponId, weapons: Record<WeaponId, WeaponMeshDef>): void {
+    if (this.weaponSkin) {
+      const skin = this.weaponSkin.skins[weapon];
+      if (skin && this.weaponSkin.body.geometry !== skin.geo) {
+        this.weaponSkin.body.geometry = skin.geo;
+        this.weaponSkin.outline.geometry = skin.outlineGeo;
+      }
+      return;
+    }
     const def = weapons[weapon];
     if (!def || !this.weaponMesh || !this.weaponOutline) return;
     if (this.weaponMesh.geometry !== def.geo) {
@@ -128,11 +157,12 @@ export class AnimatedActor {
     }
   }
 
-  setVisuals(flash: number, r = 1, g = 1, b = 1): void {
+  setVisuals(flash: number, r = 1, g = 1, b = 1, frost = 0): void {
     const u = getToonUniforms(this.mat);
     if (!u) return;
     u.uFlash.value = flash;
     u.uTint.value.setRGB(r, g, b);
+    u.uFrost.value = frost;
   }
 
   update(dt: number): void {
@@ -287,6 +317,265 @@ function extractHeroWeapons(trooperScene: THREE.Group): {
   return { weapons, vaultRewards };
 }
 
+const _ma = new THREE.Matrix4();
+const _mb = new THREE.Matrix4();
+
+type SkinWriter = (geo: THREE.BufferGeometry, vertex: number, index: number[], weight: number[]) => void;
+
+function matricesClose(a: THREE.Matrix4, b: THREE.Matrix4): boolean {
+  for (let i = 0; i < 16; i++) {
+    const x = a.elements[i]!;
+    const y = b.elements[i]!;
+    if (Math.abs(x - y) > 1e-4 * Math.max(1, Math.abs(x), Math.abs(y))) return false;
+  }
+  return true;
+}
+
+/**
+ * Re-expresses `src` (moved by `toBind` into the body's bind space) with exactly the attribute layout of
+ * the skinned `like` geometry (names, item sizes, array types, indexed or not) so mergeGeometries accepts
+ * it; `skin` supplies the influences. Returns null for layouts it cannot reproduce (interleaved, quantised
+ * or morphed), in which case the part simply stays a separate mesh.
+ */
+function conformToSkin(
+  src: THREE.BufferGeometry,
+  toBind: THREE.Matrix4,
+  like: THREE.BufferGeometry,
+  skin: SkinWriter,
+): THREE.BufferGeometry | null {
+  if (Object.keys(like.morphAttributes).length > 0) return null;
+  let g = src.clone();
+  if (!like.index && g.index) g = g.toNonIndexed();
+  g.applyMatrix4(toBind);
+  if (!g.getAttribute('normal')) g.computeVertexNormals();
+  const n = g.getAttribute('position').count;
+  const out = new THREE.BufferGeometry();
+  const index = [0, 0, 0, 0];
+  const weight = [0, 0, 0, 0];
+  const skinIndex = like.getAttribute('skinIndex');
+  const skinWeight = like.getAttribute('skinWeight');
+  if (!skinIndex || !skinWeight || skinIndex.itemSize !== 4 || skinWeight.itemSize !== 4) return null;
+  for (const [name, attr] of Object.entries(like.attributes)) {
+    if ((attr as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute) return null;
+    const ref = attr as THREE.BufferAttribute;
+    const isSkin = name === 'skinIndex' || name === 'skinWeight';
+    if (!isSkin && (!(ref.array instanceof Float32Array) || ref.normalized)) return null;
+    const Ctor = ref.array.constructor as new (length: number) => THREE.TypedArray;
+    const target = new THREE.BufferAttribute(new Ctor(n * ref.itemSize), ref.itemSize, ref.normalized);
+    if (!isSkin) {
+      const s = g.getAttribute(name);
+      // Missing colour components default to white, anything else to zero
+      const fallback = name === 'color' ? 1 : 0;
+      for (let i = 0; i < n; i++) {
+        for (let c = 0; c < ref.itemSize; c++) {
+          target.setComponent(i, c, s && c < s.itemSize ? s.getComponent(i, c) : fallback);
+        }
+      }
+    }
+    out.setAttribute(name, target);
+  }
+  const outIndex = out.getAttribute('skinIndex') as THREE.BufferAttribute;
+  const outWeight = out.getAttribute('skinWeight') as THREE.BufferAttribute;
+  for (let i = 0; i < n; i++) {
+    index.fill(0);
+    weight.fill(0);
+    skin(g, i, index, weight);
+    for (let c = 0; c < 4; c++) {
+      outIndex.setComponent(i, c, index[c]!);
+      outWeight.setComponent(i, c, weight[c]!);
+    }
+  }
+  if (like.index) {
+    out.setIndex(g.index ? Array.from(g.index.array) : Array.from({ length: n }, (_, i) => i));
+  }
+  return out;
+}
+
+/** A part rigidly carried by `body.skeleton.bones[boneIndex]`, with `partToBone` its fixed offset from that bone. */
+function rigidPartOnto(
+  part: THREE.BufferGeometry,
+  partToBone: THREE.Matrix4,
+  body: THREE.SkinnedMesh,
+  boneIndex: number,
+): THREE.BufferGeometry | null {
+  // Attached bind mode renders  bone.matrixWorld · boneInverse · bindMatrix · v ; solve for v so the part
+  // keeps rendering at bone.matrixWorld · partToBone · p.
+  const toBind = new THREE.Matrix4()
+    .copy(body.bindMatrix)
+    .invert()
+    .multiply(_ma.copy(body.skeleton.boneInverses[boneIndex]!).invert())
+    .multiply(partToBone);
+  return conformToSkin(part, toBind, body.geometry, (_g, _i, index, weight) => {
+    index[0] = boneIndex;
+    weight[0] = 1;
+  });
+}
+
+/** Another SkinnedMesh driven by (a subset of) the same bones from the same rest pose. */
+function reskinOnto(part: THREE.SkinnedMesh, body: THREE.SkinnedMesh): THREE.BufferGeometry | null {
+  const si = part.geometry.getAttribute('skinIndex');
+  const sw = part.geometry.getAttribute('skinWeight');
+  if (!si || !sw || part.bindMode !== body.bindMode) return null;
+  const remap = part.skeleton.bones.map((b) => body.skeleton.bones.indexOf(b));
+  const used = new Set<number>();
+  for (let i = 0; i < si.count; i++) {
+    for (let c = 0; c < si.itemSize; c++) if (sw.getComponent(i, c) > 0) used.add(si.getComponent(i, c));
+  }
+  let toBind: THREE.Matrix4 | null = null;
+  for (const b of used) {
+    const tb = remap[b];
+    if (tb === undefined || tb < 0) return null;
+    // bodyInverse(b) · bodyBind · X must equal partInverse(b) · partBind for every influencing bone
+    const x = _ma
+      .multiplyMatrices(body.skeleton.boneInverses[tb]!, body.bindMatrix)
+      .invert()
+      .multiply(_mb.multiplyMatrices(part.skeleton.boneInverses[b]!, part.bindMatrix));
+    if (!toBind) toBind = x.clone();
+    else if (!matricesClose(toBind, x)) return null;
+  }
+  if (!toBind) return null;
+  return conformToSkin(part.geometry, toBind, body.geometry, (g, i, index, weight) => {
+    const gi = g.getAttribute('skinIndex');
+    const gw = g.getAttribute('skinWeight');
+    for (let c = 0; c < Math.min(4, gi.itemSize); c++) {
+      const w = gw.getComponent(i, c);
+      if (w > 0) {
+        index[c] = remap[gi.getComponent(i, c)]!;
+        weight[c] = w;
+      }
+    }
+  });
+}
+
+/**
+ * Folds every untextured part of an actor into its largest SkinnedMesh: other SkinnedMeshes are remapped
+ * onto its skeleton and bone-attached rigid parts (helmets, shoulder pads) become rigid-skinned vertices.
+ * One draw (plus outline) per actor instead of one per part, and the actor's toon material is never drawn
+ * alternately with and without skinning, which costs a full program lookup on every switch.
+ */
+function foldIntoSingleSkin(scene: THREE.Group, clips: readonly THREE.AnimationClip[]): void {
+  const animated = new Set<string>();
+  for (const clip of clips) {
+    for (const track of clip.tracks) animated.add(THREE.PropertyBinding.parseTrackName(track.name).nodeName);
+  }
+  scene.updateMatrixWorld(true);
+  const meshes: THREE.Mesh[] = [];
+  scene.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
+  });
+  const plain = (m: THREE.Mesh): boolean => {
+    const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+    return !(mat && 'map' in mat && mat.map) && Object.keys(m.geometry.morphAttributes).length === 0;
+  };
+  let body: THREE.SkinnedMesh | null = null;
+  for (const m of meshes) {
+    if (!(m as THREE.SkinnedMesh).isSkinnedMesh || !plain(m)) continue;
+    if (!body || m.geometry.attributes.position!.count > body.geometry.attributes.position!.count) {
+      body = m as THREE.SkinnedMesh;
+    }
+  }
+  if (!body) return;
+
+  const parts: THREE.BufferGeometry[] = [];
+  const absorbed: THREE.Mesh[] = [];
+  for (const m of meshes) {
+    if (m === body || !plain(m) || m.children.length > 0 || animated.has(m.name)) continue;
+    let geo: THREE.BufferGeometry | null = null;
+    if ((m as THREE.SkinnedMesh).isSkinnedMesh) {
+      geo = reskinOnto(m as THREE.SkinnedMesh, body);
+    } else {
+      let bone = m.parent;
+      let pinned = true;
+      while (bone && !(bone as THREE.Bone).isBone) {
+        if (animated.has(bone.name)) pinned = false;
+        bone = bone.parent;
+      }
+      const bi = bone ? body.skeleton.bones.indexOf(bone as THREE.Bone) : -1;
+      if (pinned && bi >= 0) {
+        const partToBone = new THREE.Matrix4().copy(bone!.matrixWorld).invert().multiply(m.matrixWorld);
+        geo = rigidPartOnto(m.geometry, partToBone, body, bi);
+      }
+    }
+    if (geo) {
+      parts.push(geo);
+      absorbed.push(m);
+    }
+  }
+  if (parts.length === 0) return;
+  const merged = mergeGeometries([body.geometry, ...parts], false);
+  if (!merged) return;
+  merged.computeBoundingBox();
+  merged.computeBoundingSphere();
+  body.geometry = merged;
+  for (const m of absorbed) m.removeFromParent();
+}
+
+export interface WeaponSkin {
+  geo: THREE.BufferGeometry;
+  outlineGeo: THREE.BufferGeometry;
+}
+
+const weaponSkinCache = new WeakMap<
+  THREE.BufferGeometry,
+  Map<Record<WeaponId, WeaponMeshDef>, Record<WeaponId, WeaponSkin> | null>
+>();
+
+function withIndex(src: THREE.BufferGeometry, index: THREE.BufferAttribute): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  for (const [name, attr] of Object.entries(src.attributes)) g.setAttribute(name, attr);
+  g.setIndex(index);
+  g.boundingBox = src.boundingBox;
+  g.boundingSphere = src.boundingSphere;
+  return g;
+}
+
+/**
+ * Bakes every gun into the body skin as rigid-skinned vertices on the hand bone. The variants share one
+ * vertex buffer (and one outline normal buffer) and differ only in their index list, so swapping guns is a
+ * geometry swap and a hero costs one draw plus its outline instead of two plus two.
+ */
+function weaponSkinsFor(
+  body: THREE.SkinnedMesh,
+  weapons: Record<WeaponId, WeaponMeshDef>,
+): Record<WeaponId, WeaponSkin> | null {
+  let byWeapons = weaponSkinCache.get(body.geometry);
+  if (!byWeapons) {
+    byWeapons = new Map();
+    weaponSkinCache.set(body.geometry, byWeapons);
+  }
+  const cached = byWeapons.get(weapons);
+  if (cached !== undefined) return cached;
+
+  let skins: Record<WeaponId, WeaponSkin> | null = null;
+  const hand = body.skeleton.bones.findIndex((b) => b.name === 'Index1R' || b.name === 'Index1.R');
+  const ids = Object.keys(weapons) as WeaponId[];
+  const parts = hand < 0 ? [] : ids.map((id) => rigidPartOnto(weapons[id].geo, new THREE.Matrix4(), body, hand));
+  const combined =
+    hand >= 0 && parts.every((p) => p) ? mergeGeometries([body.geometry, ...(parts as THREE.BufferGeometry[])], true) : null;
+  if (combined) {
+    combined.computeBoundingBox();
+    combined.computeBoundingSphere();
+    const outlineAll = buildOutlineGeometry(combined);
+    const src = combined.index?.array;
+    const big = combined.getAttribute('position').count > 65535;
+    const bodyRange = combined.groups[0]!;
+    skins = {} as Record<WeaponId, WeaponSkin>;
+    ids.forEach((id, k) => {
+      const gunRange = combined.groups[k + 1]!;
+      const list = big
+        ? new Uint32Array(bodyRange.count + gunRange.count)
+        : new Uint16Array(bodyRange.count + gunRange.count);
+      let o = 0;
+      for (const r of [bodyRange, gunRange]) {
+        for (let i = r.start; i < r.start + r.count; i++) list[o++] = src ? src[i]! : i;
+      }
+      const index = new THREE.BufferAttribute(list, 1);
+      skins![id] = { geo: withIndex(combined, index), outlineGeo: withIndex(outlineAll, index) };
+    });
+  }
+  byWeapons.set(weapons, skins);
+  return skins;
+}
 /**
  * Merges multi-primitive SkinnedMesh/Mesh groups on a template scene into single-draw-call meshes
  * with precomputed smooth outline geometry cached on `mesh.userData.outlineGeo`.
@@ -381,7 +670,7 @@ function optimizeTemplateScene(scene: THREE.Group, stripWeaponNodes: boolean): {
   return { textured, texture: foundTex };
 }
 
-function buildTemplate(
+export function buildTemplate(
   gltf: { scene: THREE.Group; animations: THREE.AnimationClip[] },
   opts: {
     targetHeight: number;
@@ -389,6 +678,8 @@ function buildTemplate(
     refRadius?: number;
     stripWeapons?: boolean;
     hoverOffset?: number;
+    /** Measure every vertex instead of a ~400-vertex sample (procedural rigs with tiny feet need it) */
+    exactBounds?: boolean;
   },
 ): ActorTemplate {
   const { textured, texture } = optimizeTemplateScene(gltf.scene, opts.stripWeapons ?? false);
@@ -420,7 +711,7 @@ function buildTemplate(
     if (!mesh.isMesh) return;
     const pos = mesh.geometry.attributes.position;
     if (!pos) return;
-    const step = Math.max(1, Math.floor(pos.count / 400));
+    const step = opts.exactBounds ? 1 : Math.max(1, Math.floor(pos.count / 400));
     for (let i = 0; i < pos.count; i += step) {
       v.fromBufferAttribute(pos, i);
       if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
@@ -434,6 +725,9 @@ function buildTemplate(
   const rawHeight = Math.max(0.2, box.max.y - box.min.y);
   const baseScale = opts.targetHeight / rawHeight;
   const groundYOffset = -box.min.y + (opts.hoverOffset ?? 0) / baseScale;
+  // After measuring: the sampled bounds above depend on how vertices are split across meshes, and the
+  // tuned target heights were set against the unfolded parts.
+  foldIntoSingleSkin(gltf.scene, gltf.animations);
 
   return {
     scene: gltf.scene,
@@ -467,27 +761,39 @@ export function spawnActor(template: ActorTemplate, opts: SpawnActorOptions = {}
     vertexColors: !template.textured,
     map: template.texture,
   });
-  const outlineMat = getOutlineMaterial(opts.outlineWidth ?? 0.0052);
+  const outlineWidth = opts.outlineWidth ?? 0.0052;
+  // Rigid parts get their own material (sharing the actor's uniforms) so neither material is ever drawn
+  // both with and without skinning.
+  let rigidMat: THREE.MeshToonMaterial | null = null;
+  const rigidToonMat = (): THREE.MeshToonMaterial =>
+    (rigidMat ??= createToonCharMaterial({
+      vertexColors: !template.textured,
+      map: template.texture,
+      uniforms: getToonUniforms(toonMat),
+    }));
 
   const meshes: THREE.Mesh[] = [];
   cloned.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) meshes.push(o as THREE.Mesh);
   });
 
+  const outlines = new Map<THREE.Mesh, THREE.Mesh>();
   for (const mesh of meshes) {
     const srcOutlineGeo = buildOutlineGeometry(mesh.geometry);
-    mesh.material = toonMat;
 
     if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
       const sm = mesh as THREE.SkinnedMesh;
+      sm.material = toonMat;
       sm.frustumCulled = false;
-      const outline = new THREE.SkinnedMesh(srcOutlineGeo, outlineMat);
+      const outline = new THREE.SkinnedMesh(srcOutlineGeo, getOutlineMaterial(outlineWidth, undefined, true));
       outline.frustumCulled = false;
       // Share the exact same Skeleton instance so Three.js updates bone matrices ONLY ONCE!
       outline.bind(sm.skeleton, sm.bindMatrix);
       sm.parent?.add(outline);
+      outlines.set(sm, outline);
     } else {
-      const outline = new THREE.Mesh(srcOutlineGeo, outlineMat);
+      mesh.material = rigidToonMat();
+      const outline = new THREE.Mesh(srcOutlineGeo, getOutlineMaterial(outlineWidth));
       outline.position.copy(mesh.position);
       outline.quaternion.copy(mesh.quaternion);
       outline.scale.copy(mesh.scale);
@@ -505,12 +811,20 @@ export function spawnActor(template: ActorTemplate, opts: SpawnActorOptions = {}
   );
 
   if (opts.weapons) {
+    const wId = opts.initialWeapon ?? 'pulse';
+    const isHand = (b: THREE.Bone): boolean => b.name === 'Index1R' || b.name === 'Index1.R';
+    const body = meshes.find(
+      (m) => (m as THREE.SkinnedMesh).isSkinnedMesh && (m as THREE.SkinnedMesh).skeleton.bones.some(isHand),
+    ) as THREE.SkinnedMesh | undefined;
+    const skins = body ? weaponSkinsFor(body, opts.weapons) : null;
     const hand = cloned.getObjectByName('Index1R') ?? cloned.getObjectByName('Index1.R');
-    if (hand) {
-      const wId = opts.initialWeapon ?? 'pulse';
+    if (body && skins) {
+      actor.weaponSkin = { body, outline: outlines.get(body) as THREE.SkinnedMesh, skins };
+      actor.setWeapon(wId, opts.weapons);
+    } else if (hand) {
       const def = opts.weapons[wId];
-      const wMesh = new THREE.Mesh(def.geo, toonMat);
-      const wOut = new THREE.Mesh(def.outlineGeo, outlineMat);
+      const wMesh = new THREE.Mesh(def.geo, rigidToonMat());
+      const wOut = new THREE.Mesh(def.outlineGeo, getOutlineMaterial(outlineWidth));
       hand.add(wMesh, wOut);
       actor.weaponMesh = wMesh;
       actor.weaponOutline = wOut;
@@ -578,9 +892,10 @@ export function loadGltfLibrary(baseUrl = import.meta.env.BASE_URL ?? '/'): Prom
       stripWeapons: true,
     });
     const mech = buildTemplate(mechGltf, {
-      targetHeight: 2.42,
+      targetHeight: 2.08,
       facingYaw: Math.PI,
     });
+    if (mech.texture) regradeMechTexture(mech.texture);
 
     const enemies: Record<EnemyKind, ActorTemplate> = {
       crawler: buildTemplate(crawlerGltf, { targetHeight: 1.28, facingYaw: 0, refRadius: 0.48 }),

@@ -53,10 +53,10 @@ npm run test:e2e   # 端到端流程测试（Playwright，会自动 build + prev
 - **三阶英雄编队（Quaternius Toon Shooter + Animated Mech Pack）**：
   - **蓝晶突击队员**（`hero_trooper.glb`）：Q 版大头比例战士，奔跑射击、待机与胜利挥手骨骼动画。
   - **黄金重装队长**（`hero_heavy.glb`）：队伍壮大至 14 人以上时编入指挥圈。
-  - **重装突击机甲**（`hero_mech.glb`）：队伍壮大至 55 人以上时在侧后卫展开巨型双足机甲协同推进。
-  - **5 把可实时切换的 Q 版 3D 武器**：挂载于右手骨骼节点（`Index1.R`），切换脉冲冲锋枪 / 折射双管霰弹 / 超导狙击轨炮 / 新星火箭筒 / 绝对零度榴弹发射器时全员手中的 3D 枪械同步更新；能量舱内亦旋转展示对应 3D 卡通武器核心。
+  - **重装突击机甲**（`hero_mech.glb`）：队伍壮大至 55 人以上时在队伍前沿展开巨型双足机甲开路推进（排在最前，不遮挡后排队员）。
+  - **5 把可实时切换的 Q 版 3D 武器**：绑定在右手骨骼（`Index1R`，原名 `Index1.R`）上，并与角色合并为同一蒙皮网格（每名队员只需一次绘制加一次描边），切换脉冲冲锋枪 / 折射双管霰弹 / 超导狙击轨炮 / 新星火箭筒 / 绝对零度榴弹发射器时全员手中的 3D 枪械同步更新；能量舱内亦旋转展示对应 3D 卡通武器核心。
 - **五类高辨识度怪物（Quaternius Ultimate Monsters）**：
-  - **狂暴刺球**（`enemy_crawler.glb`）、**烈焰迅龙**（`enemy_dasher.glb`，冲锋前伏身蓄力 `Duck` → 狂奔 `Run`）、**重甲巨魔**（`enemy_bastion.glb`，近身挥舞巨棒 `Weapon`）、**分裂史莱姆**（`enemy_mitosis.glb`）、**噬能骷髅灵**（`enemy_siphon.glb`）；击杀时触发骨骼倒地翻滚动画，冰冻命中呈现冰蓝着色与动作减速。
+  - **狂暴刺球**（`enemy_crawler.glb`）、**烈焰迅龙**（`enemy_dasher.glb`，冲锋前伏身蓄力 `Duck` → 狂奔 `Run`）、**重甲巨魔**（`enemy_bastion.glb`，近身挥舞巨棒 `Weapon`）、**分裂史莱姆**（`enemy_mitosis.glb`）、**噬能骷髅灵**（`enemy_siphon.glb`）；击杀时触发骨骼倒地翻滚动画，冰冻命中整体转为冰蓝色调并动作减速。
 - **三大关底首领**：
   - **赤焰魔像王**（`boss_warden.glb`）：戴金冠的赤红石像鬼巨王，振翼盘旋与重拳轰击。
   - **双生魔龙**（`boss_hydra_a.glb` + `boss_hydra_b.glb`）：紫焰古龙与电光苍龙双龙同屏振翅，二阶段分体双核独立作战。
@@ -64,6 +64,7 @@ npm run test:e2e   # 端到端流程测试（Playwright，会自动 build + prev
 - **三阶卡通着色 + 屏幕空间描边 + 选择性辉光**：
   - [`src/render/models/toon.ts`](src/render/models/toon.ts)：抗锯齿三阶色带 `MeshToonMaterial` + 菲涅尔边缘光 + 平滑法线背面外扩屏幕空间等宽卡通黑描边（共享同一 `Skeleton` 骨骼矩阵，零额外蒙皮计算开销）。
   - 选择性 `UnrealBloomPass`（高阈值 `0.93`）：仅让高能弹幕、枪口火光与爆炸产生霓虹辉光，保持角色五官、描边与数字门文字锐利清晰。
+- **加载失败兜底**：GLB 30 秒内未加载成功时，自动换用程序化骨骼模型库（`proceduralLibrary.ts`，与 GLB 同名动画与挂点），并提示「模型加载失败，已切换为简化模型」。
 
 ## 项目结构
 
@@ -72,14 +73,14 @@ public/models/ 精简打包后的 12 个 CC0 骨骼动画 .glb 模型与版权�
 src/
   sim/         纯逻辑确定性模拟（1/60 s 固定步长、对象池、扫掠碰撞），不依赖 DOM/Three
   config/      武器、敌人、三个区域的手工编排关卡脚本与首领参数
-  render/      Three.js 渲染：GLTF 模型池与骨骼动画状态机（gltfLibrary.ts）、卡通着色与描边（toon.ts）、门牌纹理与粒子特效
+  render/      Three.js 渲染：GLTF 模型池与骨骼动画状态机（gltfLibrary.ts）、程序化兜底模型（procedural*.ts）、卡通着色与描边（toon.ts）、门牌纹理与粒子特效
   ui/          DOM HUD、标题、工坊、暂停、结算
   audio/       WebAudio 程序化音效与分轨音乐（无外部音频文件）
   input/       触摸/鼠标相对拖动 + 键盘
   app/         游戏状态机、事件→演出映射、存档、元数据、自动驾驶
-tests/unit/    模拟层单元测试（门运算、CCD、首领、平衡性自动通关等）
+tests/unit/    模拟层单元测试（门运算、CCD、首领、平衡性自动通关等）与模型管线测试（网格合并、兜底模型）
 tests/e2e/     浏览器流程测试
-scripts/       build-models.mjs（GLB 资产管线）与 shot.mjs（开发截图脚本）
+scripts/       build-models.mjs（GLB 资产管线）、shot.mjs（开发截图）与 closeup.mjs（单个角色特写）
 ```
 
 ### 调试 URL 参数

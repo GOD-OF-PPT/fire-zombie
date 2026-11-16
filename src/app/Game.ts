@@ -74,6 +74,9 @@ export class Game {
     });
     this.audio.setMuted(this.save.muted);
     this.ui.setMuted(this.save.muted);
+    void this.renderer.assetsReady.then(() => {
+      if (this.renderer.modelSource === 'procedural') this.ui.toast('模型加载失败，已切换为<b>简化模型</b>', 5000);
+    });
     this.input.onPauseKey = () => {
       if (this.state === 'playing') this.pause();
       else if (this.state === 'paused') this.resume();
@@ -277,7 +280,8 @@ export class Game {
     this.lastSnap = snap;
     this.renderer.render(snap, dt, this.state === 'outro' || this.state === 'result');
     if (this.state !== 'title') {
-      const badgeY = snap.squadCount >= 55 ? 2.08 : snap.squadCount >= 14 ? 1.86 : 1.68;
+      // 55+ fields a vanguard assault mech at the formation's front edge; float the badge above its head
+      const badgeY = snap.squadCount >= 55 ? 2.95 : snap.squadCount >= 14 ? 1.86 : 1.68;
       const p = this.renderer.project(snap.squadX, badgeY, PLAYER_Z - snap.formationRadius - 0.25);
       this.ui.updateHud(snap, this.score, p);
     }

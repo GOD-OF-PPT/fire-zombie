@@ -12,6 +12,8 @@ playwright-report/
 blob-report/
 test-results/
 playwright/.cache/
+# Local screenshot / perf scratch (scripts/shot.mjs, scripts/closeup.mjs output)
+.shots/
 
 # TypeScript & bundler caches
 *.tsbuildinfo

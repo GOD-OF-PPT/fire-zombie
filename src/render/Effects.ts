@@ -88,6 +88,7 @@ export class Effects {
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         side: THREE.DoubleSide,
+        forceSinglePass: true,
       });
       const mesh = new THREE.Mesh(ringGeo, m);
       mesh.visible = false;

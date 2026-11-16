@@ -40,6 +40,7 @@ import {
   spawnActor,
   type GltfLibrary,
 } from './models/gltfLibrary';
+import { buildProceduralLibrary } from './models/proceduralLibrary';
 import { createToonCharMaterial, getOutlineMaterial } from './models/toon';
 
 export const WEAPON_COLOR: Record<WeaponId, number> = {
@@ -73,6 +74,27 @@ const ENEMY_BAR_H: Record<EnemyKind, number> = {
   mitosis: 1.92,
   siphon: 2.45,
 };
+
+/** A stalled model download falls back to procedural actors instead of leaving the run empty */
+const GLTF_LOAD_TIMEOUT_MS = 30000;
+
+export type ActorModelSource = 'loading' | 'gltf' | 'procedural' | 'failed';
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 
 const CAM_BASE_Y = 10.6;
 const CAM_BASE_Z = 16.0;
@@ -215,6 +237,9 @@ function additive(color: number, opacity: number, map?: THREE.Texture): THREE.Me
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide,
+    // Additive glow is order-independent; without this three.js draws transparent DoubleSide meshes twice
+    // (back then front) and redoes the program lookup for each half.
+    forceSinglePass: true,
     map: map ?? null,
     toneMapped: false,
   });
@@ -236,6 +261,7 @@ export class Renderer {
 
   // GLTF asset library & actor pools
   private gltfLib: GltfLibrary | null = null;
+  private actorModelSource: ActorModelSource = 'loading';
   private squadPools: [AnimatedActor[], AnimatedActor[], AnimatedActor[]] = [[], [], []];
   private squadSlots: SquadSlotState[] = [];
   private currentWeapon: WeaponId = 'pulse';
@@ -339,14 +365,29 @@ export class Renderer {
     this.initPostProcessing();
     this.setSector(1);
 
-    this.assetsReady = loadGltfLibrary()
-      .then((lib) => {
-        this.initGltfPools(lib);
-        this.gltfLib = lib;
-      })
-      .catch((err) => {
-        console.error('Failed loading 3D GLTF library:', err);
-      });
+    this.assetsReady = this.loadActorModels().catch((err: unknown) => {
+      this.actorModelSource = 'failed';
+      console.error('Failed building actor models:', err);
+    });
+  }
+
+  /** Which actor models are in use; 'procedural' means the GLB models could not be loaded. */
+  get modelSource(): ActorModelSource {
+    return this.actorModelSource;
+  }
+
+  private async loadActorModels(): Promise<void> {
+    let lib: GltfLibrary | null = null;
+    try {
+      lib = await withTimeout(loadGltfLibrary(), GLTF_LOAD_TIMEOUT_MS, 'GLB model load');
+    } catch (err) {
+      console.error('GLB models unavailable, using procedural fallback models:', err);
+    }
+    const source = lib ? 'gltf' : 'procedural';
+    lib ??= buildProceduralLibrary();
+    this.initGltfPools(lib);
+    this.gltfLib = lib;
+    this.actorModelSource = source;
   }
 
   private initPostProcessing(): void {
@@ -1154,19 +1195,23 @@ export class Renderer {
     const overdrive = snap.overdriveTimer > 0;
     const maxTrackX = TRACK_HALF_WIDTH - 0.58;
 
-    // 1. Assault Mechs placed on rear-flank bodyguard positions so they tower above without blocking front row
+    // 1. Assault Mechs lead from the formation's far edge: the camera sits behind the squad, so anything
+    //    nearer the camera covers the troopers beyond it, while a vanguard mech only has its legs overlapped.
+    const infCount = n2 + n1;
+    const spacing = infCount <= 8 ? 0.7 : 0.65;
+    const front = -spacing * Math.sqrt(Math.max(0, infCount - 1) + 0.35) * 0.8 + 0.25;
     const mechOffsets: Array<[number, number]> =
       n3 === 1
-        ? [[0, 0.95]]
+        ? [[0, front - 0.55]]
         : n3 === 2
           ? [
-              [-1.18, 0.72],
-              [1.18, 0.72],
+              [-1.15, front - 0.35],
+              [1.15, front - 0.35],
             ]
           : [
-              [0, 1.08],
-              [-1.32, 0.62],
-              [1.32, 0.62],
+              [0, front - 0.7],
+              [-1.5, front - 0.2],
+              [1.5, front - 0.2],
             ];
     for (let m = 0; m < n3; m++) {
       const [ox, oz] = mechOffsets[m]!;
@@ -1178,8 +1223,6 @@ export class Renderer {
     }
 
     // 2. Golden Captains + Cobalt-Cyan Troopers arranged in breathable spiral / V-Wing chevron
-    const infCount = n2 + n1;
-    const spacing = infCount <= 8 ? 0.7 : 0.65;
     for (let k = 0; k < infCount; k++) {
       const tier: 1 | 2 = k < n2 ? 2 : 1;
       let ox = 0;
@@ -1194,10 +1237,10 @@ export class Renderer {
           const r = spacing * Math.sqrt(k + 0.35);
           const theta = k * GOLDEN_ANGLE_RAD;
           ox = Math.cos(theta) * r;
-          oz = Math.sin(theta) * r * 0.8 - (n3 > 0 ? 0.24 : 0);
+          oz = Math.sin(theta) * r * 0.8 + (n3 > 0 ? 0.25 : 0);
         }
       } else if (n3 > 0) {
-        oz = -0.3;
+        oz = 0.3;
       }
       out.push({
         x: THREE.MathUtils.clamp(snap.squadX + ox, -maxTrackX, maxTrackX),
@@ -1388,7 +1431,7 @@ export class Renderer {
           const actor = pool.pop();
           if (!actor) continue;
           actor.root.visible = true;
-          actor.activeClip = '';
+          actor.resetAnimation();
           entry = {
             kind: e.kind,
             actor,
@@ -1473,11 +1516,7 @@ export class Renderer {
         entry.actor.root.scale.set(squashXZ, squashY, squashXZ);
 
         const hitFlash = hit > 0.6 ? (0.5 + 0.5 * Math.sin(t * 44 + e.id)) * 0.3 : hit * 0.28;
-        if (slowed) {
-          entry.actor.setVisuals(hitFlash, 0.58, 0.94, 1.42);
-        } else {
-          entry.actor.setVisuals(hitFlash, 1, 1, 1);
-        }
+        entry.actor.setVisuals(hitFlash, 1, 1, 1, slowed ? 0.78 : 0);
 
         this.pushShadow(e.x, e.z, e.radius * (e.kind === 'siphon' ? 0.75 : 1.08));
 

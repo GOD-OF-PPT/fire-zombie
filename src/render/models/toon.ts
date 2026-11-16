@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
 let sharedCelRamp: THREE.DataTexture | null = null;
-let sharedOutlineMat: THREE.MeshBasicMaterial | null = null;
+const outlineMats = new Map<string, THREE.MeshBasicMaterial>();
 
 /**
  * Crisp 3-band commercial cartoon cel-shading ramp with 1-texel soft anti-aliased transitions
@@ -39,6 +39,7 @@ export interface ToonCharUniforms {
   uRimStrength: { value: number };
   uTint: { value: THREE.Color };
   uFlash: { value: number };
+  uFrost: { value: number };
 }
 
 export interface ToonCharMaterialOptions {
@@ -47,13 +48,15 @@ export interface ToonCharMaterialOptions {
   vertexColors?: boolean;
   map?: THREE.Texture | null;
   color?: number;
+  /** Reuse another material's uniforms so one setVisuals call drives both (rigid twin of a skinned material) */
+  uniforms?: ToonCharUniforms;
 }
 
 /**
  * Stylized Q-version character/monster toon material:
  * - 3-band cel shading via MeshToonMaterial
  * - Crisp view-angle Fresnel rim light
- * - Per-actor uniform tint (cryo slow / overdrive gold) and non-clipping hit-flash
+ * - Per-actor uniform tint (overdrive gold), cryo frost hue shift and non-clipping hit-flash
  * Shares a single compiled WebGLProgram across clones via customProgramCacheKey.
  */
 export function createToonCharMaterial(opts: ToonCharMaterialOptions = {}): THREE.MeshToonMaterial {
@@ -64,30 +67,40 @@ export function createToonCharMaterial(opts: ToonCharMaterialOptions = {}): THRE
     map: opts.map ?? null,
   });
 
-  const uniforms: ToonCharUniforms = {
+  const uniforms: ToonCharUniforms = opts.uniforms ?? {
     uRimColor: { value: new THREE.Color(opts.rimColor ?? 0xaeeeff) },
     uRimStrength: { value: opts.rimStrength ?? 0.38 },
     uTint: { value: new THREE.Color(1, 1, 1) },
     uFlash: { value: 0 },
+    uFrost: { value: 0 },
   };
   mat.userData.toonUniforms = uniforms;
 
   const applyHook = (target: THREE.MeshToonMaterial, uni: ToonCharUniforms): void => {
-    target.customProgramCacheKey = () => 'prism-toon-char-v1';
+    target.customProgramCacheKey = () => 'prism-toon-char-v3';
     target.onBeforeCompile = (shader) => {
       shader.uniforms.uRimColor = uni.uRimColor;
       shader.uniforms.uRimStrength = uni.uRimStrength;
       shader.uniforms.uTint = uni.uTint;
       shader.uniforms.uFlash = uni.uFlash;
+      shader.uniforms.uFrost = uni.uFrost;
       shader.fragmentShader =
-        `uniform vec3 uRimColor;\nuniform float uRimStrength;\nuniform vec3 uTint;\nuniform float uFlash;\n` +
+        `uniform vec3 uRimColor;\nuniform float uRimStrength;\nuniform vec3 uTint;\nuniform float uFlash;\nuniform float uFrost;\n` +
         shader.fragmentShader.replace(
           '#include <opaque_fragment>',
           /* glsl */ `
           float rimDot = 1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0);
           float rim = smoothstep(0.52, 0.92, rimDot);
-          outgoingLight *= uTint;
           outgoingLight += uRimColor * rim * uRimStrength;
+          // Keep lit + rim luminance just under the bloom threshold (0.93) so white eyes, skulls, spikes
+          // and grazing-lit gun barrels stay crisp; only tint (overdrive) and hit-flash may bloom.
+          float litLum = dot(outgoingLight, vec3(0.2126, 0.7152, 0.0722));
+          outgoingLight *= min(1.0, 0.88 / max(litLum, 1e-4));
+          outgoingLight *= uTint;
+          // Every monster is warm-coloured, so a multiplicative blue tint barely reads; frost re-hues
+          // toward ice while keeping the shaded brightness (max channel) so cel bands survive.
+          float frostV = max(max(outgoingLight.r, outgoingLight.g), outgoingLight.b);
+          outgoingLight = mix(outgoingLight, vec3(0.45, 0.8, 1.0) * frostV, clamp(uFrost, 0.0, 1.0));
           outgoingLight = mix(outgoingLight, vec3(1.12, 1.08, 1.04), clamp(uFlash, 0.0, 0.82));
           #include <opaque_fragment>
           `,
@@ -105,6 +118,7 @@ export function createToonCharMaterial(opts: ToonCharMaterialOptions = {}): THRE
       uRimStrength: { value: uniforms.uRimStrength.value },
       uTint: { value: uniforms.uTint.value.clone() },
       uFlash: { value: uniforms.uFlash.value },
+      uFrost: { value: uniforms.uFrost.value },
     };
     c.userData.toonUniforms = cUni;
     applyHook(c, cUni);
@@ -175,11 +189,15 @@ export function buildOutlineGeometry(sourceGeo: THREE.BufferGeometry): THREE.Buf
 }
 
 /**
- * Screen-space aspect-corrected inverted-hull cartoon outline material.
- * Works identically on SkinnedMesh and regular Mesh regardless of bone/armature scale.
+ * Screen-space aspect-corrected inverted-hull cartoon outline material, shared per width/colour.
+ * Works identically on SkinnedMesh and regular Mesh regardless of bone/armature scale, but skinned and
+ * rigid meshes get separate instances: one material drawn alternately with and without skinning makes
+ * three.js redo its full program lookup on every switch.
  */
-export function getOutlineMaterial(ndcWidth = 0.0052, color = 0x090c1a): THREE.MeshBasicMaterial {
-  if (sharedOutlineMat && ndcWidth === 0.0052 && color === 0x090c1a) return sharedOutlineMat;
+export function getOutlineMaterial(ndcWidth = 0.0052, color = 0x090c1a, skinned = false): THREE.MeshBasicMaterial {
+  const key = `${ndcWidth}|${color}|${skinned ? 'skin' : 'rigid'}`;
+  const cached = outlineMats.get(key);
+  if (cached) return cached;
   const mat = new THREE.MeshBasicMaterial({
     color,
     side: THREE.BackSide,
@@ -187,7 +205,7 @@ export function getOutlineMaterial(ndcWidth = 0.0052, color = 0x090c1a): THREE.M
   });
   const uWidth = { value: ndcWidth };
   mat.userData.uOutlineWidth = uWidth;
-  mat.customProgramCacheKey = () => 'prism-toon-outline-v1';
+  mat.customProgramCacheKey = () => 'prism-toon-outline-v2';
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uOutlineWidth = uWidth;
     shader.vertexShader =
@@ -208,8 +226,18 @@ export function getOutlineMaterial(ndcWidth = 0.0052, color = 0x090c1a): THREE.M
             mvPosition = instanceMatrix * mvPosition;
           #endif
           mvPosition = modelViewMatrix * mvPosition;
+          // Tiny view-space push keeps any hull face that still lands on the visible surface behind it
+          mvPosition.z -= 0.035;
           gl_Position = projectionMatrix * mvPosition;
-          vec2 viewN = normalize(transformedNormal.xy + vec2(1e-5));
+          // BackSide sets FLIP_SIDED, which negates transformedNormal; undo it so the hull grows outward
+          // instead of folding inward over the visible surface.
+          vec3 outlineN = transformedNormal;
+          #ifdef FLIP_SIDED
+            outlineN = -outlineN;
+          #endif
+          // Soft-normalized screen normal: camera-facing vertices barely move, so tiny far-away triangles
+          // keep their winding instead of flipping into view.
+          vec2 viewN = outlineN.xy / max(length(outlineN.xy), 0.6);
           // Equal pixel width horizontally & vertically on any aspect ratio
           float aspectFix = projectionMatrix[0][0] / projectionMatrix[1][1];
           // Slight distance clamp so outlines thin gracefully far down the runway
@@ -219,6 +247,6 @@ export function getOutlineMaterial(ndcWidth = 0.0052, color = 0x090c1a): THREE.M
           `,
         );
   };
-  if (ndcWidth === 0.0052 && color === 0x090c1a) sharedOutlineMat = mat;
+  outlineMats.set(key, mat);
   return mat;
 }

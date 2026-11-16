@@ -1,14 +1,22 @@
 // Dev visual check (requires `npm run dev` on :5173 and Playwright Chromium):
-//   node scripts/shot.mjs <outdir> [basic|boss|workshop]
+//   node scripts/shot.mjs <outdir> [basic|boss|workshop|result|defeat|mid]
+// GPU=1 renders on the host GPU instead of SwiftShader; CHROMIUM overrides the browser binary;
+// BLOCK_GLB=1 aborts the GLB downloads to exercise the procedural fallback models.
+import fs from 'node:fs';
 import { chromium } from '@playwright/test';
 
 const out = process.argv[2] ?? '/tmp/shots';
 const scenario = process.argv[3] ?? 'basic';
 const base = process.env.URL ?? 'http://localhost:5173/';
+const SYSTEM_CHROMIUM = '/usr/lib/chromium/chromium';
+fs.mkdirSync(out, { recursive: true });
 
 const browser = await chromium.launch({
-  executablePath: process.env.CHROMIUM ?? '/usr/lib/chromium/chromium',
-  args: ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+  executablePath: process.env.CHROMIUM ?? (fs.existsSync(SYSTEM_CHROMIUM) ? SYSTEM_CHROMIUM : undefined),
+  args:
+    process.env.GPU === '1'
+      ? ['--enable-gpu', '--ignore-gpu-blocklist']
+      : ['--no-sandbox', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 });
 const dpr = Number(process.env.DPR ?? '1');
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: dpr, isMobile: true, hasTouch: true });
@@ -16,6 +24,7 @@ const page = await ctx.newPage();
 const logs = [];
 page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
+if (process.env.BLOCK_GLB === '1') await page.route('**/*.glb', (route) => route.abort());
 
 const shot = async (name) => page.screenshot({ path: `${out}/${name}.png` });
 const waitAssets = async () => page.evaluate(() => window.__prism?.renderer?.assetsReady);
