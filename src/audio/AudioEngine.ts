@@ -319,8 +319,9 @@ export class AudioEngine {
       1: [0, 0, -4, -2], // i - i - VI - VII (A minor feel)
       2: [0, -2, -4, -5],
       3: [0, 1, -2, -4],
+      4: [0, -5, -2, -7],
     };
-    const baseFreq = [0, 110, 98, 92.5][this.musicSector] ?? 110;
+    const baseFreq = [0, 110, 98, 92.5, 103.8][this.musicSector] ?? 110;
     const bar = Math.floor(step / 16) % 4;
     const root = roots[this.musicSector][bar] ?? 0;
     const s = step % 16;

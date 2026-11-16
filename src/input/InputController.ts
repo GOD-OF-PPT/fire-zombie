@@ -7,6 +7,7 @@ export class InputController {
   private activePointer: number | null = null;
   private lastX = 0;
   private keys = new Set<string>();
+  private overdriveRequested = false;
   /** world units per CSS pixel; updated on resize */
   private unitsPerPx = 0.03;
   private listeners: Array<() => void> = [];
@@ -47,6 +48,11 @@ export class InputController {
         this.keys.add(k.toLowerCase());
         e.preventDefault();
         if (this.enabled) this.fireFirst();
+      } else if (k === ' ') {
+        if (this.enabled) {
+          this.overdriveRequested = true;
+          e.preventDefault();
+        }
       } else if (k === 'Escape' || k === 'p' || k === 'P') {
         this.onPauseKey?.();
       }
@@ -97,6 +103,16 @@ export class InputController {
     return a;
   }
 
+  requestOverdrive(): void {
+    if (this.enabled) this.overdriveRequested = true;
+  }
+
+  consumeOverdrive(): boolean {
+    const requested = this.overdriveRequested;
+    this.overdriveRequested = false;
+    return requested;
+  }
+
   consumeDrag(): number {
     const d = this.dragAccum;
     this.dragAccum = 0;
@@ -105,6 +121,7 @@ export class InputController {
 
   reset(): void {
     this.dragAccum = 0;
+    this.overdriveRequested = false;
     this.keys.clear();
   }
 

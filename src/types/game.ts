@@ -1,5 +1,5 @@
 export type GamePhase = 'TITLE' | 'PLAYING' | 'PAUSED' | 'VICTORY' | 'DEFEAT';
-export type SectorId = 1 | 2 | 3;
+export type SectorId = 1 | 2 | 3 | 4;
 export type WeaponId = 'pulse' | 'scatter' | 'rail' | 'plasma' | 'cryo';
 export type GateOp = 'add' | 'sub' | 'mul' | 'div';
 export type GatePolarity = 'positive' | 'negative' | 'neutral';
@@ -20,6 +20,8 @@ export interface InputSample {
   dragDeltaX: number;
   /** Continuous keyboard axis in [-1, 0, +1] */
   keyAxisX: number;
+  /** Fire a charged Resonance Overdrive (honoured when the run uses manualOverdrive). */
+  overdrive?: boolean;
 }
 
 export interface TierBreakdown {
@@ -143,6 +145,7 @@ export interface BossSnapshot {
   hazardZones: readonly BossHazardZone[];
   hitPulse: number;
   introProgress: number; // [0, 1] Boss arrival transition
+  enrage?: number; // >1 once the fight overruns: attacks come faster
 }
 
 export type SimEvent =
@@ -222,6 +225,12 @@ export interface RunModifiers {
   damageMult: number;
   /** Multiplier on all resonance gains (>= 1). */
   resonanceMult: number;
+  /** A full gauge waits for an explicit `InputSample.overdrive` request instead of firing at once. */
+  manualOverdrive?: boolean;
+  /** Seed for mirroring whole encounter segments; 0 / absent = authored layout. */
+  layoutSeed?: number;
+  /** Multiplier on boss and pylon HP (>= 1). */
+  bossHpMult?: number;
 }
 
 export interface SimulationController {

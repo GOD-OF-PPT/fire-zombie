@@ -1,4 +1,5 @@
 import type { BossId, EnemyKind, GateOp, RewardId, SectorId } from '../types/game';
+import { GAUNTLET_RUNWAY_LENGTH, generateGauntlet } from './gauntlet';
 
 export interface GateSpecConfig {
   readonly op: GateOp;
@@ -73,6 +74,8 @@ export interface BossConfig {
   readonly maxHp: number;
   readonly maxPhases: 2 | 3;
   readonly pylonHp?: number;
+  /** Fight seconds after which hazard/summon/orb timers start ticking faster (soft enrage). */
+  readonly enrageAfterSec?: number;
 }
 
 export interface SectorScriptConfig {
@@ -92,8 +95,8 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 32,
     layout: 'paired',
-    left: { op: 'add', value: 5, mutable: false },
-    right: { op: 'add', value: 3, mutable: false },
+    left: { op: 'add', value: 3, mutable: false },
+    right: { op: 'add', value: 5, mutable: false },
   },
   {
     type: 'enemies',
@@ -108,22 +111,22 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 118,
     layout: 'paired',
-    left: { op: 'sub', value: 4, mutable: true, damagePerStep: 5, stepDelta: 1, maxValue: 8 },
-    right: { op: 'add', value: 2, mutable: false },
+    left: { op: 'add', value: 2, mutable: false },
+    right: { op: 'sub', value: 4, mutable: true, damagePerStep: 5, stepDelta: 1, maxValue: 8 },
   },
   {
     type: 'gate_row',
     crossDist: 158,
     layout: 'paired',
-    left: { op: 'add', value: 4, mutable: false },
-    right: { op: 'mul', value: 2, mutable: false },
+    left: { op: 'mul', value: 2, mutable: false },
+    right: { op: 'add', value: 4, mutable: false },
   },
   {
     type: 'gate_row',
     crossDist: 185,
     layout: 'standalone',
     single: {
-      x: 2.6,
+      x: -2.6,
       halfWidth: 1.9,
       op: 'sub',
       value: 5,
@@ -156,8 +159,15 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 228,
     layout: 'paired',
-    left: { op: 'add', value: 4, mutable: false },
-    right: { op: 'sub', value: 12, mutable: false },
+    left: { op: 'add', value: 6, mutable: false },
+    right: { op: 'sub', value: 22, mutable: false },
+  },
+  {
+    type: 'gate_row',
+    crossDist: 260,
+    layout: 'paired',
+    left: { op: 'sub', value: 28, mutable: false },
+    right: { op: 'add', value: 5, mutable: false },
   },
   {
     type: 'barrels',
@@ -186,8 +196,15 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 289,
     layout: 'paired',
-    left: { op: 'add', value: 2, mutable: false },
-    right: { op: 'sub', value: 3, mutable: true, damagePerStep: 10, stepDelta: 1, maxValue: 10 },
+    left: { op: 'sub', value: 3, mutable: true, damagePerStep: 10, stepDelta: 1, maxValue: 10 },
+    right: { op: 'add', value: 4, mutable: false },
+  },
+  {
+    type: 'vault',
+    crossDist: 340,
+    x: -2.5,
+    hp: 100,
+    reward: 'blades',
   },
   {
     type: 'enemies',
@@ -201,8 +218,8 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 368,
     layout: 'paired',
-    left: { op: 'add', value: 8, mutable: false },
-    right: { op: 'div', value: 2, mutable: false },
+    left: { op: 'add', value: 6, mutable: false },
+    right: { op: 'sub', value: 2, mutable: true, damagePerStep: 12, stepDelta: 2, maxValue: 16 },
   },
 
   // Act 3 — Arsenal Assembly (d = 422..592)
@@ -222,6 +239,13 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
     x: 2.5,
     hp: 110,
     reward: 'plasma',
+  },
+  {
+    type: 'gate_row',
+    crossDist: 440,
+    layout: 'paired',
+    left: { op: 'add', value: 12, mutable: false },
+    right: { op: 'sub', value: 4, mutable: true, damagePerStep: 16, stepDelta: 2, maxValue: 24 },
   },
   {
     type: 'enemies',
@@ -244,28 +268,28 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
   {
     type: 'lens',
     crossDist: 534,
-    x: -2.4,
+    x: 2.4,
     driftAmp: 0.6,
     driftFreq: 1.1,
   },
   {
     type: 'enemies',
     crossDist: 552,
-    units: [{ kind: 'bastion', x: -2.4, dz: 0 }],
+    units: [{ kind: 'bastion', x: 2.4, dz: 0 }],
   },
   {
     type: 'vault',
     crossDist: 562,
-    x: -2.4,
+    x: 2.4,
     hp: 130,
-    reward: 'blades',
+    reward: 'scatter',
   },
   {
     type: 'gate_row',
     crossDist: 592,
     layout: 'paired',
-    left: { op: 'add', value: 14, mutable: false },
-    right: { op: 'sub', value: 18, mutable: false },
+    left: { op: 'sub', value: 18, mutable: false },
+    right: { op: 'add', value: 14, mutable: false },
   },
 
   // Act 4 — Climax Pressure (d = 642..814)
@@ -280,6 +304,18 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
       { kind: 'dasher', x: 3.0, dz: 12.0 },
       { kind: 'crawler', x: 0.0, dz: 14.0 },
     ],
+  },
+  {
+    type: 'gate_row',
+    crossDist: 680,
+    layout: 'standalone',
+    single: {
+      x: 2.6,
+      halfWidth: 1.9,
+      op: 'sub',
+      value: 8,
+      mutable: false,
+    },
   },
   {
     type: 'vault',
@@ -326,8 +362,8 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 814,
     layout: 'paired',
-    left: { op: 'add', value: 8, mutable: false },
-    right: { op: 'sub', value: 16, mutable: false },
+    left: { op: 'sub', value: 16, mutable: false },
+    right: { op: 'add', value: 8, mutable: false },
   },
 ];
 
@@ -337,8 +373,8 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 34,
     layout: 'paired',
-    left: { op: 'add', value: 6, mutable: false },
-    right: { op: 'add', value: 3, mutable: false },
+    left: { op: 'add', value: 3, mutable: false },
+    right: { op: 'add', value: 6, mutable: false },
   },
   {
     type: 'enemies',
@@ -352,23 +388,23 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 138,
     layout: 'paired',
-    left: { op: 'add', value: 4, mutable: true, damagePerStep: 10, stepDelta: 1, maxValue: 12 },
-    right: { op: 'sub', value: 8, mutable: false },
-    tetheredSiphon: { side: 'left', zAhead: 5.5 },
+    left: { op: 'sub', value: 8, mutable: false },
+    right: { op: 'add', value: 4, mutable: true, damagePerStep: 10, stepDelta: 1, maxValue: 12 },
+    tetheredSiphon: { side: 'right', zAhead: 5.5 },
   },
   {
     type: 'gate_row',
     crossDist: 186,
     layout: 'paired',
-    left: { op: 'add', value: 10, mutable: false },
-    right: { op: 'add', value: 4, mutable: false },
+    left: { op: 'mul', value: 2, mutable: false },
+    right: { op: 'add', value: 12, mutable: false },
   },
   {
     type: 'gate_row',
     crossDist: 215,
     layout: 'standalone',
     single: {
-      x: 2.6,
+      x: -2.6,
       halfWidth: 1.9,
       op: 'sub',
       value: 6,
@@ -380,7 +416,7 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
   {
     type: 'vault',
     crossDist: 248,
-    x: -2.5,
+    x: 2.5,
     hp: 90,
     reward: 'rail',
   },
@@ -388,9 +424,9 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'enemies',
     crossDist: 250,
     units: [
-      { kind: 'mitosis', x: 2.2, dz: 0 },
-      { kind: 'crawler', x: 1.3, dz: 2.5 },
-      { kind: 'crawler', x: 3.1, dz: 2.5 },
+      { kind: 'mitosis', x: -2.2, dz: 0 },
+      { kind: 'crawler', x: -1.3, dz: 2.5 },
+      { kind: 'crawler', x: -3.1, dz: 2.5 },
     ],
   },
   {
@@ -398,32 +434,32 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     crossDist: 268,
     layout: 'paired',
     left: { op: 'add', value: 6, mutable: false },
-    right: { op: 'sub', value: 14, mutable: false },
+    right: { op: 'sub', value: 28, mutable: false },
   },
   {
     type: 'gate_row',
     crossDist: 328,
     layout: 'paired',
-    left: { op: 'div', value: 2, mutable: true, lockHp: 80 },
-    right: { op: 'add', value: 3, mutable: false },
+    left: { op: 'add', value: 3, mutable: false },
+    right: { op: 'div', value: 2, mutable: true, lockHp: 80 },
   },
   {
     type: 'enemies',
     crossDist: 391,
-    units: [{ kind: 'bastion', x: 2.5, dz: 0 }],
+    units: [{ kind: 'bastion', x: -2.5, dz: 0 }],
   },
   {
     type: 'barrels',
     crossDist: 394,
-    placements: [{ x: 0.6, dz: 0 }],
+    placements: [{ x: -0.6, dz: 0 }],
   },
   {
     type: 'gate_row',
     crossDist: 402,
     layout: 'paired',
-    left: { op: 'sub', value: 15, mutable: false },
-    right: { op: 'sub', value: 2, mutable: true, damagePerStep: 14, stepDelta: 2, maxValue: 12 },
-    tetheredSiphon: { side: 'right', zAhead: 5.5 },
+    left: { op: 'sub', value: 2, mutable: true, damagePerStep: 14, stepDelta: 2, maxValue: 12 },
+    right: { op: 'sub', value: 15, mutable: false },
+    tetheredSiphon: { side: 'left', zAhead: 5.5 },
   },
 
   // Act 3 — Arsenal Assembly (d = 496..722)
@@ -458,7 +494,7 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
   {
     type: 'lens',
     crossDist: 564,
-    x: -2.5,
+    x: 2.5,
     driftAmp: 0.7,
     driftFreq: 1.2,
   },
@@ -473,14 +509,21 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
   {
     type: 'vault',
     crossDist: 582,
-    x: -2.5,
+    x: 2.5,
     hp: 155,
     reward: 'cryo',
   },
   {
     type: 'vault',
+    crossDist: 584,
+    x: -2.5,
+    hp: 155,
+    reward: 'scatter',
+  },
+  {
+    type: 'vault',
     crossDist: 648,
-    x: 2.4,
+    x: -2.4,
     hp: 150,
     reward: 'blades',
   },
@@ -488,14 +531,14 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 658,
     layout: 'paired',
-    left: { op: 'add', value: 2, mutable: true, damagePerStep: 18, stepDelta: 2, maxValue: 12 },
-    right: { op: 'div', value: 2, mutable: false },
-    tetheredSiphon: { side: 'left', zAhead: 5.5 },
+    left: { op: 'div', value: 2, mutable: false },
+    right: { op: 'add', value: 2, mutable: true, damagePerStep: 18, stepDelta: 2, maxValue: 12 },
+    tetheredSiphon: { side: 'right', zAhead: 5.5 },
   },
   {
     type: 'vault',
     crossDist: 706,
-    x: -2.5,
+    x: 2.5,
     hp: 165,
     reward: 'rail',
   },
@@ -503,15 +546,15 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 722,
     layout: 'paired',
-    left: { op: 'add', value: 10, mutable: false },
-    right: { op: 'div', value: 2, mutable: true, lockHp: 120 },
+    left: { op: 'add', value: 8, mutable: true, damagePerStep: 24, stepDelta: 4, maxValue: 36 },
+    right: { op: 'add', value: 24, mutable: false },
   },
 
   // Act 4 — Climax Pressure (d = 768..1012)
   {
     type: 'lens',
     crossDist: 768,
-    x: -2.4,
+    x: 2.4,
     driftAmp: 0.8,
     driftFreq: 1.1,
   },
@@ -535,16 +578,32 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     ],
   },
   {
+    type: 'enemies',
+    crossDist: 872,
+    units: [
+      { kind: 'bastion', x: 2.5, dz: 0 },
+      { kind: 'crawler', x: 1.6, dz: 2 },
+      { kind: 'crawler', x: 3.4, dz: 2 },
+    ],
+  },
+  {
     type: 'gate_row',
     crossDist: 884,
     layout: 'paired',
-    left: { op: 'sub', value: 8, mutable: true, damagePerStep: 18, stepDelta: 2, maxValue: 12 },
-    right: { op: 'sub', value: 20, mutable: false },
+    left: { op: 'sub', value: 20, mutable: false },
+    right: { op: 'sub', value: 8, mutable: true, damagePerStep: 18, stepDelta: 2, maxValue: 12 },
+  },
+  {
+    type: 'vault',
+    crossDist: 940,
+    x: 2.5,
+    hp: 175,
+    reward: 'plasma',
   },
   {
     type: 'vault',
     crossDist: 942,
-    x: 2.5,
+    x: -2.5,
     hp: 175,
     reward: 'cryo',
   },
@@ -572,11 +631,21 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     tetheredSiphon: { side: 'left', zAhead: 5.5 },
   },
   {
+    type: 'enemies',
+    crossDist: 998,
+    units: [
+      { kind: 'crawler', x: 1.6, dz: 0 },
+      { kind: 'crawler', x: 2.6, dz: 1.5 },
+      { kind: 'crawler', x: 3.6, dz: 3 },
+      { kind: 'dasher', x: 2.4, dz: 5 },
+    ],
+  },
+  {
     type: 'gate_row',
     crossDist: 1012,
     layout: 'paired',
-    left: { op: 'add', value: 10, mutable: false },
-    right: { op: 'sub', value: 18, mutable: false },
+    left: { op: 'sub', value: 18, mutable: false },
+    right: { op: 'add', value: 10, mutable: false },
   },
 ];
 
@@ -586,8 +655,8 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 36,
     layout: 'paired',
-    left: { op: 'add', value: 7, mutable: false },
-    right: { op: 'add', value: 4, mutable: false },
+    left: { op: 'add', value: 4, mutable: false },
+    right: { op: 'add', value: 7, mutable: false },
   },
   {
     type: 'enemies',
@@ -604,9 +673,9 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 152,
     layout: 'paired',
-    left: { op: 'sub', value: 2, mutable: true, damagePerStep: 12, stepDelta: 2, maxValue: 12 },
-    right: { op: 'sub', value: 12, mutable: false },
-    tetheredSiphon: { side: 'left', zAhead: 5.5 },
+    left: { op: 'sub', value: 12, mutable: false },
+    right: { op: 'sub', value: 2, mutable: true, damagePerStep: 12, stepDelta: 2, maxValue: 12 },
+    tetheredSiphon: { side: 'right', zAhead: 5.5 },
   },
   {
     type: 'gate_row',
@@ -620,7 +689,7 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     crossDist: 243,
     layout: 'standalone',
     single: {
-      x: 2.6,
+      x: -2.6,
       halfWidth: 1.9,
       op: 'sub',
       value: 8,
@@ -648,7 +717,7 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     crossDist: 294,
     layout: 'paired',
     left: { op: 'add', value: 6, mutable: false },
-    right: { op: 'sub', value: 16, mutable: false },
+    right: { op: 'sub', value: 32, mutable: false },
   },
   {
     type: 'enemies',
@@ -663,8 +732,8 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 378,
     layout: 'paired',
-    left: { op: 'div', value: 2, mutable: true, lockHp: 110 },
-    right: { op: 'div', value: 2, mutable: false },
+    left: { op: 'div', value: 2, mutable: false },
+    right: { op: 'div', value: 2, mutable: true, lockHp: 110 },
   },
   {
     type: 'barrels',
@@ -686,12 +755,29 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 458,
     layout: 'paired',
-    left: { op: 'sub', value: 6, mutable: true, damagePerStep: 16, stepDelta: 2, maxValue: 14 },
-    right: { op: 'sub', value: 20, mutable: false },
-    tetheredSiphon: { side: 'left', zAhead: 5.5 },
+    left: { op: 'sub', value: 20, mutable: false },
+    right: { op: 'sub', value: 6, mutable: true, damagePerStep: 16, stepDelta: 2, maxValue: 14 },
+    tetheredSiphon: { side: 'right', zAhead: 5.5 },
   },
 
   // Act 3 — Arsenal Assembly (d = 568..860)
+  {
+    type: 'enemies',
+    crossDist: 506,
+    units: [
+      { kind: 'crawler', x: -2.6, dz: 0 },
+      { kind: 'crawler', x: -1.8, dz: 1.6 },
+      { kind: 'dasher', x: -3, dz: 4 },
+      { kind: 'mitosis', x: 2.4, dz: 2 },
+    ],
+  },
+  {
+    type: 'gate_row',
+    crossDist: 520,
+    layout: 'paired',
+    left: { op: 'sub', value: 4, mutable: true, damagePerStep: 22, stepDelta: 3, maxValue: 20 },
+    right: { op: 'add', value: 12, mutable: false },
+  },
   {
     type: 'lens',
     crossDist: 568,
@@ -721,6 +807,16 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     reward: 'blades',
   },
   {
+    type: 'enemies',
+    crossDist: 628,
+    units: [
+      { kind: 'bastion', x: 2.4, dz: 0 },
+      { kind: 'crawler', x: -2.2, dz: 2.0 },
+      { kind: 'crawler', x: -0.8, dz: 3.5 },
+      { kind: 'dasher', x: 3.2, dz: 6.0 },
+    ],
+  },
+  {
     type: 'barrels',
     crossDist: 668,
     placements: [
@@ -748,6 +844,21 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     right: { op: 'div', value: 3, mutable: false },
   },
   {
+    type: 'gate_row',
+    crossDist: 722,
+    layout: 'standalone',
+    single: {
+      x: 2.6,
+      halfWidth: 1.9,
+      op: 'sub',
+      value: 6,
+      mutable: true,
+      damagePerStep: 20,
+      stepDelta: 2,
+      maxValue: 12,
+    },
+  },
+  {
     type: 'lens',
     crossDist: 746,
     x: -2.5,
@@ -770,6 +881,15 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     layout: 'paired',
     left: { op: 'sub', value: 24, mutable: true, damagePerStep: 14, stepDelta: 4, maxValue: 18 },
     right: { op: 'div', value: 2, mutable: false },
+  },
+  {
+    type: 'enemies',
+    crossDist: 812,
+    units: [
+      { kind: 'mitosis', x: -2.0, dz: 0 },
+      { kind: 'mitosis', x: 2.0, dz: 3.0 },
+      { kind: 'crawler', x: 0.0, dz: 5.0 },
+    ],
   },
   {
     type: 'lens',
@@ -802,6 +922,13 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
 
   // Act 4 — Climax Pressure (d = 926..1208)
   {
+    type: 'gate_row',
+    crossDist: 905,
+    layout: 'paired',
+    left: { op: 'add', value: 15, mutable: false },
+    right: { op: 'sub', value: 10, mutable: true, damagePerStep: 26, stepDelta: 4, maxValue: 30 },
+  },
+  {
     type: 'enemies',
     crossDist: 926,
     units: [
@@ -817,6 +944,21 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     x: -2.4,
     hp: 210,
     reward: 'blades',
+  },
+  {
+    type: 'gate_row',
+    crossDist: 982,
+    layout: 'standalone',
+    single: {
+      x: -2.6,
+      halfWidth: 1.9,
+      op: 'sub',
+      value: 4,
+      mutable: true,
+      damagePerStep: 24,
+      stepDelta: 2,
+      maxValue: 10,
+    },
   },
   {
     type: 'barrels',
@@ -842,9 +984,18 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 1032,
     layout: 'paired',
-    left: { op: 'add', value: 6, mutable: true, damagePerStep: 20, stepDelta: 2, maxValue: 16 },
-    right: { op: 'sub', value: 25, mutable: false },
-    tetheredSiphon: { side: 'left', zAhead: 5.5 },
+    left: { op: 'sub', value: 25, mutable: false },
+    right: { op: 'add', value: 6, mutable: true, damagePerStep: 20, stepDelta: 2, maxValue: 16 },
+    tetheredSiphon: { side: 'right', zAhead: 5.5 },
+  },
+  {
+    type: 'enemies',
+    crossDist: 1075,
+    units: [
+      { kind: 'bastion', x: -2.5, dz: 0 },
+      { kind: 'crawler', x: -1.5, dz: 2 },
+      { kind: 'crawler', x: -3.3, dz: 2 },
+    ],
   },
   {
     type: 'enemies',
@@ -868,8 +1019,8 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     type: 'gate_row',
     crossDist: 1208,
     layout: 'paired',
-    left: { op: 'add', value: 12, mutable: false },
-    right: { op: 'div', value: 2, mutable: false },
+    left: { op: 'div', value: 2, mutable: false },
+    right: { op: 'add', value: 12, mutable: false },
   },
 ];
 
@@ -884,8 +1035,9 @@ export const SECTORS: Readonly<Record<SectorId, SectorScriptConfig>> = {
     boss: {
       id: 'warden_01',
       name: 'WARDEN-01《赤焰魔像王》',
-      maxHp: 5600,
+      maxHp: 7500,
       maxPhases: 2,
+      enrageAfterSec: 11,
     },
     encounters: SECTOR_1_ENCOUNTERS,
   },
@@ -899,8 +1051,9 @@ export const SECTORS: Readonly<Record<SectorId, SectorScriptConfig>> = {
     boss: {
       id: 'hydra_02',
       name: 'HYDRA-02《双生魔龙》',
-      maxHp: 22000,
+      maxHp: 26000,
       maxPhases: 2,
+      enrageAfterSec: 26,
     },
     encounters: SECTOR_2_ENCOUNTERS,
   },
@@ -914,10 +1067,37 @@ export const SECTORS: Readonly<Record<SectorId, SectorScriptConfig>> = {
     boss: {
       id: 'omega_zero',
       name: 'OMEGA-ZERO《深渊魔王》',
-      maxHp: 31000,
+      maxHp: 70000,
       maxPhases: 3,
       pylonHp: 3500,
+      enrageAfterSec: 42,
     },
     encounters: SECTOR_3_ENCOUNTERS,
   },
+  4: buildGauntletScript(0),
 };
+
+function buildGauntletScript(seed: number): SectorScriptConfig {
+  const generated = generateGauntlet(seed);
+  return {
+    id: 4,
+    name: 'Random Corridor',
+    subtitle: '随机回廊',
+    scrollSpeed: 16.5,
+    runwayLength: GAUNTLET_RUNWAY_LENGTH,
+    startSquad: 6,
+    boss: generated.boss,
+    encounters: generated.encounters,
+  };
+}
+
+let gauntletCache: { seed: number; script: SectorScriptConfig } | null = null;
+
+/** Sector 4 is regenerated from the run's layout seed; sectors 1–3 are authored. */
+export function getSectorScript(sector: SectorId, seed: number): SectorScriptConfig {
+  if (sector !== 4) return SECTORS[sector];
+  if (!gauntletCache || gauntletCache.seed !== seed) {
+    gauntletCache = { seed, script: seed === 0 ? SECTORS[4] : buildGauntletScript(seed) };
+  }
+  return gauntletCache.script;
+}

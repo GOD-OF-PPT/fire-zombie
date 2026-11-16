@@ -14,7 +14,8 @@
 | glTF 加载 / 骨骼动画 / 武器挂点（`src/render/models/gltfLibrary.ts`） | ✅ |
 | GLB 加载失败兜底：程序化骨骼模型库 + 提示 | ✅（本轮） |
 | 每个角色合并为单一蒙皮网格（含手持枪），draw calls 降 59% | ✅（本轮） |
-| `tsc` + `vite build` 通过；vitest 72/72；playwright 12/12（移动竖屏 + 桌面） | ✅（本轮，未提交） |
+| `tsc` + `vite build` 通过；vitest 77/77；playwright 14/14（移动竖屏 + 桌面） | ✅（本轮，未提交） |
+| 玩法调整（门布局、Boss 狂暴、武器克制、手动超载、第 4 关随机回廊） | ✅（本轮，未提交，见 2.4） |
 
 ## 2. 本轮已解决
 
@@ -51,10 +52,43 @@
 
 正确性：`tests/unit/render-gltf-fold.test.ts` 对 11 个 GLB（机甲只有一个网格，不需合并）在动画姿态下比较合并前后每个顶点的世界坐标（误差 <1e-3；故意改错刚体变换时该测试会失败）；程序化测试检查烘焙进蒙皮的枪顶点与手骨位置一致（<1e-4）。合并前后的特写截图逐像素比较：GLB 英雄与 5 种怪物 diff = 0。
 
+### 2.4 玩法调整（已验证）
+依据无画面模拟的打法对比：原关卡里好门几乎都在左侧，全程贴左不动就能三关通关；不瞄准也能拿 2–3 星；第 1 关 Boss 反而最难。只改了配置（`src/config/sectors.ts`、`src/app/meta.ts`），没动 `src/sim/`：
+- 三关的好门改为左右交替；两侧都有致命固定门（例如第 1 关 d228 右 -22、d260 左 -28），贴边不动会死。
+- 第 1 关新增：d260 致命门、d340 环轨刃能量舱（与 d368 右侧可射击门 -2→+16 争火力）、d440 "稳拿 +12 / 射击 -4→+24"、d680 右侧单门 -8。
+- Boss 血量：第 1 关 5600→7500，第 2 关 22000→26000，第 3 关 31000→70000（配合按比例扣人与人数增长，自动驾驶 Boss 战约 13 / 24 / 26 s）。
+- 星级门槛：第 1 关 [60, 140]，第 2 关 [80, 165]，第 3 关 [100, 200]（不瞄准的打法最多 2 星）。
+- 验证：`sim-sectors-balance.test.ts`、e2e 全通流程均通过；`.shots/analysis/balance.test.ts` / `sweep.test.ts` 对比各打法（见下方"模拟结果"）。
+- 已改 `src/sim/`（新开关默认关闭，单测、平衡机器人和标题页演示仍走原逻辑）：
+  - Boss 命中按队伍规模扣人：每 100 人扣 `strikeLoss` / `hostileLoss` 人，下限为其一半（`bosses.ts` 的 `scaledBossLoss`）。
+  - 共鸣超载手动释放：`RunModifiers.manualOverdrive` 时满槽保持，`InputSample.overdrive` 触发；HUD 共鸣槽满后可点击，或按空格。
+  - 每局镜像：`RunModifiers.layoutSeed` 把"一排门 + 它之前的遭遇"作为一段随机左右翻转（`spawner.ts` 的 `computeMirrorFlags`）；重试保持同一布局；URL `?seed=0` 固定为原始布局（e2e 已改用）。
+- 第 2 关：d186 改为"×2 还是 +12"；d248 能量舱移到差门侧；d722 的 ×2 锁门改为"射击 +8→+36 / 稳拿 +24"，压住滚雪球；d584、d940 新增并排二选一能量舱；d872、d998 在好门前放怪。
+- 第 3 关：补空档，新增 d506 怪群 + d520"射击 -4→+20 / 稳拿 +12"、d905"稳拿 +15 / 射击 -10→+30"、d1075 重甲守在好门前。
+- 武器克制（`config/weapons.ts` 的 `WEAPON_COUNTER_MULT`）：脉冲→骷髅灵 ×1.5，散射→刺球 ×1.4 / 史莱姆 ×1.3，贯穿→重甲 ×1.8，爆破→史莱姆 ×1.6 / 刺球 ×1.2，冰冻→迅龙 ×1.6；奖励说明同步。
+- 怪物冲线最大减员：迅龙 4→6、重甲 8→12、史莱姆 4→6、骷髅灵 4→6（刺球不变，保护新手开局）。
+- 工坊：总价 2650→2140，伤害每级 8%→6%；Boss 血量随工坊总等级 +2.5%/级（满级 ×1.375，`RunModifiers.bossHpMult`）。
+- **Boss 软狂暴**（瞄准回报）：只调门数值拉不开差距（不瞄准时居中站位也能把门打满），改为惩罚慢打。`BossConfig.enrageAfterSec`（第 1/2/3 关 11 / 26 / 42 s）后，攻击/召唤/弹幕计时器按 +8%/s 加速（上限 ×2），并每 2 s 发出一次无法躲避的核心脉冲（每 100 人扣 4 人）。HUD 首领名后显示"· 狂暴"并闪烁。未配置该字段的首领不受影响。
+- **第 3 关空档**：新增 d628 怪群（重甲 + 刺球 + 迅龙）、d722 右侧可射击单门 -6→+12、d812 史莱姆群、d982 左侧可射击单门 -4→+10。跑道空闲占比 22.8%→17.6%。
+- **第 4 关「随机回廊」**（通关第 3 关解锁）：`src/config/gauntlet.ts` 按布局种子生成整条跑道（1300 u，16.5 u/s，开局 6 人）。开局一排教学门，之后三幕各一副"牌组"（致命门 / 取舍门 / 必射门 / ×2 / 锁门 / 可射击单门 / 负面单门），每局只换顺序、左右和数值；门与门之间填怪群、并排能量舱（3 组）、电容桶 + 怪、棱镜。前 5 排的差门只扣人不致死。首领按种子在三位首领中轮换（"·极"版：魔像王 24000 / 魔龙 27000 / 魔王 70000 HP）。星级 [150, 300]；挑战：通关一次、击破 6 个能量舱、通关时 ≥300 人。开场横幅显示本局首领和"布局 #种子"，结算"新布局再战"即换一张图。
+  - 接入方式：`getSectorScript(sector, seed)`（第 1–3 关返回手工脚本，第 4 关按种子生成并缓存）；`SimWorld.script` 保存本局脚本，`spawner.ts` / `bosses.ts` 改读它；`SectorId` 扩为 1–4，存档、标题卡片、音乐、配色同步。
+  - 测试：`tests/unit/sim-gauntlet.test.ts`（同种子结果一致、12 个种子布局互不相同且覆盖 3 位首领、60 个种子结构合法、种子 1–6 自动驾驶通关且 AFK 失败）；e2e 新增"第 4 关默认锁定，解锁后 `?seed=5` 自动驾驶通关"。
+
+模拟结果（`?seed=0` 原始布局；比率 = 自动驾驶 / 只挑门不瞄准 的终局人数）：
+
+| 区域 | 自动驾驶 | 只挑门 | 比率 | 人类延迟 | 迟钝玩家 | 空闲占比 |
+|---|---|---|---|---|---|---|
+| 1 | 149 ★3（Boss 13.4 s） | 86 ★2 | 1.73 | 113 ★2 | 66 ★2 | 11% |
+| 2 | 172 ★3（24.6 s） | 122 ★2 | 1.41 | 192 ★3 | 103 ★2 | 17% |
+| 3 | 250 ★3（22.7 s） | 58 ★1 | 4.31 | 258 ★3 | 90 ★1 | 18% |
+| 4（40 个种子） | 胜 40/40，均 340 ★3.0 | 胜 40/40，均 224 ★2.5 | 1.52 | 胜 29/40 | 胜 16/40 | — |
+
+贴左 / 贴右不动在第 1–3 关都会死于减员门；第 4 关 AFK 40/40 失败。
 ## 3. 本轮改动文件（未提交）
 - 修改：`src/render/Renderer.ts`、`src/render/Effects.ts`、`src/render/models/gltfLibrary.ts`、`src/render/models/toon.ts`、`src/app/Game.ts`、`scripts/shot.mjs`、`tests/e2e/flows.spec.ts`、`.gitignore`（忽略 `.shots/`）
 - 新增：`src/render/models/mechPalette.ts`、`proceduralRig.ts`、`proceduralLibrary.ts`、`proceduralBosses.ts`、`monsters.ts`；`scripts/closeup.mjs`；`tests/unit/render-procedural-models.test.ts`、`tests/unit/render-gltf-fold.test.ts`
-- 未改 `src/sim/` 与 `src/config/constants.ts`。
+- 玩法轮新增：`src/config/gauntlet.ts`、`tests/unit/sim-gauntlet.test.ts`；修改 `src/config/{sectors,enemies,weapons}.ts`、`src/app/{Game,meta,save}.ts`、`src/sim/{bosses,combat,entities,index,resonance,spawner,world}.ts`、`src/types/game.ts`、`src/ui/UI.ts`、`src/input/InputController.ts`、`src/audio/AudioEngine.ts`、`src/styles/main.css`、单测与 e2e。
+- 未改 `src/config/constants.ts`。
 
 ## 4. 仍待处理
 - **真机（iOS/Android GPU）、音频同步**：未测。GPU 负载未量化：峰值约 41 万三角形（每个 GLB 角色约 6–7K 三角形，描边再画一遍）+ DPR 上限 2 + 半分辨率 Bloom。若真机掉帧，优先考虑：DPR 上限降到 1.5、远处敌人/后排队员关描边、或降低角色面数。
@@ -63,7 +97,7 @@
 - **Windows 上跑 e2e**：本机由 Playwright `webServer` 启动的 preview 探测不到，120 s 超时。先手动 `npx vite preview --port 4173 --strictPort --host 127.0.0.1`，再 `npx playwright test`（配置里 `reuseExistingServer: true`）即可。
 
 ## 5. 重要约束
-- **不要改** `src/sim/` 与 `src/config/constants.ts`（`MAX_VISIBLE_UNITS=48` 有测试约束）；仅改渲染/表现层。
+- `src/sim/` 须保持确定性；新玩法开关（手动超载、镜像布局）默认关闭，测试与标题页演示走原逻辑。Boss 狂暴由 `BossConfig.enrageAfterSec` 配置驱动，第 1–3 关默认开启。不要改 `src/config/constants.ts`（`MAX_VISIBLE_UNITS=48` 有测试约束）。
 - 仅使用 CC0 资源，并在 `ATTRIBUTION.md`/README 记录。
 - 模型朝向：所有 GLB 面向 +Z；怪物/Boss `facingYaw=0`，英雄 π（胜利时 0）。
 - Three 会把 `Index1.R` 重命名为 `Index1R`；英雄的枪烘焙在这根骨骼上。
@@ -86,6 +120,7 @@ npx playwright test                      # 移动竖屏 + 桌面；Windows 见�
 软件渲染（SwiftShader）很慢：批量在一次 `page.evaluate` 内推进帧，循环要有上限，截图用 `?play=1&unlock=1&sector=N`。
 
 ## 7. 建议下一步（按优先级）
-1. 审阅并提交本轮改动。
-2. 真机测试帧率、发热、音频同步；按结果决定 DPR 上限 / 描边 LOD / 面数。
-3. 代码清理与 chunk 体积警告。
+1. 审阅并提交本轮改动（含玩法轮）。
+2. 真人试玩第 4 关多个种子，确认难度曲线；必要时调 `gauntlet.ts` 的数值系数或首领血量。
+3. 真机测试帧率、发热、音频同步；按结果决定 DPR 上限 / 描边 LOD / 面数。
+4. 代码清理与 chunk 体积警告。

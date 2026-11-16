@@ -1,6 +1,5 @@
 import type { SimEvent } from '../types/game';
 import { FIXED_DT, PLAYER_Z, RESONANCE_GAIN_VAULT_BREAK, TRACK_HALF_WIDTH } from '../config/constants';
-import { SECTORS } from '../config/sectors';
 import { spawnBarrel } from './barrels';
 import { intersectSweptSegmentAABB } from './ccd';
 import { spawnEnemy } from './enemies';
@@ -21,14 +20,29 @@ const BOSS_START_Z = -34.0;
 const BOSS_BASE_Z = -20.0;
 const HAZARD_Z_CENTER = -6.0;
 const HAZARD_DEPTH = 28.0; // [-20, +8], covers PLAYER_Z = +6.0
+const BOSS_ENRAGE_RAMP_PER_SEC = 0.08;
+const BOSS_ENRAGE_MAX = 2.0;
+/** While enraged the core emits an unavoidable pulse, so slow fights cost drones even with perfect dodging. */
+const BOSS_ENRAGE_PULSE_SEC = 2.0;
+const BOSS_ENRAGE_PULSE_LOSS = 4;
+
+/**
+ * Boss hits remove `base` drones per 100 in the squad, so large late-game swarms still feel
+ * each hit; the floor (half of `base`) keeps small squads from shrugging hits off.
+ */
+function scaledBossLoss(base: number, squad: number): number {
+  return Math.max(1, Math.ceil(base * 0.5), Math.round((squad * base) / 100));
+}
 
 export function spawnSectorBoss(world: SimWorld, events: SimEvent[]): SimBossState {
-  const bossCfg = SECTORS[world.sector].boss;
+  const bossCfg = world.script.boss;
+  const hpMult = world.mods.bossHpMult ?? 1;
+  const bossMaxHp = Math.round(bossCfg.maxHp * hpMult);
   const pylons: SimBossPylon[] = [];
   let initialShielded = false;
 
   if (bossCfg.id === 'omega_zero') {
-    const pylonHp = bossCfg.pylonHp ?? 3500;
+    const pylonHp = Math.round((bossCfg.pylonHp ?? 3500) * hpMult);
     initialShielded = true;
     pylons.push(
       {
@@ -72,8 +86,8 @@ export function spawnSectorBoss(world: SimWorld, events: SimEvent[]): SimBossSta
     z: BOSS_START_Z,
     halfWidth: bossCfg.id === 'hydra_02' ? 2.4 : bossCfg.id === 'omega_zero' ? 2.3 : 2.1,
     halfDepth: 1.5,
-    hp: bossCfg.maxHp,
-    maxHp: bossCfg.maxHp,
+    hp: bossMaxHp,
+    maxHp: bossMaxHp,
     secondaryCore: null,
     shielded: initialShielded,
     pylons,
@@ -81,6 +95,9 @@ export function spawnSectorBoss(world: SimWorld, events: SimEvent[]): SimBossSta
     hitPulse: 0,
     introProgress: 0,
     phaseElapsed: 0,
+    fightElapsed: 0,
+    enrage: 1,
+    enragePulseTimer: BOSS_ENRAGE_PULSE_SEC,
     hazardTimer: 1.5,
     hazardCycle: 0,
     summonTimer: 3.2,
@@ -426,6 +443,12 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
 
   boss.phaseElapsed += FIXED_DT;
   const t = boss.phaseElapsed;
+  boss.fightElapsed += FIXED_DT;
+  const enrageAfter = world.script.boss.enrageAfterSec;
+  if (enrageAfter !== undefined) {
+    boss.enrage = 1 + clamp((boss.fightElapsed - enrageAfter) * BOSS_ENRAGE_RAMP_PER_SEC, 0, BOSS_ENRAGE_MAX - 1);
+  }
+  const rageDt = FIXED_DT * boss.enrage;
 
   // Update active BossHazardZones
   for (let i = boss.hazardZones.length - 1; i >= 0; i--) {
@@ -448,13 +471,13 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
       boss.x = normalizeZero(2.8 * Math.sin(0.85 * t));
       boss.z = BOSS_BASE_Z;
 
-      boss.hazardTimer -= FIXED_DT;
+      boss.hazardTimer -= rageDt;
       if (boss.hazardTimer <= 0) {
         spawnTwoOfThreeLaneHazards(world, boss, 0.95, 9);
         boss.hazardTimer = 3.1;
       }
 
-      boss.summonTimer -= FIXED_DT;
+      boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'crawler', boss.x - 1.2, boss.z + 2.2);
         spawnEnemy(world, 'crawler', boss.x, boss.z + 1.6);
@@ -468,7 +491,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.lensTimer = 10.5;
       }
 
-      boss.orbTimer -= FIXED_DT;
+      boss.orbTimer -= rageDt;
       if (boss.orbTimer <= 0) {
         spawnHostileOrb(world, boss.x - 0.9, boss.z + 1.5, 0, 18.0, 5);
         spawnHostileOrb(world, boss.x + 0.9, boss.z + 1.5, 0, 18.0, 5);
@@ -478,13 +501,13 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
       boss.x = normalizeZero(3.2 * Math.sin(1.25 * t));
       boss.z = -19.0;
 
-      boss.hazardTimer -= FIXED_DT;
+      boss.hazardTimer -= rageDt;
       if (boss.hazardTimer <= 0) {
         spawnTwoOfThreeLaneHazards(world, boss, 0.85, 10);
         boss.hazardTimer = 2.3;
       }
 
-      boss.summonTimer -= FIXED_DT;
+      boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'crawler', boss.x - 1.3, boss.z + 2.0);
         spawnEnemy(world, 'crawler', boss.x + 1.3, boss.z + 2.0);
@@ -497,7 +520,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.lensTimer = 9.5;
       }
 
-      boss.orbTimer -= FIXED_DT;
+      boss.orbTimer -= rageDt;
       if (boss.orbTimer <= 0) {
         spawnHostileOrb(world, boss.x - 0.95, boss.z + 1.5, 0, 19.0, 5);
         spawnHostileOrb(world, boss.x + 0.95, boss.z + 1.5, 0, 19.0, 5);
@@ -509,7 +532,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
       boss.x = normalizeZero(2.3 * Math.sin(0.95 * t));
       boss.z = BOSS_BASE_Z;
 
-      boss.hazardTimer -= FIXED_DT;
+      boss.hazardTimer -= rageDt;
       if (boss.hazardTimer <= 0) {
         const leftStrike = boss.hazardCycle % 2 === 0;
         boss.hazardCycle += 1;
@@ -517,7 +540,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.hazardTimer = 2.9;
       }
 
-      boss.summonTimer -= FIXED_DT;
+      boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'mitosis', -2.0, boss.z + 2.0);
         spawnEnemy(world, 'mitosis', 2.0, boss.z + 2.0);
@@ -546,7 +569,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.shieldSwapTimer = 3.6;
       }
 
-      boss.hazardTimer -= FIXED_DT;
+      boss.hazardTimer -= rageDt;
       if (boss.hazardTimer <= 0) {
         const casterX = boss.shielded
           ? boss.x
@@ -557,7 +580,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.hazardTimer = 2.5;
       }
 
-      boss.summonTimer -= FIXED_DT;
+      boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'mitosis', -2.1, -17.5);
         spawnEnemy(world, 'mitosis', 2.1, -17.5);
@@ -569,13 +592,13 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
       boss.x = normalizeZero(1.6 * Math.sin(0.75 * t));
       boss.z = -21.0;
 
-      boss.hazardTimer -= FIXED_DT;
+      boss.hazardTimer -= rageDt;
       if (boss.hazardTimer <= 0) {
         spawnTwoOfThreeLaneHazards(world, boss, 0.9, 13);
         boss.hazardTimer = 2.8;
       }
 
-      boss.summonTimer -= FIXED_DT;
+      boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'crawler', -1.8, -17.5);
         spawnEnemy(world, 'crawler', 0.0, -17.5);
@@ -586,13 +609,13 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
       boss.x = normalizeZero(2.9 * Math.sin(1.1 * t));
       boss.z = -19.5;
 
-      boss.hazardTimer -= FIXED_DT;
+      boss.hazardTimer -= rageDt;
       if (boss.hazardTimer <= 0) {
         spawnTwoOfThreeLaneHazards(world, boss, 0.85, 14);
         boss.hazardTimer = 2.6;
       }
 
-      boss.summonTimer -= FIXED_DT;
+      boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'dasher', -2.6, -21.5);
         spawnEnemy(world, 'dasher', 2.6, -21.5);
@@ -605,7 +628,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.lensTimer = 9.2;
       }
 
-      boss.orbTimer -= FIXED_DT;
+      boss.orbTimer -= rageDt;
       if (boss.orbTimer <= 0) {
         spawnHostileOrb(world, boss.x - 1.0, boss.z + 1.5, 0, 19.5, 6);
         spawnHostileOrb(world, boss.x + 1.0, boss.z + 1.5, 0, 19.5, 6);
@@ -615,7 +638,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
       boss.x = normalizeZero(2.6 * Math.sin(1.3 * t));
       boss.z = -15.5;
 
-      boss.hazardTimer -= FIXED_DT;
+      boss.hazardTimer -= rageDt;
       if (boss.hazardTimer <= 0) {
         spawnTwoOfThreeLaneHazards(world, boss, 0.85, 15);
         boss.hazardTimer = 2.4;
@@ -689,6 +712,24 @@ export function checkBossVictory(world: SimWorld, events: SimEvent[]): boolean {
 export function resolveBossAttacks(world: SimWorld, events: SimEvent[]): boolean {
   const boss = world.boss;
   if (boss && boss.active && boss.hp > 0) {
+    if (boss.enrage > 1) {
+      boss.enragePulseTimer -= FIXED_DT;
+      if (boss.enragePulseTimer <= 0) {
+        boss.enragePulseTimer += BOSS_ENRAGE_PULSE_SEC;
+        const before = world.squadCount;
+        world.squadCount = clampSquadCount(before - scaledBossLoss(BOSS_ENRAGE_PULSE_LOSS, before));
+        const lost = before - world.squadCount;
+        if (lost > 0) {
+          events.push({ type: 'SQUAD_LOSS', x: world.squadX, z: PLAYER_Z, lost, reason: 'BOSS_ATTACK' });
+        }
+        if (world.squadCount === 0) {
+          world.phase = 'DEFEAT';
+          world.defeatReason = 'BOSS_ATTACK';
+          events.push({ type: 'RUN_DEFEAT', sector: world.sector, reason: 'BOSS_ATTACK' });
+          return true;
+        }
+      }
+    }
     for (let i = 0; i < boss.hazardZones.length; i++) {
       const zone = boss.hazardZones[i];
       if (!zone || !zone.firing || zone.damageApplied) {
@@ -698,7 +739,7 @@ export function resolveBossAttacks(world: SimWorld, events: SimEvent[]): boolean
       if (Math.abs(world.squadX - zone.x) <= zone.halfWidth + 0.45 * world.formationRadius) {
         zone.damageApplied = true;
         const before = world.squadCount;
-        world.squadCount = clampSquadCount(before - zone.strikeLoss);
+        world.squadCount = clampSquadCount(before - scaledBossLoss(zone.strikeLoss, before));
         const lost = before - world.squadCount;
 
         if (lost > 0) {
@@ -750,7 +791,7 @@ export function resolveBossAttacks(world: SimWorld, events: SimEvent[]): boolean
       world.projectiles.splice(i, 1);
 
       const before = world.squadCount;
-      world.squadCount = clampSquadCount(before - Math.max(1, p.hostileLoss));
+      world.squadCount = clampSquadCount(before - scaledBossLoss(p.hostileLoss, before));
       const lost = before - world.squadCount;
 
       if (lost > 0) {

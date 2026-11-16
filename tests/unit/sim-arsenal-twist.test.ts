@@ -186,7 +186,7 @@ describe('Overclock Vaults, 5 Tactical Weapons, Orbital Bit-Blades & Signature T
     railWorld.projectiles.push(railBolt);
 
     stepWorldFixed(railWorld, { dragDeltaX: 0, keyAxisX: 0 });
-    expect(bastion.hp).toBe(90);
+    expect(bastion.hp).toBe(74); // rail deals 1.8x to bastions
     expect(rearVault.hp).toBe(80);
     expect(rearGate.value).toBe(-2);
 
@@ -216,7 +216,7 @@ describe('Overclock Vaults, 5 Tactical Weapons, Orbital Bit-Blades & Signature T
 
     stepWorldFixed(plasmaWorld, { dragDeltaX: 0, keyAxisX: 0 });
     expect(centerEnemy.hp).toBe(60);
-    expect(sideEnemy.hp).toBe(20);
+    expect(sideEnemy.hp).toBe(14); // plasma splash deals 1.2x to crawlers
     expect(sideVault.hp).toBe(20);
 
     // 4. Cryo exact 150-tick (2.5s) slow expiry ([BUG-SIM-02]) + 45% move slow + 1.25x brittle amp

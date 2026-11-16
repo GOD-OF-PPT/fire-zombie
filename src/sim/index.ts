@@ -39,6 +39,7 @@ export function createSimulation(): SimulationController {
   let accumulator = 0;
   let pendingDragDeltaX = 0;
   let cachedSnapshot: SimSnapshot | null = null;
+  let pendingOverdrive = false;
 
   function invalidateSnapshot(): void {
     cachedSnapshot = null;
@@ -48,6 +49,7 @@ export function createSimulation(): SimulationController {
     startSector(sector: SectorId, mods?: Partial<RunModifiers>): void {
       accumulator = 0;
       pendingDragDeltaX = 0;
+      pendingOverdrive = false;
       // explicit (possibly empty) mods replace the previous run's modifiers
       resetSimWorldForSector(world, sector, mods ?? {});
       invalidateSnapshot();
@@ -72,6 +74,7 @@ export function createSimulation(): SimulationController {
     retry(): void {
       accumulator = 0;
       pendingDragDeltaX = 0;
+      pendingOverdrive = false;
       resetSimWorldForSector(world, world.sector);
       invalidateSnapshot();
     },
@@ -99,7 +102,7 @@ export function createSimulation(): SimulationController {
       const keyAxisX = Number.isFinite(input.keyAxisX)
         ? Math.max(-1, Math.min(1, input.keyAxisX))
         : 0;
-      const events = stepWorldFixed(world, { dragDeltaX, keyAxisX });
+      const events = stepWorldFixed(world, { dragDeltaX, keyAxisX, overdrive: input.overdrive === true });
       invalidateSnapshot();
       return events;
     },
@@ -118,6 +121,7 @@ export function createSimulation(): SimulationController {
         : 0;
 
       pendingDragDeltaX += dragDeltaX;
+      if (input.overdrive === true) pendingOverdrive = true;
       accumulator += clampedWallDt * world.speedMultiplier;
 
       const stepsToRun = Math.floor((accumulator + ACCUMULATOR_EPS) / FIXED_DT);
@@ -141,7 +145,9 @@ export function createSimulation(): SimulationController {
         const stepEvents = stepWorldFixed(world, {
           dragDeltaX: perStepDrag,
           keyAxisX,
+          overdrive: pendingOverdrive,
         });
+        pendingOverdrive = false;
         for (let j = 0; j < stepEvents.length; j++) {
           const ev = stepEvents[j];
           if (ev !== undefined) {

@@ -58,7 +58,7 @@ async function touchDrag(page: Page, dx: number): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?seed=0');
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await expect(page.getByTestId('title-screen')).toBeVisible();
@@ -105,6 +105,21 @@ test('full clear → results → next sector is playable; badge matches true squ
   expect(s2.squad).toBe(3);
   expect(s2.enemies + s2.projectiles).toBe(0);
   await ff(page, 220);
+  await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 20000 });
+  expect((await snap(page)).phase).toBe('VICTORY');
+});
+
+test('sector 4 random corridor stays locked until unlocked, then plays a seeded layout to victory', async ({ page }) => {
+  await expect(page.getByTestId('sector-4')).toHaveClass(/locked/);
+  await page.evaluate(() =>
+    localStorage.setItem('prism-swarm-save-v1', JSON.stringify({ unlocked: 4, cores: 0, upgrades: { squad: 0, power: 0, reso: 0 } })),
+  );
+  await page.goto('/?seed=5');
+  await page.getByTestId('sector-4').click();
+  await page.getByTestId('start-btn').click();
+  await touchDrag(page, 10);
+  expect((await snap(page)).sector).toBe(4);
+  await ff(page, 240);
   await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 20000 });
   expect((await snap(page)).phase).toBe('VICTORY');
 });
@@ -172,7 +187,7 @@ test('workshop purchase spends cores and boosts the next run', async ({ page }) 
   await page.getByTestId('workshop-btn').click();
   await page.getByTestId('buy-squad').click();
   const save = await page.evaluate(() => JSON.parse(localStorage.getItem('prism-swarm-save-v1')!));
-  expect(save.cores).toBe(40);
+  expect(save.cores).toBe(50); // 100 − 50 (先遣编队 Lv1 cost)
   expect(save.upgrades.squad).toBe(1);
   await page.getByTestId('workshop-close').click();
   await page.getByTestId('start-btn').click();

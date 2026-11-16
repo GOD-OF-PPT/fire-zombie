@@ -66,6 +66,9 @@ export class UI {
   private scoreEl!: HTMLElement;
   private resoFill!: HTMLElement;
   private resoWrap!: HTMLElement;
+  private resoLabel!: HTMLElement;
+  private resoReady = false;
+  onOverdrive: (() => void) | null = null;
   private comboEl!: HTMLElement;
   private hintEl!: HTMLElement;
   private muteBtns: HTMLElement[] = [];
@@ -147,7 +150,7 @@ export class UI {
         <div class="score" data-testid="score">0</div>
       </div>
       <div class="squad-badge" data-testid="squad-count"><span class="sq-icon">◆</span><span class="sq-num">1</span></div>
-      <div class="reso" data-testid="resonance"><div class="reso-fill"></div><span>共鸣</span></div>
+      <div class="reso" data-testid="resonance" data-ui-block="1"><div class="reso-fill"></div><span>共鸣</span></div>
       <div class="combo"></div>
       <div class="hint" data-testid="drag-hint"><div class="hand">👆</div><div>左右拖动控制蜂群</div></div>`;
     this.root.appendChild(this.hud);
@@ -164,6 +167,11 @@ export class UI {
     this.squadNum = this.hud.querySelector('.sq-num')!;
     this.resoFill = this.hud.querySelector('.reso-fill')!;
     this.resoWrap = this.hud.querySelector('.reso')!;
+    this.resoLabel = this.resoWrap.querySelector('span')!;
+    this.resoWrap.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.onOverdrive?.();
+    });
     this.comboEl = this.hud.querySelector('.combo')!;
     this.hintEl = this.hud.querySelector('.hint')!;
     this.hud.querySelector('.pause-btn')!.addEventListener('click', () => this.cb.onPause());
@@ -214,8 +222,8 @@ export class UI {
           <li><i class="hi vault">⬢</i><div><b>能量舱</b>击破获得新武器：散射 / 穿透 / 爆破 / 冰冻 / 环轨刃，重复获得会升级</div></li>
           <li><i class="hi barrel">◉</i><div><b>电容桶</b>射爆后范围爆炸，可连锁，还会提升附近金框门数值</div></li>
           <li><i class="hi lens">✦</i><div><b>棱镜</b>子弹穿过会一分为二并增伤，站在棱镜后方输出翻倍</div></li>
-          <li><i class="hi reso">⚡</i><div><b>共鸣槽</b>改善门、破舱、连锁会充能，满后进入 6 秒超载：射速 ×1.5 + 穿透</div></li>
-          <li><i class="hi boss">☠</i><div><b>首领</b>：地面红区填满时会轰击，移到安全车道；蜂群越大、武器越强，击杀越快</div></li>
+          <li><i class="hi reso">⚡</i><div><b>共鸣槽</b>改善门、破舱、连锁会充能，满后点击共鸣槽或按空格，进入 6 秒超载：射速 ×1.5 + 穿透</div></li>
+          <li><i class="hi boss">☠</i><div><b>首领</b>：地面红区填满时会轰击，移到安全车道；蜂群越大、武器越强，击杀越快；拖太久首领会狂暴，持续吞噬蜂群</div></li>
         </ul>
         <button class="big-btn" data-testid="help-close">明白了</button>
       </div>`;
@@ -295,7 +303,7 @@ export class UI {
   private renderSectorList(save: SaveData): void {
     const list = this.title.querySelector('.sector-list')!;
     list.innerHTML = '';
-    for (const id of [1, 2, 3] as SectorId[]) {
+    for (const id of [1, 2, 3, 4] as SectorId[]) {
       const meta = SECTOR_META[id];
       const rec = save.records[id];
       const locked = id > save.unlocked;
@@ -411,6 +419,12 @@ export class UI {
     const od = snap.overdriveTimer > 0;
     this.resoFill.style.width = `${(snap.resonance * 100).toFixed(1)}%`;
     this.resoWrap.classList.toggle('od', od);
+    const ready = !od && snap.resonance >= 0.999;
+    if (ready !== this.resoReady) {
+      this.resoReady = ready;
+      this.resoWrap.classList.toggle('ready', ready);
+      this.resoLabel.textContent = ready ? '点击 / 空格 超载' : '共鸣';
+    }
     this.root.classList.toggle('overdrive', od);
 
     const b = snap.boss;
@@ -418,7 +432,9 @@ export class UI {
       this.bossBar.classList.add('show');
       this.progressWrap.classList.add('hide');
       const meta = BOSS_META[b.id];
-      this.bossName.textContent = `${meta.name}《${meta.title}》`;
+      const enraged = (b.enrage ?? 1) > 1;
+      this.bossName.textContent = `${meta.name}《${meta.title}》${enraged ? ' · 狂暴' : ''}`;
+      this.bossBar.classList.toggle('enraged', enraged);
       this.bossPhase.innerHTML = Array.from({ length: b.maxPhases }, (_, i) => `<i class="${i < b.phase ? 'on' : ''}"></i>`).join('');
       this.bossFill.style.width = `${Math.max(0, (b.hp / b.maxHp) * 100).toFixed(2)}%`;
       this.bossBar.classList.toggle('shielded', b.shielded && !b.secondaryCore);
@@ -584,7 +600,7 @@ export class UI {
         ${r.victory ? `<div class="r-goal">★★ 剩余 ≥ ${meta.starSquad[0]}　★★★ 剩余 ≥ ${meta.starSquad[1]}</div>` : ''}
         <div class="r-btns">
           ${r.hasNext ? '<button class="big-btn" data-testid="next-btn">下一关 ▶</button>' : ''}
-          <button class="${r.hasNext ? 'mid-btn' : 'big-btn'}" data-testid="retry-btn">${r.victory ? '再战一次' : '重新挑战'}</button>
+          <button class="${r.hasNext ? 'mid-btn' : 'big-btn'}" data-testid="retry-btn">${r.victory ? (r.sector === 4 ? '新布局再战' : '再战一次') : '重新挑战'}</button>
           <button class="mid-btn ghost" data-testid="result-home-btn">返回主页</button>
         </div>
       </div>`;

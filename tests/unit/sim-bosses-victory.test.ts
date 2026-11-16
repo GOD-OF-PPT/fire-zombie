@@ -77,9 +77,9 @@ describe('Multi-Phase Boss State Machines (Warden-01, Hydra-02, Omega-Zero) & St
     expect(sawSafeLane).toBe(true);
     expect(world.lenses.length).toBeGreaterThanOrEqual(1);
 
-    // Drop HP <= 50% (<= 2800) -> triggers BOSS_PHASE_BREAK (phase: 2) and spawns standalone shootable gate (-2 -> +8)
+    // Drop HP <= 50% -> triggers BOSS_PHASE_BREAK (phase: 2) and spawns standalone shootable gate (-2 -> +8)
     const breakEvents: SimEvent[] = [];
-    damageBossCore(world, false, 3000, breakEvents);
+    damageBossCore(world, false, Math.ceil(boss.maxHp * 0.5) + 200, breakEvents);
     expect(boss.phase).toBe(2);
     expect(breakEvents.some((e) => e.type === 'BOSS_PHASE_BREAK' && e.phase === 2)).toBe(true);
     expect(world.gates.length).toBe(1);
@@ -94,9 +94,9 @@ describe('Multi-Phase Boss State Machines (Warden-01, Hydra-02, Omega-Zero) & St
     expect(boss.id).toBe('hydra_02');
     expect(boss.secondaryCore).toBeNull();
 
-    // Push into Phase 2 (<= 50% of 22000 HP)
+    // Push into Phase 2 (<= 50% HP)
     const phaseEvents: SimEvent[] = [];
-    damageBossCore(world, false, 11500, phaseEvents);
+    damageBossCore(world, false, Math.ceil(boss.maxHp * 0.5) + 500, phaseEvents);
     expect(boss.phase).toBe(2);
     expect(phaseEvents.some((e) => e.type === 'BOSS_PHASE_BREAK' && e.phase === 2)).toBe(true);
     expect(boss.secondaryCore).not.toBeNull();
@@ -137,13 +137,13 @@ describe('Multi-Phase Boss State Machines (Warden-01, Hydra-02, Omega-Zero) & St
 
     // Direct core shot while shielded deals 0 damage
     damageBossCore(world, false, 1000, []);
-    expect(boss.hp).toBe(31000);
+    expect(boss.hp).toBe(boss.maxHp);
 
-    // Break Pylon 1 -> deals 18% stun chunk (5580), upgrades weapon level & mastery, still Phase 1 until Pylon 2 breaks
+    // Break Pylon 1 -> deals 18% stun chunk, upgrades weapon level & mastery, still Phase 1 until Pylon 2 breaks
     const p1Events: SimEvent[] = [];
     damageBossPylon(world, boss.pylons[0]!, 4000, p1Events);
     expect(boss.pylons[0]!.destroyed).toBe(true);
-    expect(boss.hp).toBe(31000 - Math.ceil(31000 * 0.18));
+    expect(boss.hp).toBe(boss.maxHp - Math.ceil(boss.maxHp * 0.18));
     expect(world.weaponLevel).toBe(2);
     expect(world.masteryCount).toBe(1);
     expect(boss.phase).toBe(1);
@@ -270,5 +270,31 @@ describe('Multi-Phase Boss State Machines (Warden-01, Hydra-02, Omega-Zero) & St
     // Remaining hostile orbs and enemies are purged on victory
     expect(world.projectiles.some((p) => p.hostile)).toBe(false);
     expect(world.enemies.length).toBe(0);
+  });
+
+  it('enrages once the fight overruns its threshold: timers speed up and the core pulses for unavoidable losses', () => {
+    const lossOver = (startAt: number) => {
+      const { world } = createBossArenaWorld(1);
+      const boss = world.boss!;
+      boss.fightElapsed = startAt;
+      world.squadCount = 100;
+      reconcileFormationAndDps(world);
+      let lost = 0;
+      for (let i = 0; i < 300; i++) {
+        boss.hazardTimer = boss.summonTimer = boss.orbTimer = 999;
+        for (const e of stepWorldFixed(world, { dragDeltaX: 0, keyAxisX: 0 })) {
+          if (e.type === 'SQUAD_LOSS' && e.reason === 'BOSS_ATTACK') lost += e.lost;
+        }
+      }
+      return { lost, enrage: boss.enrage };
+    };
+    const threshold = 11; // SECTORS[1].boss.enrageAfterSec
+    const calm = lossOver(0);
+    expect(calm.enrage).toBe(1);
+    expect(calm.lost).toBe(0);
+    const raged = lossOver(threshold + 4);
+    expect(raged.enrage).toBeGreaterThan(1);
+    expect(raged.enrage).toBeLessThanOrEqual(2);
+    expect(raged.lost).toBeGreaterThan(0);
   });
 });

@@ -25,7 +25,7 @@ import {
   PLAYER_Z,
   TRACK_HALF_WIDTH,
 } from '../config/constants';
-import { SECTORS } from '../config/sectors';
+import { SECTORS, getSectorScript } from '../config/sectors';
 import { stepChainExplosions } from './barrels';
 import {
   applyBarrelBlastToBoss,
@@ -50,7 +50,8 @@ import {
   computeTrueSquadDps,
   normalizeZero,
 } from './math';
-import { spawnReadyRunwayEncounters, stepTrackAndSpawner } from './spawner';
+import { computeMirrorFlags, spawnReadyRunwayEncounters, stepTrackAndSpawner } from './spawner';
+import { tryStartManualOverdrive } from './resonance';
 import { stepProjectilesAndAutoFire } from './weapons';
 
 export function reconcileFormationAndDps(world: SimWorld): void {
@@ -147,6 +148,8 @@ export function createSimWorld(): SimWorld {
     currentScrollSpeed: 0,
     runwayProgress: 0,
     spawnCursor: 0,
+    script: SECTORS[1],
+    mirrorFlags: [],
     bossSpawned: false,
 
     prevSquadX: 0,
@@ -204,6 +207,8 @@ export function createSimWorld(): SimWorld {
 export function resetSimWorldToTitle(world: SimWorld): void {
   world.sector = 1;
   world.mods = { bonusSquad: 0, damageMult: 1, resonanceMult: 1 };
+  world.script = SECTORS[1];
+  world.mirrorFlags = [];
   clearCoreRunFields(world, 1);
   world.phase = 'TITLE';
 }
@@ -213,15 +218,20 @@ export function resetSimWorldForSector(
   sector: SectorId,
   mods?: Partial<RunModifiers>,
 ): void {
-  const sectorCfg = SECTORS[sector];
   world.sector = sector;
   if (mods) {
     world.mods = {
       bonusSquad: Math.max(0, Math.floor(mods.bonusSquad ?? 0)),
       damageMult: Math.max(1, mods.damageMult ?? 1),
       resonanceMult: Math.max(1, mods.resonanceMult ?? 1),
+      manualOverdrive: mods.manualOverdrive === true,
+      layoutSeed: Math.max(0, Math.floor(mods.layoutSeed ?? 0)),
+      bossHpMult: Math.max(1, mods.bossHpMult ?? 1),
     };
   }
+  const sectorCfg = getSectorScript(sector, world.mods.layoutSeed ?? 0);
+  world.script = sectorCfg;
+  world.mirrorFlags = computeMirrorFlags(sectorCfg.encounters, world.mods.layoutSeed ?? 0, sector);
   clearCoreRunFields(world, sectorCfg.startSquad + world.mods.bonusSquad);
   world.phase = 'PLAYING';
   world.currentScrollSpeed = sectorCfg.scrollSpeed;
@@ -429,6 +439,9 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
   const rawSquadX =
     world.squadX + input.dragDeltaX + input.keyAxisX * KEYBOARD_MOVE_SPEED * FIXED_DT;
   world.squadX = clampSquadX(rawSquadX, world.formationRadius);
+  if (input.overdrive === true) {
+    tryStartManualOverdrive(world, events);
+  }
 
   // Step 2: Track & Spawner
   stepTrackAndSpawner(world, events);
@@ -639,6 +652,7 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       hazardZones,
       hitPulse: b.hitPulse,
       introProgress: b.introProgress,
+      enrage: b.enrage,
     };
   }
 

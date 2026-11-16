@@ -142,6 +142,8 @@ button {
 .sc-num { font-size: 26px; color: var(--cyan); width: 40px; }
 .s2 .sc-num { color: #ff4fd8; }
 .s3 .sc-num { color: var(--gold); }
+.sector-card.s4.sel { box-shadow: inset 0 0 0 3px #7dff9a, 0 0 22px rgba(125, 255, 154, 0.35); }
+.s4 .sc-num { color: #7dff9a; }
 .sc-body { flex: 1; }
 .sc-name { font-size: 18px; }
 .sc-boss { font-size: 12px; color: #9fb6d8; font-family: system-ui, sans-serif; font-weight: 700; margin-top: 2px; }
@@ -186,6 +188,9 @@ button {
 .boss-track { height: 14px; border-radius: 7px; background: rgba(0, 0, 0, 0.6); box-shadow: inset 0 0 0 2px rgba(255, 59, 92, 0.6); overflow: hidden; }
 .boss-fill { height: 100%; background: linear-gradient(90deg, #ff2a55, #ff9a3c); transition: width 0.12s; box-shadow: 0 0 10px #ff2a55; }
 .boss-bar.shielded .boss-fill { background: linear-gradient(90deg, #6fd8ff, #c9f6ff); }
+.boss-bar.enraged .boss-track { animation: boss-enrage 0.6s ease-in-out infinite alternate; }
+.boss-bar.enraged .boss-name { color: #ff6a3c; }
+@keyframes boss-enrage { from { box-shadow: inset 0 0 0 2px rgba(255, 59, 92, 0.6); } to { box-shadow: inset 0 0 0 2px #ff6a3c, 0 0 14px #ff2a55; } }
 
 .hud-row { position: absolute; top: calc(max(10px, env(safe-area-inset-top)) + 50px); left: 10px; right: 10px; display: flex; justify-content: space-between; align-items: flex-start; }
 .chips { display: flex; flex-direction: column; gap: 6px; }
@@ -235,6 +240,8 @@ button {
 }
 .reso-fill { height: 100%; width: 0; background: linear-gradient(90deg, #ffe36b, #fff); box-shadow: 0 0 10px #fff36b; transition: width 0.2s; }
 .reso span { position: absolute; inset: 0; text-align: center; font-size: 10px; line-height: 14px; color: #000; mix-blend-mode: screen; color: #fff; letter-spacing: 4px; text-shadow: 0 0 3px #000; }
+.reso.ready { pointer-events: auto; cursor: pointer; height: 22px; border-radius: 11px; animation: odPulse 0.5s infinite alternate; box-shadow: 0 0 16px #fff36b; }
+.reso.ready span { line-height: 22px; font-size: 12px; letter-spacing: 2px; }
 .reso.od { animation: odPulse 0.25s infinite alternate; box-shadow: 0 0 18px #fff36b, inset 0 0 0 2px #fff36b; }
 @keyframes odPulse { to { filter: brightness(1.6); } }
 .ui.overdrive .hud::after {

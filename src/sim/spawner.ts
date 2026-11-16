@@ -1,6 +1,6 @@
 import type { SimEvent } from '../types/game';
 import { FIXED_DT, HORIZON_AHEAD, PLAYER_Z } from '../config/constants';
-import { SECTORS, type RunwayEncounter } from '../config/sectors';
+import type { RunwayEncounter } from '../config/sectors';
 import { spawnBarrel } from './barrels';
 import { spawnSectorBoss } from './bosses';
 import { spawnEnemy } from './enemies';
@@ -80,15 +80,76 @@ function spawnEncounter(world: SimWorld, enc: RunwayEncounter, scrollSpeed: numb
   }
 }
 
+function mirrorEncounter(enc: RunwayEncounter): RunwayEncounter {
+  switch (enc.type) {
+    case 'gate_row': {
+      const siphon = enc.tetheredSiphon;
+      return {
+        type: 'gate_row',
+        crossDist: enc.crossDist,
+        layout: enc.layout,
+        ...(enc.dividerX !== undefined ? { dividerX: -enc.dividerX } : {}),
+        ...(enc.right ? { left: enc.right } : {}),
+        ...(enc.left ? { right: enc.left } : {}),
+        ...(enc.single ? { single: { ...enc.single, x: -enc.single.x } } : {}),
+        ...(siphon
+          ? {
+              tetheredSiphon: {
+                ...siphon,
+                side: siphon.side === 'left' ? 'right' : siphon.side === 'right' ? 'left' : 'single',
+              },
+            }
+          : {}),
+      };
+    }
+    case 'vault':
+      return { ...enc, x: -enc.x };
+    case 'lens':
+      return { ...enc, x: -enc.x };
+    case 'enemies':
+      return { ...enc, units: enc.units.map((u) => ({ ...u, x: -u.x })) };
+    case 'barrels':
+      return { ...enc, placements: enc.placements.map((p) => ({ ...p, x: -p.x })) };
+  }
+}
+
+/**
+ * Mirrors whole segments (a gate row plus the encounters leading up to it) so each authored
+ * setup stays intact while the safe side varies per run. Seed 0 keeps the authored layout.
+ */
+export function computeMirrorFlags(
+  encounters: readonly RunwayEncounter[],
+  seed: number,
+  sector: number,
+): boolean[] {
+  if (!seed) return [];
+  let state = (seed ^ Math.imul(sector, 0x9e3779b1)) >>> 0;
+  const next = (): number => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const flags: boolean[] = [];
+  let flip = next() < 0.5;
+  for (let i = 0; i < encounters.length; i++) {
+    flags.push(flip);
+    if (encounters[i]?.type === 'gate_row') flip = next() < 0.5;
+  }
+  return flags;
+}
+
 export function spawnReadyRunwayEncounters(world: SimWorld): void {
-  const sectorCfg = SECTORS[world.sector];
+  const sectorCfg = world.script;
   const encounters = sectorCfg.encounters;
 
   while (world.spawnCursor < encounters.length) {
     const enc = encounters[world.spawnCursor];
     if (!enc) break;
     if (enc.crossDist <= world.scrollDistance + HORIZON_AHEAD) {
-      spawnEncounter(world, enc, sectorCfg.scrollSpeed);
+      const mirrored = world.mirrorFlags[world.spawnCursor] === true;
+      spawnEncounter(world, mirrored ? mirrorEncounter(enc) : enc, sectorCfg.scrollSpeed);
       world.spawnCursor += 1;
     } else {
       break;
@@ -103,7 +164,7 @@ export function spawnReadyRunwayEncounters(world: SimWorld): void {
 export function stepTrackAndSpawner(world: SimWorld, events: SimEvent[]): void {
   world.simTime += FIXED_DT;
 
-  const sectorCfg = SECTORS[world.sector];
+  const sectorCfg = world.script;
   if (world.scrollDistance < sectorCfg.runwayLength) {
     const remaining = sectorCfg.runwayLength - world.scrollDistance;
     // Smooth arrival deceleration over final 20u into Boss Arena

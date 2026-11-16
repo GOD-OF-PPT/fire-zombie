@@ -1,4 +1,4 @@
-import type { WeaponId } from '../types/game';
+import type { EnemyKind, WeaponId } from '../types/game';
 
 export interface WeaponLevelStats {
   readonly level: 1 | 2 | 3;
@@ -268,6 +268,19 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
     ],
   },
 };
+
+/** Per-enemy damage multipliers so each weapon is the clear answer to one threat. */
+export const WEAPON_COUNTER_MULT: Readonly<Record<WeaponId, Partial<Record<EnemyKind, number>>>> = {
+  pulse: { siphon: 1.5 },
+  scatter: { crawler: 1.4, mitosis: 1.3 },
+  rail: { bastion: 1.8 },
+  plasma: { mitosis: 1.6, crawler: 1.2 },
+  cryo: { dasher: 1.6 },
+};
+
+export function getWeaponCounterMult(weapon: WeaponId, kind: EnemyKind): number {
+  return WEAPON_COUNTER_MULT[weapon][kind] ?? 1;
+}
 
 export function getWeaponLevelStats(weapon: WeaponId, level: 1 | 2 | 3): WeaponLevelStats {
   const idx = level === 3 ? 2 : level === 2 ? 1 : 0;

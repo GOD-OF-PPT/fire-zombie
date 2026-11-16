@@ -30,6 +30,7 @@ function defaults(): SaveData {
       1: { stars: 0, score: 0, cleared: false },
       2: { stars: 0, score: 0, cleared: false },
       3: { stars: 0, score: 0, cleared: false },
+      4: { stars: 0, score: 0, cleared: false },
     },
     muted: false,
     seenHints: [],
@@ -49,9 +50,9 @@ export function loadSave(): SaveData {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(KEY) : null;
     if (!raw) return base;
     const parsed = JSON.parse(raw) as Partial<SaveData>;
-    const unlocked = parsed.unlocked === 2 || parsed.unlocked === 3 ? parsed.unlocked : 1;
+    const unlocked = parsed.unlocked === 2 || parsed.unlocked === 3 || parsed.unlocked === 4 ? parsed.unlocked : 1;
     const records = { ...base.records };
-    for (const id of [1, 2, 3] as SectorId[]) {
+    for (const id of [1, 2, 3, 4] as SectorId[]) {
       const r = parsed.records?.[id];
       if (r) {
         records[id] = {

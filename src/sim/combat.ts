@@ -1,3 +1,4 @@
+import { getWeaponCounterMult } from '../config/weapons';
 import type { SimEvent } from '../types/game';
 import { applyBarrelBlastToBoss, damageBossCore, damageBossPylon } from './bosses';
 import { damageBarrel } from './barrels';
@@ -58,7 +59,7 @@ function applyPlasmaSplash(
       continue;
     }
     if (Math.hypot(enemy.x - hitX, enemy.z - hitZ) <= splashR + enemy.radius) {
-      damageEnemy(world, enemy, splashDamage, proj.cryoSlowDuration, events);
+      damageEnemy(world, enemy, splashDamage * getWeaponCounterMult(proj.weapon, enemy.kind), proj.cryoSlowDuration, events);
     }
   }
 
@@ -426,7 +427,7 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
           const enemy = world.enemies[cand.index];
           if (enemy && enemy.active && !enemy.consumed && !enemy.bypassed && enemy.hp > 0) {
             proj.hitIds.add(cand.targetId);
-            damageEnemy(world, enemy, proj.damage, proj.cryoSlowDuration, events);
+            damageEnemy(world, enemy, proj.damage * getWeaponCounterMult(proj.weapon, enemy.kind), proj.cryoSlowDuration, events);
             solidHitApplied = true;
           }
         } else if (cand.kind === 'gate') {

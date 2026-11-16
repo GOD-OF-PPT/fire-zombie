@@ -1,6 +1,7 @@
 import { createSimulation } from '../sim/index';
 import type { NonNullDefeatReason, SectorId, SimEvent, SimSnapshot, SimulationController } from '../types/game';
 import { PLAYER_Z } from '../config/constants';
+import { getSectorScript } from '../config/sectors';
 import { Renderer, WEAPON_COLOR } from '../render/Renderer';
 import { UI, type ResultData } from '../ui/UI';
 import { InputController } from '../input/InputController';
@@ -43,6 +44,7 @@ export class Game {
   private readyTimer = 0;
   private outroTimer = 0;
   private pendingResult: ResultData | null = null;
+  private fixedLayoutSeed: number | null = null;
   private combo = 0;
   private maxCombo = 0;
   private bossLoss = 0;
@@ -58,7 +60,9 @@ export class Game {
   constructor(private readonly stage: HTMLElement, canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
     const params = new URLSearchParams(location.search);
     this.autoplay = params.get('autoplay') === '1';
-    if (params.get('unlock') === '1') this.save.unlocked = 3;
+    if (params.get('unlock') === '1') this.save.unlocked = 4;
+    const seedParam = params.get('seed');
+    if (seedParam !== null) this.fixedLayoutSeed = Math.max(0, Math.floor(Number(seedParam) || 0));
 
     this.renderer = new Renderer(canvas);
     this.input = new InputController(stage);
@@ -68,7 +72,7 @@ export class Game {
       onResume: () => this.resume(),
       onRetry: () => this.startRun(this.sector),
       onHome: () => this.toTitle(),
-      onNext: () => this.startRun(Math.min(3, this.sector + 1) as SectorId),
+      onNext: () => this.startRun(Math.min(4, this.sector + 1) as SectorId),
       onToggleMute: () => this.toggleMute(),
       onBuy: (id) => this.buyUpgrade(id),
     });
@@ -77,6 +81,7 @@ export class Game {
     void this.renderer.assetsReady.then(() => {
       if (this.renderer.modelSource === 'procedural') this.ui.toast('模型加载失败，已切换为<b>简化模型</b>', 5000);
     });
+    this.ui.onOverdrive = () => this.input.requestOverdrive();
     this.input.onPauseKey = () => {
       if (this.state === 'playing') this.pause();
       else if (this.state === 'paused') this.resume();
@@ -111,7 +116,7 @@ export class Game {
 
     const startSector = Number(params.get('sector'));
     if (params.get('play') === '1' || this.autoplay) {
-      this.startRun((startSector === 2 || startSector === 3 ? startSector : 1) as SectorId);
+      this.startRun((startSector >= 2 && startSector <= 4 ? startSector : 1) as SectorId);
     }
   }
 
@@ -165,7 +170,12 @@ export class Game {
     this.renderer.resetRun();
     this.renderer.setSector(sector);
     this.sim.setSpeedMultiplier(1);
-    this.sim.startSector(sector, runModsFromUpgrades(this.save.upgrades));
+    const layoutSeed = this.fixedLayoutSeed ?? 1 + Math.floor(Math.random() * 0x7ffffffe);
+    this.sim.startSector(sector, {
+      ...runModsFromUpgrades(this.save.upgrades),
+      manualOverdrive: true,
+      layoutSeed,
+    });
     this.lastSnap = this.sim.getSnapshot();
     this.input.reset();
     this.ui.hideTitle();
@@ -177,7 +187,8 @@ export class Game {
     this.readyTimer = 0;
     this.ui.showDragHint(true);
     const meta = SECTOR_META[sector];
-    this.ui.showBanner(`<div class="b-kicker">${meta.subtitle}</div><div class="b-title">${meta.name}</div><div class="b-sub">首领 · ${meta.bossTitle}</div>`, 'intro', 1800);
+    const bossLine = sector === 4 ? `首领 · ${BOSS_META[getSectorScript(sector, layoutSeed).boss.id].title} · 布局 #${layoutSeed}` : `首领 · ${meta.bossTitle}`;
+    this.ui.showBanner(`<div class="b-kicker">${meta.subtitle}</div><div class="b-title">${meta.name}</div><div class="b-sub">${bossLine}</div>`, 'intro', 1800);
     this.input.onFirstInput = () => this.beginPlay();
     this.audio.setMusic(sector, 1);
   }
@@ -255,7 +266,8 @@ export class Game {
         const pre = this.sim.getSnapshot();
         const drag = this.autoplay ? autopilotDrag(pre) : this.input.consumeDrag();
         const axis = this.autoplay ? 0 : this.input.keyAxis;
-        const events = this.sim.tickFrame(dt, { dragDeltaX: drag, keyAxisX: axis });
+        const overdrive = this.input.consumeOverdrive() || this.autoplay;
+        const events = this.sim.tickFrame(dt, { dragDeltaX: drag, keyAxisX: axis, overdrive });
         snap = this.sim.getSnapshot();
         this.handleEvents(events, snap, true);
         this.liveChecks(snap, dt);
@@ -556,7 +568,7 @@ export class Game {
     if (victory) {
       rec.cleared = true;
       rec.stars = Math.max(rec.stars, stars);
-      if (this.sector < 3) this.save.unlocked = Math.max(this.save.unlocked, this.sector + 1) as SectorId;
+      if (this.sector < 4) this.save.unlocked = Math.max(this.save.unlocked, this.sector + 1) as SectorId;
     }
     rec.score = Math.max(rec.score, this.score);
     writeSave(this.save);
@@ -568,7 +580,7 @@ export class Game {
       best: rec.score,
       newBest: newBest && this.score > 0,
       reason,
-      hasNext: victory && this.sector < 3,
+      hasNext: victory && this.sector < 4,
       progress: snap.runwayProgress,
       bossHpFrac: !victory && snap.boss ? Math.max(0, Math.min(1, snap.boss.hp / snap.boss.maxHp)) : null,
       maxCombo: this.maxCombo,
@@ -611,7 +623,7 @@ export class Game {
     for (let i = 0; i < steps; i++) {
       const s = this.sim.getSnapshot();
       if (s.phase !== 'PLAYING') break;
-      const events = this.sim.stepFixed({ dragDeltaX: useAutopilot ? autopilotDrag(s) : 0, keyAxisX: 0 });
+      const events = this.sim.stepFixed({ dragDeltaX: useAutopilot ? autopilotDrag(s) : 0, keyAxisX: 0, overdrive: useAutopilot });
       this.runTime += 1 / 60;
       this.handleEvents(events, this.sim.getSnapshot(), true);
       this.ui.updateFloats(1 / 60);

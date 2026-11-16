@@ -13,6 +13,7 @@ import type {
   WeaponId,
   RunModifiers,
 } from '../types/game';
+import type { SectorScriptConfig } from '../config/sectors';
 import { EntityPool } from './pool';
 
 export type DasherState = 'APPROACH' | 'TELEGRAPH' | 'DASH';
@@ -228,6 +229,11 @@ export interface SimBossState {
   hitPulse: number;
   introProgress: number;
   phaseElapsed: number;
+  /** Seconds since the intro finished, across phases. */
+  fightElapsed: number;
+  /** Timer-rate multiplier (1 = calm) once the fight overruns its enrage threshold. */
+  enrage: number;
+  enragePulseTimer: number;
   hazardTimer: number;
   hazardCycle: number;
   summonTimer: number;
@@ -249,6 +255,10 @@ export interface SimWorld {
   currentScrollSpeed: number;
   runwayProgress: number;
   spawnCursor: number;
+  /** Runway script for this run (sector 4 is generated from the layout seed). */
+  script: SectorScriptConfig;
+  /** Per-encounter mirror flags for this run (empty = authored layout). */
+  mirrorFlags: boolean[];
   bossSpawned: boolean;
 
   prevSquadX: number;

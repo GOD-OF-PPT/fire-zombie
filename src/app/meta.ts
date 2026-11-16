@@ -12,11 +12,11 @@ export interface RewardMeta {
 }
 
 export const REWARD_META: Record<RewardId, RewardMeta> = {
-  pulse: { name: '棱光脉冲', short: '连射', desc: '高射速直线弹幕', color: '#3ef3ff', glyph: '❙❙' },
-  scatter: { name: '折射散弹', short: '散射', desc: '扇形弹幕，清理成群小怪', color: '#7dff6b', glyph: '⋰⋱' },
-  rail: { name: '超导贯穿', short: '穿透', desc: '一发贯穿多个目标，克制排队敌人', color: '#b98cff', glyph: '➤' },
-  plasma: { name: '新星迫击', short: '爆破', desc: '命中后范围爆炸，克制密集敌群', color: '#ff9a3c', glyph: '✹' },
-  cryo: { name: '绝对零度', short: '冰冻', desc: '命中减速并使敌人易伤 +25%', color: '#8fdcff', glyph: '❄' },
+  pulse: { name: '棱光脉冲', short: '连射', desc: '高射速直线弹幕，克制噬能骷髅灵', color: '#3ef3ff', glyph: '❙❙' },
+  scatter: { name: '折射散弹', short: '散射', desc: '扇形弹幕，克制刺球与史莱姆群', color: '#7dff6b', glyph: '⋰⋱' },
+  rail: { name: '超导贯穿', short: '穿透', desc: '贯穿多个目标，对重甲巨魔伤害 ×1.8', color: '#b98cff', glyph: '➤' },
+  plasma: { name: '新星迫击', short: '爆破', desc: '范围爆炸，克制分裂史莱姆', color: '#ff9a3c', glyph: '✹' },
+  cryo: { name: '绝对零度', short: '冰冻', desc: '减速并易伤 +25%，克制烈焰迅龙', color: '#8fdcff', glyph: '❄' },
   blades: { name: '环轨刃', short: '护卫', desc: '环绕旋刃切割近敌，并 +6 名战士', color: '#ffd84a', glyph: '✦' },
 };
 
@@ -75,7 +75,7 @@ export const SECTOR_META: Record<SectorId, SectorMeta> = {
     subtitle: 'SECTOR 01 · OPTICAL TRUNKLINE',
     bossName: 'WARDEN-01',
     bossTitle: '赤焰魔像王',
-    starSquad: [35, 75],
+    starSquad: [60, 140],
     palette: {
       sky: ['#071236', '#143278', '#2a62bd'],
       fog: 0x122a68,
@@ -90,7 +90,7 @@ export const SECTOR_META: Record<SectorId, SectorMeta> = {
     subtitle: 'SECTOR 02 · OVERCLOCK CONDUIT',
     bossName: 'HYDRA-02',
     bossTitle: '双生魔龙',
-    starSquad: [70, 160],
+    starSquad: [80, 165],
     palette: {
       sky: ['#0c0626', '#2b1368', '#7425b5'],
       fog: 0x241058,
@@ -105,7 +105,7 @@ export const SECTOR_META: Record<SectorId, SectorMeta> = {
     subtitle: 'SECTOR 03 · SINGULARITY CORE',
     bossName: 'OMEGA-ZERO',
     bossTitle: '深渊魔王',
-    starSquad: [60, 140],
+    starSquad: [100, 200],
     palette: {
       sky: ['#12050d', '#400d26', '#992042'],
       fog: 0x320b1e,
@@ -113,6 +113,21 @@ export const SECTOR_META: Record<SectorId, SectorMeta> = {
       grid: 0xff476e,
       edge: 0xffcf40,
       accent: 0xffc531,
+    },
+  },
+  4: {
+    name: '随机回廊',
+    subtitle: 'SECTOR 04 · RANDOM CORRIDOR',
+    bossName: '???',
+    bossTitle: '每局随机',
+    starSquad: [150, 300],
+    palette: {
+      sky: ['#03140f', '#0b3b2e', '#1f8a66'],
+      fog: 0x0b3226,
+      track: 0x123a30,
+      grid: 0x3dffb0,
+      edge: 0xb6ff4a,
+      accent: 0x7dff9a,
     },
   },
 };
@@ -154,7 +169,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     glyph: '◆',
     color: '#3ef3ff',
     max: 5,
-    costs: [60, 110, 170, 240, 320],
+    costs: [50, 90, 140, 200, 260],
     effect: (lv) => `开局 +${lv * 2} 名战士`,
   },
   {
@@ -163,8 +178,8 @@ export const UPGRADES: readonly UpgradeDef[] = [
     glyph: '✸',
     color: '#ff9a3c',
     max: 5,
-    costs: [80, 130, 190, 260, 340],
-    effect: (lv) => `伤害 +${lv * 8}%`,
+    costs: [60, 100, 150, 210, 280],
+    effect: (lv) => `伤害 +${lv * 6}%`,
   },
   {
     id: 'reso',
@@ -172,7 +187,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     glyph: '⚡',
     color: '#fff36b',
     max: 5,
-    costs: [50, 90, 140, 200, 270],
+    costs: [40, 70, 110, 160, 220],
     effect: (lv) => `充能 +${lv * 15}%`,
   },
 ];
@@ -180,8 +195,10 @@ export const UPGRADES: readonly UpgradeDef[] = [
 export function runModsFromUpgrades(u: Record<UpgradeId, number>): RunModifiers {
   return {
     bonusSquad: u.squad * 2,
-    damageMult: 1 + u.power * 0.08,
+    damageMult: 1 + u.power * 0.06,
     resonanceMult: 1 + u.reso * 0.15,
+    // Bosses toughen with total workshop level so a maxed workshop does not trivialize the finale.
+    bossHpMult: 1 + (u.squad + u.power + u.reso) * 0.025,
   };
 }
 
@@ -238,5 +255,10 @@ export const SECTOR_CHALLENGES: Record<SectorId, readonly ChallengeDef[]> = {
     { id: 's3-gates', text: '改善 8 扇金框门', reward: 60, check: (r) => r.stats.gatesImproved >= 8 },
     { id: 's3-peak', text: '蜂群峰值 ≥ 200', reward: 60, check: (r) => r.stats.peakSquad >= 200 },
     { id: 's3-boss', text: '首领战损失 ≤ 20 并通关', reward: 90, check: (r) => r.victory && r.bossLoss <= 20 },
+  ],
+  4: [
+    { id: 's4-clear', text: '通关一次随机回廊', reward: 80, check: (r) => r.victory },
+    { id: 's4-vaults', text: '击破 6 个能量舱', reward: 60, check: (r) => r.stats.vaultsCracked >= 6 },
+    { id: 's4-squad', text: '通关时蜂群 ≥ 300', reward: 100, check: (r) => r.victory && r.finalSquad >= 300 },
   ],
 };
