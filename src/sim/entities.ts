@@ -243,10 +243,19 @@ export interface SimBossState {
   barrelTimer: number;
 }
 
+export interface EndlessRunState {
+  wave: number;
+  bossesDefeated: number;
+  completedDistance: number;
+  upgrades: Partial<Record<import('../types/game').EndlessUpgradeId, number>>;
+  offers: import('../types/game').EndlessUpgradeId[];
+}
+
 export interface SimWorld {
   phase: GamePhase;
   mods: RunModifiers;
   sector: SectorId;
+  endless: EndlessRunState | null;
   simTime: number;
   speedMultiplier: 1 | 2;
   nextEntityId: number;

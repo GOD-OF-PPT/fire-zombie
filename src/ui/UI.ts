@@ -1,9 +1,12 @@
-import type { NonNullDefeatReason, RewardId, SectorId, SimSnapshot, WeaponId } from '../types/game';
+import type { EndlessUpgradeId, NonNullDefeatReason, RewardId, SectorId, SimSnapshot, WeaponId } from '../types/game';
+import { getEndlessThreat, PROTOCOLS } from '../config/protocols';
 import { BOSS_META, CORE_GLYPH, SECTOR_CHALLENGES, DEFEAT_META, GAME_TITLE_CN, GAME_TITLE_EN, REWARD_META, SECTOR_META, UPGRADES, type UpgradeId } from '../app/meta';
 import type { SaveData } from '../app/save';
 
 export interface UICallbacks {
   onStart(sector: SectorId): void;
+  onEndless(): void;
+  onProtocol(id: EndlessUpgradeId): void;
   onPause(): void;
   onResume(): void;
   onRetry(): void;
@@ -27,6 +30,13 @@ export interface ResultData {
   /** remaining boss HP fraction when the run ended during the boss fight */
   bossHpFrac: number | null;
   maxCombo: number;
+  endless?: {
+    wave: number;
+    bosses: number;
+    distance: number;
+    bestWave: number;
+    newWaveBest: boolean;
+  };
   challenges: Array<{ text: string; reward: number; done: boolean; isNew: boolean }>;
   cores: { total: number; lines: Array<[string, number]>; balance: number; affordable: boolean };
 }
@@ -48,6 +58,7 @@ export class UI {
   private resultEl!: HTMLElement;
   private helpEl!: HTMLElement;
   private workshopEl!: HTMLElement;
+  private protocolEl: HTMLElement | null = null;
   private lastSave: SaveData | null = null;
   private banner!: HTMLElement;
   private toastEl!: HTMLElement;
@@ -67,6 +78,7 @@ export class UI {
   private resoFill!: HTMLElement;
   private resoWrap!: HTMLElement;
   private resoLabel!: HTMLElement;
+  private endlessHud!: HTMLElement;
   private resoReady = false;
   onOverdrive: (() => void) | null = null;
   private comboEl!: HTMLElement;
@@ -111,6 +123,11 @@ export class UI {
         <div class="tagline">拖动蜂群 · 穿过数字门 · 火力进化 · 击溃首领</div>
       </div>
       <div class="sector-list" data-testid="sector-list"></div>
+      <button class="endless-card locked" data-testid="endless-btn">
+        <span class="endless-icon">∞</span>
+        <span class="endless-body"><b>无尽协议</b><small>无限阶段 · 三选一强化 · 首领轮回</small></span>
+        <span class="endless-go">🔒</span>
+      </button>
       <div class="title-row">
         <div class="core-count" data-testid="core-count"><i>${CORE_GLYPH}</i><b>0</b></div>
         <button class="mid-btn workshop-btn" data-testid="workshop-btn">强化工坊<i class="dot"></i></button>
@@ -119,6 +136,7 @@ export class UI {
       <div class="title-foot">触屏/鼠标拖动 · 键盘 ← → 或 A D · P 暂停</div>`;
     this.root.appendChild(this.title);
     this.title.querySelector('.start-btn')!.addEventListener('click', () => this.cb.onStart(this.selected));
+    this.title.querySelector('[data-testid=endless-btn]')!.addEventListener('click', () => this.cb.onEndless());
     this.title.querySelector('.help-btn')!.addEventListener('click', () => this.showHelp(true));
     this.title.querySelector('.workshop-btn')!.addEventListener('click', () => this.showWorkshop(true));
     const m = this.title.querySelector<HTMLElement>('.mute-btn')!;
@@ -149,6 +167,7 @@ export class UI {
         </div>
         <div class="score" data-testid="score">0</div>
       </div>
+      <div class="endless-hud" data-testid="endless-hud"><b>阶段 1</b><span>首领 0 · 0m</span></div>
       <div class="squad-badge" data-testid="squad-count"><span class="sq-icon">◆</span><span class="sq-num">1</span></div>
       <div class="reso" data-testid="resonance" data-ui-block="1"><div class="reso-fill"></div><span>共鸣</span></div>
       <div class="combo"></div>
@@ -168,6 +187,7 @@ export class UI {
     this.resoFill = this.hud.querySelector('.reso-fill')!;
     this.resoWrap = this.hud.querySelector('.reso')!;
     this.resoLabel = this.resoWrap.querySelector('span')!;
+    this.endlessHud = this.hud.querySelector('.endless-hud')!;
     this.resoWrap.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       this.onOverdrive?.();
@@ -224,6 +244,7 @@ export class UI {
           <li><i class="hi lens">✦</i><div><b>棱镜</b>子弹穿过会一分为二并增伤，站在棱镜后方输出翻倍</div></li>
           <li><i class="hi reso">⚡</i><div><b>共鸣槽</b>改善门、破舱、连锁会充能，满后点击共鸣槽或按空格，进入 6 秒超载：射速 ×1.5 + 穿透</div></li>
           <li><i class="hi boss">☠</i><div><b>首领</b>：地面红区填满时会轰击，移到安全车道；蜂群越大、武器越强，击杀越快；拖太久首领会狂暴，持续吞噬蜂群</div></li>
+          <li><i class="hi reso">∞</i><div><b>无尽协议</b>：可直接进入。每段跑道后都有首领，击破后三选一强化，再进入新战场；保留装备与蜂群，直到全员阵亡</div></li>
         </ul>
         <button class="big-btn" data-testid="help-close">明白了</button>
       </div>`;
@@ -297,6 +318,7 @@ export class UI {
     this.selected = Math.min(save.unlocked, this.selected) as SectorId;
     if (this.selected < 1) this.selected = 1;
     this.renderSectorList(save);
+    this.renderEndless(save);
     this.hideBanner();
   }
 
@@ -327,16 +349,80 @@ export class UI {
     }
   }
 
+  private renderEndless(save: SaveData): void {
+    const button = this.title.querySelector<HTMLButtonElement>('[data-testid=endless-btn]')!;
+    const locked = false;
+    button.classList.toggle('locked', locked);
+    button.disabled = locked;
+    button.querySelector('small')!.textContent = locked
+      ? '通关零号奇点解锁'
+      : save.endless.bestWave > 0
+        ? `最佳 阶段 ${save.endless.bestWave} · ${save.endless.bestScore.toLocaleString('en-US')} 分 · ${Math.round(save.endless.bestTime / 60)} 分钟`
+        : '无限阶段 · 三选一强化 · 首领轮回';
+    button.querySelector('.endless-go')!.textContent = locked ? '🔒' : '出击 ▶';
+  }
+
   hideTitle(): void {
     this.title.classList.remove('show');
+  }
+
+  showProtocols(snap: SimSnapshot): void {
+    const run = snap.endless;
+    if (!run?.offers.length) return;
+    if (!this.protocolEl) {
+      this.protocolEl = el('div', 'screen modal protocol-screen');
+      this.protocolEl.dataset.testid = 'protocol-screen';
+      this.protocolEl.dataset.uiBlock = '1';
+      this.protocolEl.setAttribute('role', 'dialog');
+      this.protocolEl.setAttribute('aria-modal', 'true');
+      this.protocolEl.setAttribute('aria-label', '选择阶段强化');
+      this.root.appendChild(this.protocolEl);
+      this.protocolEl.addEventListener('keydown', (e) => {
+        const buttons = [...this.protocolEl!.querySelectorAll<HTMLButtonElement>('button')];
+        const index = Number(e.key) - 1;
+        if (index >= 0 && index < buttons.length) buttons[index]!.click();
+        if (e.key === 'Tab' && buttons.length) {
+          e.preventDefault();
+          const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+          buttons[(current + (e.shiftKey ? buttons.length - 1 : 1)) % buttons.length]!.focus();
+        }
+      });
+    }
+    const threat = getEndlessThreat(run.wave);
+    const installed = Object.entries(run.upgrades).map(([id, level]) => `${PROTOCOLS[id as EndlessUpgradeId].name} ×${level}`).join(' · ');
+    this.protocolEl.innerHTML = `<div class="panel protocol-panel">
+      <div class="protocol-kicker">STAGE ${run.wave - 1} CLEARED</div>
+      <h2>选择你的进化</h2>
+      <p class="protocol-lead">首领已击破。安装一项协议，继续突破。</p>
+      <div class="protocol-choices">${run.offers.map((id, i) => {
+        const p = PROTOCOLS[id];
+        const level = (run.upgrades[id] ?? 0) + 1;
+        return `<button class="protocol-choice" style="--pc:${p.color}" data-protocol="${id}" data-testid="protocol-${id}">
+          <span class="protocol-glyph">${p.glyph}</span><span class="protocol-copy"><small>${p.tag} · Lv.${level}</small><b>${p.name}</b><span>${p.description}</span></span><i>${i + 1}</i>
+        </button>`;
+      }).join('')}</div>
+      <div class="protocol-next"><span>下一战场 / 阶段 ${run.wave}</span><b>${threat.glyph} ${threat.name}</b><small>${threat.description}</small></div>
+      ${installed ? `<div class="protocol-installed">已安装：${installed}</div>` : ''}
+      <div class="protocol-note">选择后继续 · 强化仅本局有效 · 键盘 1 / 2 / 3</div>
+    </div>`;
+    this.protocolEl.querySelectorAll<HTMLButtonElement>('[data-protocol]').forEach((b) => {
+      b.addEventListener('click', () => this.cb.onProtocol(b.dataset.protocol as EndlessUpgradeId));
+    });
+    this.protocolEl.classList.add('show');
+    this.protocolEl.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+  }
+
+  hideProtocols(): void {
+    this.protocolEl?.classList.remove('show');
   }
 
   showHelp(v: boolean): void {
     this.helpEl.classList.toggle('show', v);
   }
 
-  showHud(sector: SectorId): void {
+  showHud(sector: SectorId, endless = false): void {
     this.hud.classList.add('show');
+    this.hud.classList.toggle('endless', endless);
     this.hud.dataset.sector = String(sector);
     this.bossBar.classList.remove('show');
     this.progressWrap.classList.remove('hide');
@@ -367,7 +453,7 @@ export class UI {
       this.pauseEl.querySelector('.pause-info')!.innerHTML = `
         <div><span>蜂群</span><b>${snap.squadCount}</b></div>
         <div><span>武器</span><b style="color:${w.color}">${w.name} Lv${snap.weaponLevel}</b></div>
-        <div><span>进度</span><b>${Math.round(snap.runwayProgress * 100)}%</b></div>`;
+        <div><span>${snap.endless ? '无尽阶段' : '进度'}</span><b>${snap.endless ? `${snap.endless.wave} · ${Math.round(snap.endless.distance)}m` : `${Math.round(snap.runwayProgress * 100)}%`}</b></div>`;
     }
   }
 
@@ -395,6 +481,10 @@ export class UI {
       this.squadBadge.classList.toggle('t3', snap.squadCount >= 100);
     }
     this.progressFill.style.width = `${(snap.runwayProgress * 100).toFixed(1)}%`;
+    if (snap.endless) {
+      this.endlessHud.querySelector('b')!.textContent = `阶段 ${snap.endless.wave} · ${getEndlessThreat(snap.endless.wave).name}`;
+      this.endlessHud.querySelector('span')!.textContent = `首领 ${snap.endless.bosses} · ${Math.round(snap.endless.distance)}m`;
+    }
 
     const wkey = `${snap.weapon}${snap.weaponLevel}`;
     if (wkey !== this.lastWeaponKey) {
@@ -515,7 +605,7 @@ export class UI {
        <div class="b-title" style="color:${m.color}">${m.glyph} ${m.name} ${lvl}</div>
        <div class="b-sub">${m.desc}</div>`,
       'reward',
-      1700,
+      950,
     );
   }
 
@@ -570,10 +660,11 @@ export class UI {
     const ss = Math.floor(r.stats.time % 60).toString().padStart(2, '0');
     const reason = r.reason ? DEFEAT_META[r.reason] : null;
     const finale = r.victory && r.sector === 3;
+    const isEndless = r.endless !== undefined;
     this.resultEl.innerHTML = `
       <div class="panel result-panel ${r.victory ? 'win' : 'lose'}">
-        <div class="r-kicker">${meta.subtitle}</div>
-        <h2 class="r-title">${r.victory ? (finale ? '奇点终结 · 全线通关' : '区域突破') : '蜂群信号丢失'}</h2>
+        <div class="r-kicker">${isEndless ? 'ENDLESS PROTOCOL · 无尽协议' : meta.subtitle}</div>
+        <h2 class="r-title">${isEndless ? '无尽信号中断' : r.victory ? (finale ? '奇点终结 · 全线通关' : '区域突破') : '蜂群信号丢失'}</h2>
         ${r.victory ? `<div class="stars">${[0, 1, 2].map((i) => `<span class="star" data-i="${i}">★</span>`).join('')}</div>` : `
           <div class="defeat-box" data-testid="defeat-reason">
             <div class="d-title">${reason?.title ?? ''}</div>
@@ -582,14 +673,23 @@ export class UI {
           </div>`}
         <div class="r-score"><span>得分</span><b data-testid="result-score">0</b>${r.newBest ? '<em>新纪录!</em>' : `<small>最佳 ${r.best.toLocaleString('en-US')}</small>`}</div>
         <div class="r-stats">
-          <div><span>剩余蜂群</span><b data-testid="result-squad">${r.stats.finalSquad}</b></div>
-          <div><span>峰值蜂群</span><b>${r.stats.peakSquad}</b></div>
-          <div><span>击杀</span><b>${r.stats.kills}</b></div>
-          <div><span>改善数字门</span><b>${r.stats.gatesImproved}</b></div>
-          <div><span>击破能量舱</span><b>${r.stats.vaultsCracked}</b></div>
-          <div><span>爆炸连锁</span><b>${r.stats.maxChain}</b></div>
-          <div><span>最高连杀</span><b>${r.maxCombo}</b></div>
-          <div><span>用时</span><b>${mm}:${ss}</b></div>
+          ${r.endless ? `
+            <div class="r-endless-wave"><span>抵达阶段${r.endless.newWaveBest ? ' · 新纪录' : ''}</span><b data-testid="result-wave">${r.endless.wave}</b></div>
+            <div><span>击破首领</span><b>${r.endless.bosses}</b></div>
+            <div><span>推进距离</span><b>${Math.round(r.endless.distance)}m</b></div>
+            <div><span>最佳阶段</span><b>${r.endless.bestWave}</b></div>
+            <div><span>击杀</span><b>${r.stats.kills}</b></div>
+            <div><span>峰值蜂群</span><b>${r.stats.peakSquad}</b></div>
+            <div><span>最高连杀</span><b>${r.maxCombo}</b></div>
+            <div><span>存活时间</span><b>${mm}:${ss}</b></div>` : `
+            <div><span>剩余蜂群</span><b data-testid="result-squad">${r.stats.finalSquad}</b></div>
+            <div><span>峰值蜂群</span><b>${r.stats.peakSquad}</b></div>
+            <div><span>击杀</span><b>${r.stats.kills}</b></div>
+            <div><span>改善数字门</span><b>${r.stats.gatesImproved}</b></div>
+            <div><span>击破能量舱</span><b>${r.stats.vaultsCracked}</b></div>
+            <div><span>爆炸连锁</span><b>${r.stats.maxChain}</b></div>
+            <div><span>最高连杀</span><b>${r.maxCombo}</b></div>
+            <div><span>用时</span><b>${mm}:${ss}</b></div>`}
         </div>
         <div class="r-ch" data-testid="result-challenges">${r.challenges.map((c) => `<div class="${c.done ? 'ok' : ''}${c.isNew ? ' new' : ''}"><i>${c.done ? '✓' : '○'}</i>${c.text}<b>${c.isNew ? `+${c.reward}` : c.done ? '已完成' : `${CORE_GLYPH}${c.reward}`}</b></div>`).join('')}</div>
         <div class="r-cores" data-testid="result-cores">
@@ -600,7 +700,7 @@ export class UI {
         ${r.victory ? `<div class="r-goal">★★ 剩余 ≥ ${meta.starSquad[0]}　★★★ 剩余 ≥ ${meta.starSquad[1]}</div>` : ''}
         <div class="r-btns">
           ${r.hasNext ? '<button class="big-btn" data-testid="next-btn">下一关 ▶</button>' : ''}
-          <button class="${r.hasNext ? 'mid-btn' : 'big-btn'}" data-testid="retry-btn">${r.victory ? (r.sector === 4 ? '新布局再战' : '再战一次') : '重新挑战'}</button>
+          <button class="${r.hasNext ? 'mid-btn' : 'big-btn'}" data-testid="retry-btn">${isEndless ? '再战无尽' : r.victory ? (r.sector === 4 ? '新布局再战' : '再战一次') : '重新挑战'}</button>
           <button class="mid-btn ghost" data-testid="result-home-btn">返回主页</button>
         </div>
       </div>`;

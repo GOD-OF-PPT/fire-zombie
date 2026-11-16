@@ -4,6 +4,7 @@ import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { EnemyKind, RewardId, WeaponId } from '../../types/game';
 import { regradeMechTexture } from './mechPalette';
+import { addHeroEquipment } from './heroEquipment';
 import { buildBladeGeo } from './soldiers';
 import {
   buildOutlineGeometry,
@@ -760,6 +761,7 @@ export function spawnActor(template: ActorTemplate, opts: SpawnActorOptions = {}
     rimStrength: opts.rimStrength ?? 0.38,
     vertexColors: !template.textured,
     map: template.texture,
+    armorDetail: Boolean(opts.weapons),
   });
   const outlineWidth = opts.outlineWidth ?? 0.0052;
   // Rigid parts get their own material (sharing the actor's uniforms) so neither material is ever drawn
@@ -880,6 +882,8 @@ export function loadGltfLibrary(baseUrl = import.meta.env.BASE_URL ?? '/'): Prom
     ]);
 
     const { weapons, vaultRewards } = extractHeroWeapons(trooperGltf.scene);
+    addHeroEquipment(trooperGltf.scene, false);
+    addHeroEquipment(heavyGltf.scene, true);
 
     const trooper = buildTemplate(trooperGltf, {
       targetHeight: 1.38,

@@ -18,6 +18,7 @@ type Snap = {
   gates: number;
   boss: boolean;
   weapon: string;
+  endless: { wave: number; bosses: number; distance: number; upgrades: Record<string, number>; offers: string[] } | null;
 };
 
 const snap = (page: Page): Promise<Snap> =>
@@ -36,6 +37,7 @@ const snap = (page: Page): Promise<Snap> =>
       gates: s.gates.length,
       boss: Boolean(s.boss),
       weapon: `${s.weapon}${s.weaponLevel}`,
+      endless: s.endless ?? null,
     };
   });
 
@@ -122,6 +124,81 @@ test('sector 4 random corridor stays locked until unlocked, then plays a seeded 
   await ff(page, 240);
   await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 20000 });
   expect((await snap(page)).phase).toBe('VICTORY');
+});
+
+test('endless is immediately available, drafts an upgrade, saves records, and retries the same mode', async ({ page }) => {
+  await expect(page.getByTestId('endless-btn')).toBeEnabled();
+  await page.getByTestId('endless-btn').click();
+  expect((await snap(page)).sector).toBe(4);
+  expect((await snap(page)).endless?.wave).toBe(1);
+  await page.evaluate(() =>
+    localStorage.setItem('prism-swarm-save-v1', JSON.stringify({ unlocked: 4, cores: 0, upgrades: { squad: 0, power: 0, reso: 0 } })),
+  );
+  await page.goto('/?seed=5&mode=endless&play=1&unlock=1');
+  await page.evaluate(() => (window as any).__prism.renderer.assetsReady);
+  await expect(page.getByTestId('endless-hud')).toBeVisible();
+  await touchDrag(page, 10);
+  await ff(page, 200);
+  const loop = await snap(page);
+  expect(loop.phase).toBe('PAUSED');
+  expect(loop.endless?.wave).toBeGreaterThanOrEqual(2);
+  expect(loop.endless?.bosses).toBeGreaterThanOrEqual(1);
+  expect(loop.endless?.distance).toBeGreaterThan(900);
+  await expect(page.getByTestId('endless-hud')).toContainText(`阶段 ${loop.endless!.wave}`);
+  await expect(page.getByTestId('protocol-screen')).toBeVisible();
+  const time = loop.simTime;
+  await page.waitForTimeout(250);
+  expect((await snap(page)).simTime).toBe(time);
+  await expect(page.locator('[data-protocol]')).toHaveCount(3);
+  await page.keyboard.press('1');
+  await expect(page.getByTestId('protocol-screen')).toBeHidden();
+  expect((await snap(page)).phase).toBe('PLAYING');
+  const upgrades = await page.evaluate(() => (window as any).__prism.sim.getSnapshot().endless.upgrades);
+  expect(Object.values(upgrades)).toEqual([1]);
+
+  // A new boss must be visible after the previous one's death animation has hidden its actor.
+  await page.evaluate(() => {
+    const g = (window as any).__prism;
+    for (let i = 0; i < 200 && !g.sim.getSnapshot().boss && g.state === 'playing'; i++) g.fastForward(0.5, true);
+    g.frame(0);
+  });
+  expect((await snap(page)).boss).toBe(true);
+  expect(await page.evaluate(() => {
+    const g = (window as any).__prism;
+    return g.renderer.bossViews.get(g.sim.getSnapshot().boss.id).root.visible;
+  })).toBe(true);
+
+  // An inactive player can still kill a boss with their existing loadout. Choose at each
+  // refit stop until attrition ends the run; a draft is deliberately not a result screen.
+  for (let stage = 0; stage < 15 && (await snap(page)).phase !== 'DEFEAT'; stage++) {
+    await ff(page, 900, false);
+    if ((await snap(page)).state === 'draft') {
+      await page.locator('[data-protocol]').first().click();
+      expect((await snap(page)).state).toBe('playing');
+    }
+  }
+  await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 20000 });
+  expect((await snap(page)).phase).toBe('DEFEAT');
+  const finalWave = (await snap(page)).endless!.wave;
+  await expect(page.getByTestId('result-wave')).toHaveText(String(finalWave));
+  await expect(page.getByTestId('next-btn')).toHaveCount(0);
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('prism-swarm-save-v1')!));
+  expect(saved.endless.bestWave).toBe(finalWave);
+  expect(saved.endless.bosses).toBeGreaterThanOrEqual(1);
+  expect(saved.endless.bestDistance).toBeGreaterThan(900);
+  expect(saved.records[4].score).toBe(0); // endless never overwrites the authored sector record
+
+  await page.getByTestId('retry-btn').click();
+  const retry = await snap(page);
+  expect(retry.phase).toBe('PLAYING');
+  expect(retry.endless).toEqual({ wave: 1, bosses: 0, distance: 0, upgrades: {}, offers: [] });
+  expect(retry.squad).toBe(8);
+  expect(retry.simTime).toBe(0);
+  await page.getByTestId('pause-btn').click();
+  await page.getByTestId('home-btn').click();
+  await expect(page.getByTestId('title-screen')).toBeVisible();
+  await expect(page.getByTestId('endless-btn')).toBeEnabled();
+  await expect(page.getByTestId('endless-btn')).toContainText(`最佳 阶段 ${finalWave}`);
 });
 
 test('defeat shows a reason, retry fully resets the run', async ({ page }) => {

@@ -7,9 +7,12 @@ import type {
   SimulationController,
 } from '../types/game';
 import { ACCUMULATOR_EPS, FIXED_DT, MAX_WALL_DT } from '../config/constants';
+import { chooseEndlessUpgrade } from './endless';
+import type { EndlessUpgradeId } from '../types/game';
 import {
   buildSimSnapshot,
   createSimWorld,
+  reconcileFormationAndDps,
   resetSimWorldForSector,
   resetSimWorldToTitle,
   stepWorldFixed,
@@ -40,6 +43,7 @@ export function createSimulation(): SimulationController {
   let pendingDragDeltaX = 0;
   let cachedSnapshot: SimSnapshot | null = null;
   let pendingOverdrive = false;
+  let initialMods: Partial<RunModifiers> = {};
 
   function invalidateSnapshot(): void {
     cachedSnapshot = null;
@@ -51,7 +55,8 @@ export function createSimulation(): SimulationController {
       pendingDragDeltaX = 0;
       pendingOverdrive = false;
       // explicit (possibly empty) mods replace the previous run's modifiers
-      resetSimWorldForSector(world, sector, mods ?? {});
+      initialMods = { ...mods };
+      resetSimWorldForSector(world, sector, initialMods);
       invalidateSnapshot();
     },
 
@@ -64,18 +69,30 @@ export function createSimulation(): SimulationController {
     },
 
     resume(): void {
-      if (world.phase === 'PAUSED') {
+      if (world.phase === 'PAUSED' && !world.endless?.offers.length) {
         world.phase = 'PLAYING';
         pendingDragDeltaX = 0;
         invalidateSnapshot();
       }
     },
 
+    chooseEndlessUpgrade(id: EndlessUpgradeId): boolean {
+      const chosen = chooseEndlessUpgrade(world, id);
+      if (chosen) {
+        reconcileFormationAndDps(world);
+        accumulator = 0;
+        pendingDragDeltaX = 0;
+        pendingOverdrive = false;
+        invalidateSnapshot();
+      }
+      return chosen;
+    },
+
     retry(): void {
       accumulator = 0;
       pendingDragDeltaX = 0;
       pendingOverdrive = false;
-      resetSimWorldForSector(world, world.sector);
+      resetSimWorldForSector(world, world.sector, initialMods);
       invalidateSnapshot();
     },
 

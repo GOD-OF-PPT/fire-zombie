@@ -1,5 +1,5 @@
 // Dev visual check (requires `npm run dev` on :5173 and Playwright Chromium):
-//   node scripts/shot.mjs <outdir> [basic|boss|workshop|result|defeat|mid]
+//   node scripts/shot.mjs <outdir> [basic|boss|workshop|result|defeat|mid|endless]
 // GPU=1 renders on the host GPU instead of SwiftShader; CHROMIUM overrides the browser binary;
 // BLOCK_GLB=1 aborts the GLB downloads to exercise the procedural fallback models.
 import fs from 'node:fs';
@@ -31,7 +31,7 @@ const waitAssets = async () => page.evaluate(() => window.__prism?.renderer?.ass
 const state = () => page.evaluate(() => {
   const g = window.__prism;
   const s = g.sim.getSnapshot();
-  return { state: g.state, phase: s.phase, squad: s.squadCount, prog: s.runwayProgress.toFixed(3), weapon: s.weapon + s.weaponLevel, boss: s.boss ? `${s.boss.phase}:${Math.round(s.boss.hp)}` : null, score: g.score };
+  return { state: g.state, phase: s.phase, squad: s.squadCount, prog: s.runwayProgress.toFixed(3), weapon: s.weapon + s.weaponLevel, boss: s.boss ? `${s.boss.phase}:${Math.round(s.boss.hp)}` : null, score: g.score, drawCalls: g.renderer.renderer.info.render.calls, triangles: g.renderer.renderer.info.render.triangles };
 });
 const drag = async () => {
   const box = await page.locator('[data-testid=game-stage]').boundingBox();
@@ -58,6 +58,27 @@ if (scenario === 'workshop') {
   await page.waitForTimeout(300);
   await shot('w3-bought');
   console.log(await page.evaluate(() => localStorage.getItem('prism-swarm-save-v1')));
+} else if (scenario === 'endless') {
+  await page.goto(base);
+  await page.evaluate(() => localStorage.setItem('prism-swarm-save-v1', JSON.stringify({ unlocked: 4, cores: 0, upgrades: { squad: 0, power: 0, reso: 0 } })));
+  await page.goto(base + '?play=1&unlock=1&mode=endless&seed=5');
+  await waitAssets();
+  await page.waitForTimeout(800);
+  await drag();
+  await page.evaluate(() => window.__prism.fastForward(200, true));
+  await page.waitForTimeout(1600);
+  console.log('endless stage', await state(), await page.evaluate(() => window.__prism.sim.getSnapshot().endless));
+  await shot('e1-stage');
+  for (let i = 0; i < 15; i++) {
+    if (await page.evaluate(() => window.__prism.state === 'draft')) {
+      await page.locator('[data-protocol]').first().click();
+    }
+    await page.evaluate(() => window.__prism.fastForward(900, false));
+    if (await page.evaluate(() => ['outro', 'result'].includes(window.__prism.state))) break;
+  }
+  await page.waitForTimeout(2500);
+  console.log('endless result', await state());
+  await shot('e2-result');
 } else if (scenario === 'result' || scenario === 'defeat') {
   await page.goto(base + `?play=1&unlock=1&sector=${process.env.SECTOR ?? '1'}`);
   await waitAssets();

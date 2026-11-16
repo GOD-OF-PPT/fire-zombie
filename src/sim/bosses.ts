@@ -13,6 +13,7 @@ import {
 import { spawnGateRow } from './gates';
 import { clamp, clampSquadCount, normalizeZero } from './math';
 import { addResonance } from './resonance';
+import { advanceEndlessStage } from './endless';
 import { spawnPrismLens } from './weapons';
 
 const BOSS_INTRO_DURATION_SEC = 1.2;
@@ -697,6 +698,18 @@ export function checkBossVictory(world: SimWorld, events: SimEvent[]): boolean {
     z: boss.z,
     bossId: boss.id,
   });
+  if (world.endless) {
+    world.phase = 'PLAYING';
+    const stage = advanceEndlessStage(world);
+    events.push({
+      type: 'ENDLESS_STAGE_START',
+      wave: stage.wave,
+      bosses: stage.bosses,
+      bonus: stage.bonus,
+    });
+    return true;
+  }
+
   events.push({
     type: 'RUN_VICTORY',
     sector: world.sector,

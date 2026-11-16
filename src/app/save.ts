@@ -7,10 +7,19 @@ export interface SectorRecord {
   cleared: boolean;
 }
 
+export interface EndlessRecord {
+  bestScore: number;
+  bestWave: number;
+  bestTime: number;
+  bestDistance: number;
+  bosses: number;
+}
+
 export interface SaveData {
   version: 1;
   unlocked: SectorId;
   records: Record<SectorId, SectorRecord>;
+  endless: EndlessRecord;
   muted: boolean;
   seenHints: string[];
   /** workshop currency */
@@ -32,6 +41,7 @@ function defaults(): SaveData {
       3: { stars: 0, score: 0, cleared: false },
       4: { stars: 0, score: 0, cleared: false },
     },
+    endless: { bestScore: 0, bestWave: 0, bestTime: 0, bestDistance: 0, bosses: 0 },
     muted: false,
     seenHints: [],
     cores: 0,
@@ -66,6 +76,13 @@ export function loadSave(): SaveData {
       version: 1,
       unlocked,
       records,
+      endless: {
+        bestScore: Math.max(0, Math.floor(Number(parsed.endless?.bestScore) || 0)),
+        bestWave: Math.max(0, Math.floor(Number(parsed.endless?.bestWave) || 0)),
+        bestTime: Math.max(0, Number(parsed.endless?.bestTime) || 0),
+        bestDistance: Math.max(0, Math.floor(Number(parsed.endless?.bestDistance) || 0)),
+        bosses: Math.max(0, Math.floor(Number(parsed.endless?.bosses) || 0)),
+      },
       muted: Boolean(parsed.muted),
       seenHints: Array.isArray(parsed.seenHints) ? parsed.seenHints.filter((s) => typeof s === 'string') : [],
       cores: Math.max(0, Math.floor(Number(parsed.cores) || 0)),

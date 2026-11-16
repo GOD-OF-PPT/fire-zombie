@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { describe, expect, it } from 'vitest';
 import { buildTemplate } from '../../src/render/models/gltfLibrary';
+import { addHeroEquipment } from '../../src/render/models/heroEquipment';
 
 /**
  * buildTemplate folds each GLB's parts (helmets, pads, split body meshes) into one SkinnedMesh. The folded
@@ -95,6 +96,8 @@ describe('GLB templates fold into a single skin', () => {
     const raw = await parse(file);
     const folded = await parse(file);
     if (stripWeapons) {
+      addHeroEquipment(raw.scene, file.includes('heavy'));
+      addHeroEquipment(folded.scene, file.includes('heavy'));
       for (const name of WEAPON_NODES) raw.scene.getObjectByName(name)?.removeFromParent();
     }
     const tmpl = buildTemplate(folded, { targetHeight: 2, facingYaw: 0, stripWeapons });

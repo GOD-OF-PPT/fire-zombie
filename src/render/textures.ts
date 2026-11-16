@@ -60,9 +60,23 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
   ctx.fillStyle = grad;
   ctx.fill();
   ctx.globalAlpha = g.dimmed ? 0.4 : 1;
-  ctx.lineWidth = 12;
+  ctx.lineWidth = 5;
   ctx.strokeStyle = main;
   ctx.stroke();
+
+  // Instrument glass: inner bevel, scan lines and small engraved identification.
+  ctx.save();
+  roundRect(ctx, pad + 8, pad + 8, w - pad * 2 - 16, h - pad * 2 - 16, 26);
+  ctx.clip();
+  const glass = ctx.createLinearGradient(0, 0, w, h);
+  glass.addColorStop(0, '#d8ffff26'); glass.addColorStop(0.45, '#d8ffff00'); glass.addColorStop(1, '#00000010');
+  ctx.fillStyle = glass; ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#bfffea0b';
+  for (let y = 24; y < h - 20; y += 7) ctx.fillRect(pad, y, w - pad * 2, 1);
+  ctx.font = '700 15px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = main;
+  ctx.fillText(g.mutable ? 'CHARGE // MODIFY' : 'SWARM // TRANSFER', 40, 46);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#c8e0da88'; ctx.fillText('PR-07', w - 40, 46);
+  ctx.restore();
 
   // Mutable gates: gold target brackets = "shoot me"
   if (g.mutable) {
@@ -227,13 +241,36 @@ export function paintLensPlate(ctx: CanvasRenderingContext2D, w: number, h: numb
 }
 
 export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTexture {
-  const { ctx, tex, canvas } = makeCanvasTexture(16, 512);
+  const { ctx, tex, canvas } = makeCanvasTexture(512, 1024);
   const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
   g.addColorStop(0, stops[0]);
   g.addColorStop(0.62, stops[1]);
   g.addColorStop(1, stops[2]);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const haze = ctx.createRadialGradient(420, 425, 4, 420, 425, 380);
+  haze.addColorStop(0, '#859ecf22'); haze.addColorStop(0.5, '#8099bf0b'); haze.addColorStop(1, '#8099bf00');
+  ctx.fillStyle = haze; ctx.fillRect(0, 0, 768, 1024);
+  const mx = 345; const my = 188; const radius = 58;
+  const halo = ctx.createRadialGradient(mx, my, radius * 0.7, mx, my, radius * 1.8);
+  halo.addColorStop(0, '#8bc9ed22'); halo.addColorStop(0.5, '#8bc9ed0c'); halo.addColorStop(1, '#8bc9ed00');
+  ctx.fillStyle = halo; ctx.fillRect(mx - radius * 2, my - radius * 2, radius * 4, radius * 4);
+  ctx.save(); ctx.beginPath(); ctx.arc(mx, my, radius, 0, Math.PI * 2); ctx.clip();
+  const moon = ctx.createRadialGradient(mx - 24, my - 23, 5, mx + 8, my + 10, radius * 1.25);
+  moon.addColorStop(0, '#c9d9d6'); moon.addColorStop(0.45, '#8ba5b7'); moon.addColorStop(0.78, '#3c5679'); moon.addColorStop(1, '#13294b');
+  ctx.fillStyle = moon; ctx.fillRect(mx - radius, my - radius, radius * 2, radius * 2);
+  let seed = 47;
+  const rnd = (): number => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  for (let i = 0; i < 190; i++) {
+    const x = mx + (rnd() - 0.5) * radius * 2;
+    const y = my + (rnd() - 0.5) * radius * 2;
+    const r = 1 + rnd() * 10;
+    ctx.fillStyle = i % 3 ? '#132b4210' : '#f5f2d40b';
+    ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.65, -0.4, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+  ctx.strokeStyle = '#acdbf822'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.ellipse(mx, my, radius * 1.7, radius * 0.33, -0.33, 0, Math.PI * 2); ctx.stroke();
   tex.generateMipmaps = false;
   tex.minFilter = THREE.LinearFilter;
   tex.needsUpdate = true;

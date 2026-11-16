@@ -1,5 +1,6 @@
 import { createSimulation } from '../sim/index';
-import type { NonNullDefeatReason, SectorId, SimEvent, SimSnapshot, SimulationController } from '../types/game';
+import type { EndlessUpgradeId, NonNullDefeatReason, SectorId, SimEvent, SimSnapshot, SimulationController } from '../types/game';
+import { getEndlessThreat, PROTOCOLS } from '../config/protocols';
 import { PLAYER_Z } from '../config/constants';
 import { getSectorScript } from '../config/sectors';
 import { Renderer, WEAPON_COLOR } from '../render/Renderer';
@@ -10,7 +11,7 @@ import { chooseHeuristicTargetX } from './autopilot';
 import { BOSS_META, computeCoreReward, SECTOR_CHALLENGES, ENEMY_META, REWARD_META, runModsFromUpgrades, SCORE, SECTOR_META, UPGRADES, type UpgradeId } from './meta';
 import { loadSave, writeSave, type SaveData } from './save';
 
-type AppState = 'title' | 'ready' | 'playing' | 'paused' | 'outro' | 'result';
+type AppState = 'title' | 'ready' | 'playing' | 'paused' | 'draft' | 'outro' | 'result';
 
 const HINTS: Record<string, string> = {
   mutable: '<b>金框门</b>可以被射击！对准它，把数字打上去',
@@ -39,6 +40,7 @@ export class Game {
 
   state: AppState = 'title';
   sector: SectorId = 1;
+  endless = false;
   score = 0;
   private last = 0;
   private readyTimer = 0;
@@ -68,9 +70,11 @@ export class Game {
     this.input = new InputController(stage);
     this.ui = new UI(uiRoot, {
       onStart: (s) => this.startRun(s),
+      onEndless: () => this.startRun(4, true),
+      onProtocol: (id) => this.chooseProtocol(id),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
-      onRetry: () => this.startRun(this.sector),
+      onRetry: () => this.startRun(this.sector, this.endless),
       onHome: () => this.toTitle(),
       onNext: () => this.startRun(Math.min(4, this.sector + 1) as SectorId),
       onToggleMute: () => this.toggleMute(),
@@ -116,7 +120,8 @@ export class Game {
 
     const startSector = Number(params.get('sector'));
     if (params.get('play') === '1' || this.autoplay) {
-      this.startRun((startSector >= 2 && startSector <= 4 ? startSector : 1) as SectorId);
+      if (params.get('mode') === 'endless' || params.get('endless') === '1') this.startRun(4, true);
+      else this.startRun((startSector >= 2 && startSector <= 4 ? startSector : 1) as SectorId);
     }
   }
 
@@ -144,6 +149,8 @@ export class Game {
   // ------------------------------------------------------------------ flow
   toTitle(): void {
     this.state = 'title';
+    this.endless = false;
+    this.ui.hideProtocols();
     this.ui.hideHud();
     this.ui.showDragHint(false);
     this.ui.showTitle(this.save);
@@ -153,10 +160,11 @@ export class Game {
     this.audio.setMusic(1, 0);
   }
 
-  startRun(sector: SectorId): void {
-    if (sector > this.save.unlocked) return;
+  startRun(sector: SectorId, endless = false): void {
+    if (!endless && sector > this.save.unlocked) return;
     this.audio.unlock();
     this.sector = sector;
+    this.endless = endless;
     this.score = 0;
     this.combo = 0;
     this.maxCombo = 0;
@@ -168,13 +176,16 @@ export class Game {
     this.runTime = 0;
     this.pendingResult = null;
     this.renderer.resetRun();
-    this.renderer.setSector(sector);
+    if (endless) this.renderer.setEndlessWave(1);
+    else this.renderer.setSector(sector);
     this.sim.setSpeedMultiplier(1);
     const layoutSeed = this.fixedLayoutSeed ?? 1 + Math.floor(Math.random() * 0x7ffffffe);
     this.sim.startSector(sector, {
       ...runModsFromUpgrades(this.save.upgrades),
       manualOverdrive: true,
       layoutSeed,
+      endless,
+      manualEndlessDraft: endless,
     });
     this.lastSnap = this.sim.getSnapshot();
     this.input.reset();
@@ -182,13 +193,20 @@ export class Game {
     this.ui.showHelp(false);
     this.ui.hideResult();
     this.ui.showPause(false);
-    this.ui.showHud(sector);
+    this.ui.hideProtocols();
+    this.ui.showHud(sector, endless);
     this.state = 'ready';
     this.readyTimer = 0;
     this.ui.showDragHint(true);
     const meta = SECTOR_META[sector];
-    const bossLine = sector === 4 ? `首领 · ${BOSS_META[getSectorScript(sector, layoutSeed).boss.id].title} · 布局 #${layoutSeed}` : `首领 · ${meta.bossTitle}`;
-    this.ui.showBanner(`<div class="b-kicker">${meta.subtitle}</div><div class="b-title">${meta.name}</div><div class="b-sub">${bossLine}</div>`, 'intro', 1800);
+    const bossLine = endless
+      ? `阶段无限 · 首领轮回 · 布局 #${layoutSeed}`
+      : sector === 4
+        ? `首领 · ${BOSS_META[getSectorScript(sector, layoutSeed).boss.id].title} · 布局 #${layoutSeed}`
+        : `首领 · ${meta.bossTitle}`;
+    const runTitle = endless ? '无尽协议' : meta.name;
+    const runKicker = endless ? 'ENDLESS PROTOCOL · 阶段 1' : meta.subtitle;
+    this.ui.showBanner(`<div class="b-kicker">${runKicker}</div><div class="b-title">${runTitle}</div><div class="b-sub">${bossLine}</div>`, 'intro', 1800);
     this.input.onFirstInput = () => this.beginPlay();
     this.audio.setMusic(sector, 1);
   }
@@ -217,6 +235,20 @@ export class Game {
     this.state = 'playing';
     this.ui.showPause(false);
     this.audio.resume();
+    this.last = performance.now();
+  }
+
+  chooseProtocol(id: EndlessUpgradeId): void {
+    if (this.state !== 'draft' || !this.sim.chooseEndlessUpgrade(id)) return;
+    this.ui.hideProtocols();
+    this.input.reset();
+    this.state = 'playing';
+    this.audio.resume();
+    this.audio.powerUp();
+    const snap = this.sim.getSnapshot();
+    this.lastSnap = snap;
+    const threat = getEndlessThreat(snap.endless!.wave);
+    this.ui.showBanner(`<div class="b-kicker">PROTOCOL INSTALLED · ${threat.name}</div><div class="b-title">${PROTOCOLS[id].name}</div><div class="b-sub">${threat.description}</div>`, 'od', 1500);
     this.last = performance.now();
   }
 
@@ -273,6 +305,7 @@ export class Game {
         this.liveChecks(snap, dt);
         break;
       }
+      case 'draft':
       case 'paused':
         snap = this.sim.getSnapshot();
         dt = 0;
@@ -316,7 +349,10 @@ export class Game {
     if (!this.bossWarned && snap.runwayProgress > 0.955 && !snap.boss) {
       this.bossWarned = true;
       const meta = SECTOR_META[snap.sector];
-      this.ui.bossWarning(meta.bossName, meta.bossTitle);
+      this.ui.bossWarning(
+        this.endless ? '轮回首领' : meta.bossName,
+        this.endless ? `无尽阶段 ${snap.endless?.wave ?? 1}` : meta.bossTitle,
+      );
       this.audio.bossWarning();
       this.ui.doFlash('rgba(255,30,60,0.6)', 0.35);
     }
@@ -493,6 +529,7 @@ export class Game {
           break;
         }
         case 'BOSS_INTRO':
+          this.renderer.beginBoss();
           this.renderer.shake(0.4);
           fx.ring(0, -20, 0xff3b5c, 10, 1);
           if (live) {
@@ -517,9 +554,35 @@ export class Game {
           this.renderer.startBossDeath(ev.x, ev.z, color);
           if (live) {
             a.bossDefeat();
-            this.score += SCORE.bossBase * this.sector;
+            const completedWave = Math.max(1, (snap.endless?.wave ?? this.sector) - (this.endless ? 1 : 0));
+            this.score += SCORE.bossBase * (this.endless ? completedWave * 2 : this.sector);
             fx.after(1.25, () => this.ui.doFlash('rgba(255,255,255,1)', 0.85));
-            this.ui.showBanner('<div class="b-kicker">TARGET DESTROYED</div><div class="b-title">首领击破！</div>', 'reward', 2000);
+            this.ui.showBanner('<div class="b-kicker">TARGET DESTROYED</div><div class="b-title">首领击破！</div>', 'reward', this.endless ? 900 : 2000);
+          }
+          break;
+        }
+        case 'ENDLESS_STAGE_START': {
+          this.bossWarned = false;
+          this.hazardSeen.clear();
+          this.renderer.setEndlessWave(ev.wave);
+          if (live) {
+            this.score += ev.wave * 500;
+            this.ui.showBanner(
+              `<div class="b-kicker">ENDLESS · STAGE ${ev.wave}</div><div class="b-title">阶段 ${ev.wave} · 威胁升级</div><div class="b-sub">补员 +${ev.bonus} · 共鸣充满 · 敌潮与首领强化</div>`,
+              'od',
+              1500,
+            );
+            const p = this.worldToScreen(snap.squadX, 1.6, PLAYER_Z - 1);
+            this.ui.floatText(p.x + 78, p.y - 6, `补员 +${ev.bonus}`, 'gain', 1.1);
+            a.setMusic((((ev.wave - 1) % 4) + 1) as SectorId, 1);
+            if (snap.endless?.offers.length) {
+              this.state = 'draft';
+              this.input.reset();
+              this.ui.hideBanner();
+              this.ui.showProtocols(snap);
+              this.audio.suspend();
+              if (this.autoplay) this.chooseProtocol(snap.endless.offers[0]!);
+            }
           }
           break;
         }
@@ -541,19 +604,20 @@ export class Game {
   private finishRun(victory: boolean, snap: SimSnapshot, reason: NonNullDefeatReason | null): void {
     const meta = SECTOR_META[this.sector];
     if (victory) this.score += snap.squadCount * SCORE.finalSquadPerUnit;
-    const stars = victory ? 1 + (snap.squadCount >= meta.starSquad[0] ? 1 : 0) + (snap.squadCount >= meta.starSquad[1] ? 1 : 0) : 0;
+    const stars = !this.endless && victory ? 1 + (snap.squadCount >= meta.starSquad[0] ? 1 : 0) + (snap.squadCount >= meta.starSquad[1] ? 1 : 0) : 0;
     const rec = this.save.records[this.sector];
-    const newBest = this.score > rec.score;
+    const newBest = this.endless ? this.score > this.save.endless.bestScore : this.score > rec.score;
+    const newWaveBest = this.endless && (snap.endless?.wave ?? 1) > this.save.endless.bestWave;
     const reward = computeCoreReward({
       victory,
       stars,
       score: this.score,
       progress: snap.runwayProgress,
-      firstClear: victory && !rec.cleared,
+      firstClear: !this.endless && victory && !rec.cleared,
       sector: this.sector,
     });
     const chInput = { victory, finalSquad: snap.squadCount, bossLoss: this.bossLoss, maxCombo: this.maxCombo, stats: snap.stats };
-    const challenges = SECTOR_CHALLENGES[this.sector].map((c) => {
+    const challenges = (this.endless ? [] : SECTOR_CHALLENGES[this.sector]).map((c) => {
       const already = this.save.challenges.includes(c.id);
       const done = already || c.check(chInput);
       const isNew = done && !already;
@@ -565,22 +629,42 @@ export class Game {
       return { text: c.text, reward: c.reward, done, isNew };
     });
     this.save.cores += reward.total;
-    if (victory) {
+    if (!this.endless && victory) {
       rec.cleared = true;
       rec.stars = Math.max(rec.stars, stars);
       if (this.sector < 4) this.save.unlocked = Math.max(this.save.unlocked, this.sector + 1) as SectorId;
     }
-    rec.score = Math.max(rec.score, this.score);
+    if (this.endless) {
+      const er = this.save.endless;
+      er.bestScore = Math.max(er.bestScore, this.score);
+      er.bestWave = Math.max(er.bestWave, snap.endless?.wave ?? 1);
+      er.bestTime = Math.max(er.bestTime, this.runTime);
+      er.bestDistance = Math.max(er.bestDistance, Math.round(snap.endless?.distance ?? 0));
+      er.bosses = Math.max(er.bosses, snap.endless?.bosses ?? 0);
+    } else {
+      rec.score = Math.max(rec.score, this.score);
+    }
     writeSave(this.save);
     this.pendingResult = {
       victory,
       sector: this.sector,
       stars,
       score: this.score,
-      best: rec.score,
+      best: this.endless ? this.save.endless.bestScore : rec.score,
       newBest: newBest && this.score > 0,
       reason,
-      hasNext: victory && this.sector < 4,
+      hasNext: !this.endless && victory && this.sector < 4,
+      ...(this.endless
+        ? {
+            endless: {
+              wave: snap.endless?.wave ?? 1,
+              bosses: snap.endless?.bosses ?? 0,
+              distance: snap.endless?.distance ?? 0,
+              bestWave: this.save.endless.bestWave,
+              newWaveBest,
+            },
+          }
+        : {}),
       progress: snap.runwayProgress,
       bossHpFrac: !victory && snap.boss ? Math.max(0, Math.min(1, snap.boss.hp / snap.boss.maxHp)) : null,
       maxCombo: this.maxCombo,

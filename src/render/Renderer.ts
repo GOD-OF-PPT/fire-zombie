@@ -19,6 +19,8 @@ import { BLADES_ORBIT_RADIUS, GOLDEN_ANGLE_RAD, PLAYER_Z, TRACK_HALF_WIDTH } fro
 import { SECTORS } from '../config/sectors';
 import { REWARD_META, SECTOR_META } from '../app/meta';
 import { Effects } from './Effects';
+import { EnvironmentDetail } from './environmentDetail';
+import { Infrastructure } from './infrastructure';
 import {
   COLORS,
   gateColors,
@@ -287,6 +289,9 @@ export class Renderer {
   private towerCaps!: THREE.InstancedMesh;
   private towerCapMat!: THREE.MeshBasicMaterial;
   private towerData: Array<{ x: number; z: number; w: number; d: number; h: number }> = [];
+  private environmentDetail!: EnvironmentDetail;
+  private infrastructure!: Infrastructure;
+  private skyTextures = new Map<SectorId, THREE.Texture>();
   private posts!: THREE.InstancedMesh;
   private postMat!: THREE.MeshBasicMaterial;
   private hemi!: THREE.HemisphereLight;
@@ -412,14 +417,14 @@ export class Renderer {
   private initGltfPools(lib: GltfLibrary): void {
     // 1. Pre-warm hero squad pools (Tier 1 trooper, Tier 2 gold heavy, Tier 3 assault mech)
     const heroRims: [number, number, number] = [0x9beeff, 0xffe484, 0x8ff6ff];
-    const heroOutlines: [number, number, number] = [0.0054, 0.0056, 0.0058];
+    const heroOutlines: [number, number, number] = [0.0027, 0.003, 0.0032];
     for (let tierIdx = 0; tierIdx < 3; tierIdx++) {
       const count = SQUAD_POOL_SIZES[tierIdx]!;
       const tmpl = lib.heroes[tierIdx]!;
       for (let i = 0; i < count; i++) {
         const actor = spawnActor(tmpl, {
           rimColor: heroRims[tierIdx],
-          rimStrength: 0.42,
+          rimStrength: 0.24,
           outlineWidth: heroOutlines[tierIdx],
           weapons: tierIdx < 2 ? lib.weapons : undefined,
           initialWeapon: this.currentWeapon,
@@ -444,8 +449,8 @@ export class Renderer {
       for (let i = 0; i < count; i++) {
         const actor = spawnActor(tmpl, {
           rimColor: enemyRims[kind],
-          rimStrength: 0.44,
-          outlineWidth: kind === 'bastion' ? 0.0058 : 0.0052,
+          rimStrength: 0.28,
+          outlineWidth: kind === 'bastion' ? 0.0035 : 0.003,
         });
         actor.root.visible = false;
         this.scene.add(actor.root);
@@ -602,10 +607,10 @@ export class Renderer {
   // ------------------------------------------------------------------ scene setup
   private buildLights(): void {
     // Bright commercial cartoon lighting so cel bands & silhouettes pop cleanly
-    this.hemi = new THREE.HemisphereLight(0xdcf0ff, 0x3b2c6e, 1.45);
+    this.hemi = new THREE.HemisphereLight(0xdcf0ff, 0x3b2c6e, 0.9);
     this.scene.add(this.hemi);
-    const dir = new THREE.DirectionalLight(0xfffaf2, 1.95);
-    dir.position.set(5, 14, 10);
+    const dir = new THREE.DirectionalLight(0xffe7ce, 2.2);
+    dir.position.set(-8, 14, 4);
     this.scene.add(dir);
     const back = new THREE.DirectionalLight(0x9be8ff, 0.85);
     back.position.set(-4, 8, -14);
@@ -636,20 +641,40 @@ export class Renderer {
         uniform vec3 uTrack; uniform vec3 uGrid; uniform vec3 uEdge; uniform vec3 uFog;
         varying vec3 vW;
         float line(float v, float w) { float f = abs(fract(v) - 0.5); return smoothstep(w, 0.0, 0.5 - f); }
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         void main() {
           float zz = vW.z - uScroll;
           float ax = abs(vW.x);
-          // Subtle center highlight gives the runway a toy-like beveled deck sheen
-          vec3 c = uTrack * (1.14 - 0.22 * (ax / uHalf));
-          // Stylized deck plates every 4u + dashed lane dividers
-          float cross = line(zz / 4.0, 0.03);
-          c += uGrid * cross * 0.24;
-          float lanes = line((vW.x + uHalf) / (uHalf * 2.0 / 3.0), 0.014) * step(0.45, fract(zz / 5.0));
-          c += uGrid * lanes * 0.30;
-          // Forward speed chevrons
+          float plate = floor(zz / 8.0);
+          float plateTone = 0.94 + hash(vec2(plate, floor(ax / 2.5))) * 0.1;
+          float brushed = sin(vW.x * 160.0 + sin(zz * 0.3)) * 0.004;
+          float centerSheen = pow(max(0.0, 1.0 - ax / uHalf), 2.0);
+          vec3 c = uTrack * (plateTone * 0.72 + centerSheen * 0.24 + brushed);
+          float px = abs(fract((vW.x + 5.5) / 2.75) - 0.5);
+          float seam = smoothstep(0.48 - fwidth(px), 0.49, px);
+          c *= 1.0 - seam * 0.3;
+          // Soft specular pools from the lamps at the edge of the deck.
+          float lampZ = abs(fract((zz + 1.5) / 8.0) - 0.5) * 8.0;
+          float reflection = exp(-lampZ * lampZ * 0.3) * pow(ax / uHalf, 7.0);
+          c += uEdge * reflection * 0.11;
+          // Recessed 8m armour panels with a dark seam and a narrow lit bevel.
+          float cross = line(zz / 8.0, 0.018);
+          float bevel = line((zz + 0.11) / 8.0, 0.008);
+          c *= 1.0 - cross * 0.28;
+          c += uGrid * bevel * 0.16;
+          float innerFrame = smoothstep(0.025, 0.0, abs(ax - (uHalf - 0.72)));
+          c += uGrid * innerFrame * 0.16;
+          // Tiny paired fasteners sell the deck as manufactured metal rather than a flat plane.
+          float rz = min(fract(zz / 8.0), 1.0 - fract(zz / 8.0)) * 8.0;
+          float rivet = smoothstep(0.14, 0.035, length(vec2(ax - (uHalf - 0.94), rz)));
+          c += mix(uGrid, vec3(0.85), 0.55) * rivet * 0.38;
+          float lanes = line((vW.x + uHalf) / (uHalf * 2.0 / 3.0), 0.012) * step(0.52, fract(zz / 5.0));
+          c += uGrid * lanes * 0.24;
+          // Forward speed chevrons remain at the outer lane, clear of combat readability.
           float chev = fract((zz + ax * 0.85) / 10.0);
-          c += uEdge * smoothstep(0.032, 0.0, abs(chev - 0.5)) * smoothstep(uHalf, uHalf - 1.1, ax) * smoothstep(uHalf - 2.3, uHalf - 1.4, ax) * 0.36;
-          // Crisp glowing side curbs
+          c += uEdge * smoothstep(0.026, 0.0, abs(chev - 0.5)) * smoothstep(uHalf, uHalf - 1.1, ax) * smoothstep(uHalf - 2.3, uHalf - 1.4, ax) * 0.3;
+          float scan = exp(-900.0 * pow(fract((zz + uTime * 4.0) / 32.0) - 0.5, 2.0));
+          c += uEdge * scan * smoothstep(uHalf, 0.0, ax) * 0.055;
           float edge = smoothstep(uHalf - 0.32, uHalf, ax);
           c = mix(c, uEdge * 0.9, edge * 0.82);
           float fog = smoothstep(22.0, 96.0, -vW.z);
@@ -700,7 +725,7 @@ export class Renderer {
     }
     this.railMat = new THREE.MeshBasicMaterial({ color: 0x48f5ff });
     for (const s of [-1, 1]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, TRACK_LEN), this.railMat);
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.065, TRACK_LEN), this.railMat);
       rail.position.set(s * (TRACK_HALF_WIDTH + 0.25), 0.18, TRACK_CENTER_Z);
       this.scene.add(rail);
     }
@@ -743,12 +768,18 @@ export class Renderer {
             float v = vL.y / 0.75;
             vec2 cell = floor(vec2(u, v));
             vec2 f = fract(vec2(u, v));
-            float win = step(0.24, f.x) * step(f.x, 0.76) * step(0.26, f.y) * step(f.y, 0.74);
-            float h = hash(cell + vSeed);
-            float lit = step(0.66, h) * win * step(0.6, vL.y);
+            vec2 aa = max(fwidth(vec2(u, v)), vec2(0.015));
+            vec2 windowMask = smoothstep(vec2(0.18), vec2(0.18) + aa, f) * (1.0 - smoothstep(vec2(0.78) - aa, vec2(0.78), f));
+            float win = windowMask.x * windowMask.y;
+            // Quantize the instance seed before hashing: tiny interpolator errors otherwise
+            // turn a constant window into sparkling pixel noise on mobile GPUs.
+            float h = hash(cell + floor(vSeed + 0.5));
+            float lit = step(0.58, h) * win * step(0.6, vL.y);
             vec3 wc = mix(uWinA, uWinB, step(0.86, h));
-            c += wc * lit * (0.45 + 0.35 * sin(uTime * 0.7 + h * 40.0));
-            c += uWinA * 0.22 * smoothstep(0.47, 0.5, abs(fract(u * 0.125) - 0.5));
+            c += wc * lit * (0.16 + 0.12 * sin(uTime * 0.18 + h * 40.0));
+            c += uWinA * 0.09 * smoothstep(0.47, 0.5, abs(fract(u * 0.125) - 0.5));
+            float floorLine = 1.0 - smoothstep(0.018, 0.035 + aa.y, min(f.y, 1.0 - f.y));
+            c *= 1.0 - floorLine * 0.25;
           } else {
             c = uWinA * 0.22;
           }
@@ -778,6 +809,9 @@ export class Renderer {
     this.towers.frustumCulled = false;
     this.towerCaps.frustumCulled = false;
     this.scene.add(this.towers, this.towerCaps);
+    this.environmentDetail = new EnvironmentDetail(this.towerData);
+    this.infrastructure = new Infrastructure();
+    this.scene.add(this.environmentDetail.group, this.infrastructure.group);
   }
 
   private buildSquadShell(): void {
@@ -954,7 +988,12 @@ export class Renderer {
   setSector(sector: SectorId): void {
     this.sector = sector;
     const pal = SECTOR_META[sector].palette;
-    this.scene.background = makeSkyTexture(pal.sky);
+    let sky = this.skyTextures.get(sector);
+    if (!sky) {
+      sky = makeSkyTexture(pal.sky);
+      this.skyTextures.set(sector, sky);
+    }
+    this.scene.background = sky;
     this.scene.fog = new THREE.Fog(pal.fog, 42, 118);
     (this.trackMat.uniforms.uTrack!.value as THREE.Color).set(pal.track);
     (this.trackMat.uniforms.uGrid!.value as THREE.Color).set(pal.grid);
@@ -963,9 +1002,23 @@ export class Renderer {
     (this.groundMat.uniforms.uGrid!.value as THREE.Color).set(pal.grid);
     (this.groundMat.uniforms.uFog!.value as THREE.Color).set(pal.fog);
     (this.towerMat.uniforms.uFog!.value as THREE.Color).set(pal.fog);
+    (this.towerMat.uniforms.uBase!.value as THREE.Color).set(pal.track).multiplyScalar(0.55);
+    (this.towerMat.uniforms.uWinA!.value as THREE.Color).set(pal.grid);
+    (this.towerMat.uniforms.uWinB!.value as THREE.Color).set(pal.edge);
+    (this.groundMat.uniforms.uBase!.value as THREE.Color).set(pal.fog).multiplyScalar(0.28);
+    this.hemi.color.set(pal.edge).lerp(new THREE.Color(0xffffff), 0.76);
+    this.hemi.groundColor.set(pal.fog).multiplyScalar(0.8);
     this.railMat.color.set(pal.edge);
     this.postMat.color.set(pal.edge);
     this.towerCapMat.color.set(pal.grid);
+    this.environmentDetail.setPalette(pal);
+  }
+
+  /** Cycles all four art palettes as endless stages advance without changing the underlying sector id. */
+  setEndlessWave(wave: number): void {
+    const paletteSector = (Math.max(0, Math.floor(wave) - 1) % 4 + 1) as SectorId;
+    this.setSector(paletteSector);
+    this.sector = 4;
   }
 
   resize(w: number, h: number): void {
@@ -1061,6 +1114,16 @@ export class Renderer {
     this.lensViews.clear();
   }
 
+  beginBoss(): void {
+    this.bossHidden = false;
+    this.bossDeathT = -1;
+    for (const view of this.bossViews.values()) {
+      view.attackCooldown = 0;
+      view.primary.resetAnimation();
+      view.secondary?.resetAnimation();
+    }
+  }
+
   startBossDeath(x: number, z: number, color: number): void {
     this.bossDeathT = 0;
     this.bossHidden = false;
@@ -1099,14 +1162,14 @@ export class Renderer {
     this.time += dt;
     const t = this.time;
     const sectorCfg = SECTORS[snap.sector];
-    const scroll = snap.runwayProgress * sectorCfg.runwayLength;
+    const scroll = snap.endless?.distance ?? snap.runwayProgress * sectorCfg.runwayLength;
     this.trackMat.uniforms.uScroll!.value = scroll;
     this.trackMat.uniforms.uTime!.value = t;
     this.groundMat.uniforms.uScroll!.value = scroll;
     this.towerMat.uniforms.uTime!.value = t;
 
     this.shadowCount = 0;
-    this.updateEnvironment(scroll);
+    this.updateEnvironment(scroll, t);
     this.updateSquad(snap, dt, t);
     this.updateEnemies(snap, dt, t);
     this.updateProjectiles(snap);
@@ -1128,7 +1191,7 @@ export class Renderer {
     }
   }
 
-  private updateEnvironment(scroll: number): void {
+  private updateEnvironment(scroll: number, time: number): void {
     const d = this.dummy;
     const span = 130;
     for (let i = 0; i < this.towerData.length; i++) {
@@ -1159,6 +1222,8 @@ export class Renderer {
       }
     }
     this.posts.instanceMatrix.needsUpdate = true;
+    this.environmentDetail.update(scroll, time);
+    this.infrastructure.update(scroll);
   }
 
   private pushShadow(x: number, z: number, r: number): void {
@@ -1673,11 +1738,18 @@ export class Renderer {
       return pooled;
     }
     const group = new THREE.Group();
-    const postMat = std(0xffffff, 0.65);
-    const postGeo = new THREE.BoxGeometry(0.24, 2.9, 0.24).translate(0, 1.45, 0);
+    const postMat = std(0xffffff, 0.12, { vertexColors: true, metalness: 0.55, roughness: 0.38 });
+    const hardware = new GeoBuilder()
+      .add(box(0.24, 2.85, 0.26), 0x536776, 0, { p: [0, 1.44, 0] })
+      .add(box(0.48, 0.18, 0.65), 0x263448, 0, { p: [0, 0.09, 0] })
+      .add(box(0.34, 0.4, 0.36), 0x8596a8, 0, { p: [0, 0.4, 0] })
+      .add(box(0.12, 2.18, 0.04), 0xd2eeff, 0, { p: [0, 1.67, 0.16] })
+      .add(box(0.38, 0.18, 0.38), 0xc2d0dd, 0, { p: [0, 2.85, 0] });
+    for (let i = 0; i < 3; i++) hardware.add(box(0.36, 0.06, 0.37), 0x263448, 0, { p: [0, 0.34 + i * 0.11, 0] });
+    const postGeo = hardware.build();
     const postL = new THREE.Mesh(postGeo, postMat);
     const postR = new THREE.Mesh(postGeo, postMat);
-    const beam = new THREE.Mesh(new THREE.BoxGeometry(1, 0.22, 0.24), postMat);
+    const beam = new THREE.Mesh(new GeoBuilder().add(box(1, 0.16, 0.28), 0x617889).add(box(1, 0.04, 0.3), 0xd2eeff, 0, { p: [0, -0.1, 0] }).build(), postMat);
     beam.position.y = 2.9;
     const curtainMat = additive(0xffffff, 0.18);
     const curtain = new THREE.Mesh(new THREE.PlaneGeometry(1, 2.8).translate(0, 1.4, 0), curtainMat);
@@ -1771,7 +1843,7 @@ export class Renderer {
     const plateW = Math.min(w * 0.94, 4.8);
     const ps = plateW * (1 + pulse * 0.07 + flip * 0.18);
     v.plate.scale.set(ps, ps, 1);
-    v.postMat.emissiveIntensity = 0.55 + flip * 1.2 + pulse * 0.35;
+    v.postMat.emissiveIntensity = 0.12 + flip * 0.8 + pulse * 0.25;
     const ts = g.triggered ? 1 + (1 - v.fade) * 0.4 : 1;
     v.group.scale.set(ts, ts, 1);
   }

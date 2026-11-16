@@ -162,6 +162,7 @@ export type SimEvent =
   | { type: 'BOSS_INTRO'; bossId: BossSnapshot['id']; name: string }
   | { type: 'BOSS_PHASE_BREAK'; phase: 2 | 3; x: number; z: number }
   | { type: 'BOSS_DEFEAT'; x: number; z: number; bossId: BossSnapshot['id'] }
+  | { type: 'ENDLESS_STAGE_START'; wave: number; bosses: number; bonus: number }
   | { type: 'RUN_VICTORY'; sector: SectorId; finalSquad: number }
   | { type: 'RUN_DEFEAT'; sector: SectorId; reason: Exclude<DefeatReason, null> };
 
@@ -178,6 +179,8 @@ export interface RunStats {
   maxChain: number;
   peakSquad: number;
 }
+
+export type EndlessUpgradeId = 'power' | 'recruits' | 'resonance' | 'weapon' | 'blades' | 'supply';
 
 export interface SimSnapshot {
   phase: GamePhase;
@@ -215,6 +218,14 @@ export interface SimSnapshot {
   lenses: readonly PrismLensSnapshot[];
   projectiles: readonly ProjectileSnapshot[];
   boss: BossSnapshot | null;
+  /** Present only in endless mode: the current loop and cumulative run progress. */
+  endless?: {
+    wave: number;
+    bosses: number;
+    distance: number;
+    upgrades: Partial<Record<EndlessUpgradeId, number>>;
+    offers: readonly EndlessUpgradeId[];
+  };
 }
 
 /** Persistent meta-upgrades applied to a run (workshop). Defaults are neutral (0 / 1 / 1). */
@@ -231,6 +242,10 @@ export interface RunModifiers {
   layoutSeed?: number;
   /** Multiplier on boss and pylon HP (>= 1). */
   bossHpMult?: number;
+  /** Loop generated stages forever; boss kills advance the wave instead of ending the run. */
+  endless?: boolean;
+  /** Wait for a between-stage protocol choice; headless simulations may leave this disabled. */
+  manualEndlessDraft?: boolean;
 }
 
 export interface SimulationController {
@@ -238,6 +253,7 @@ export interface SimulationController {
   startSector(sector: SectorId, mods?: Partial<RunModifiers>): void;
   pause(): void;
   resume(): void;
+  chooseEndlessUpgrade(id: EndlessUpgradeId): boolean;
   retry(): void;
   returnToTitle(): void;
   setSpeedMultiplier(mult: 1 | 2): void;

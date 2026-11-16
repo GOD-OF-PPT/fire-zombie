@@ -21,6 +21,7 @@ import {
   SIPHON_MIN_GATE_VALUE,
 } from '../config/enemies';
 import { CRYO_BRITTLE_DAMAGE_MULT, CRYO_SLOW_MOVE_SCALE } from '../config/weapons';
+import { getEndlessEnemyHpMult } from '../config/endless';
 import { allocEntityId, type SimEnemy, type SimWorld } from './entities';
 import { applyFlatDeltaToGate, findGateById } from './gates';
 import { clamp, clampSquadCount, normalizeZero } from './math';
@@ -51,7 +52,8 @@ export function spawnEnemy(
   enemy.x = normalizeZero(clampedX);
   enemy.z = z;
   enemy.radius = radius;
-  enemy.maxHp = Math.max(1, options.hp ?? cfg.hp);
+  const endlessHpMult = world.endless ? getEndlessEnemyHpMult(world.endless.wave) : 1;
+  enemy.maxHp = Math.max(1, Math.round((options.hp ?? cfg.hp) * endlessHpMult));
   enemy.hp = enemy.maxHp;
   enemy.slowTimer = 0;
   enemy.telegraphTimer = 0;

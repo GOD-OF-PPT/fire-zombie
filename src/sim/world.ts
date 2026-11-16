@@ -26,6 +26,7 @@ import {
   TRACK_HALF_WIDTH,
 } from '../config/constants';
 import { SECTORS, getSectorScript } from '../config/sectors';
+import { generateEndlessStage } from '../config/endless';
 import { stepChainExplosions } from './barrels';
 import {
   applyBarrelBlastToBoss,
@@ -139,6 +140,7 @@ export function createSimWorld(): SimWorld {
   const world: SimWorld = {
     phase: 'TITLE',
     sector: 1,
+    endless: null,
     simTime: 0,
     speedMultiplier: 1,
     mods: { bonusSquad: 0, damageMult: 1, resonanceMult: 1 },
@@ -207,6 +209,7 @@ export function createSimWorld(): SimWorld {
 export function resetSimWorldToTitle(world: SimWorld): void {
   world.sector = 1;
   world.mods = { bonusSquad: 0, damageMult: 1, resonanceMult: 1 };
+  world.endless = null;
   world.script = SECTORS[1];
   world.mirrorFlags = [];
   clearCoreRunFields(world, 1);
@@ -227,11 +230,19 @@ export function resetSimWorldForSector(
       manualOverdrive: mods.manualOverdrive === true,
       layoutSeed: Math.max(0, Math.floor(mods.layoutSeed ?? 0)),
       bossHpMult: Math.max(1, mods.bossHpMult ?? 1),
+      endless: mods.endless === true,
+      manualEndlessDraft: mods.manualEndlessDraft === true,
     };
   }
-  const sectorCfg = getSectorScript(sector, world.mods.layoutSeed ?? 0);
+  const endless = world.mods.endless === true;
+  world.endless = endless ? { wave: 1, bossesDefeated: 0, completedDistance: 0, upgrades: {}, offers: [] } : null;
+  const sectorCfg = endless
+    ? generateEndlessStage(world.mods.layoutSeed ?? 1, 1)
+    : getSectorScript(sector, world.mods.layoutSeed ?? 0);
   world.script = sectorCfg;
-  world.mirrorFlags = computeMirrorFlags(sectorCfg.encounters, world.mods.layoutSeed ?? 0, sector);
+  world.mirrorFlags = endless
+    ? []
+    : computeMirrorFlags(sectorCfg.encounters, world.mods.layoutSeed ?? 0, sector);
   clearCoreRunFields(world, sectorCfg.startSquad + world.mods.bonusSquad);
   world.phase = 'PLAYING';
   world.currentScrollSpeed = sectorCfg.scrollSpeed;
@@ -701,5 +712,16 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
     lenses,
     projectiles,
     boss: bossSnapshot,
+    ...(world.endless
+      ? {
+          endless: {
+            wave: world.endless.wave,
+            bosses: world.endless.bossesDefeated,
+            distance: world.endless.completedDistance + world.scrollDistance,
+            upgrades: { ...world.endless.upgrades },
+            offers: [...world.endless.offers],
+          },
+        }
+      : {}),
   };
 }
