@@ -1,6 +1,6 @@
 /**
- * Unified lateral input: touch / mouse drag (relative, 1:1 finger follow) + keyboard axis.
- * Drag deltas are accumulated in world units and consumed once per rendered frame.
+ * Unified lateral input: touch / mouse drag (relative, 1:1 finger follow) + keyboard axis
+ * + Overdrive (Space), Phase Aegis Pulse (E / Shift), Speed Toggle (X), and Pause (P / Esc).
  */
 export class InputController {
   private dragAccum = 0;
@@ -8,11 +8,13 @@ export class InputController {
   private lastX = 0;
   private keys = new Set<string>();
   private overdriveRequested = false;
+  private aegisRequested = false;
   /** world units per CSS pixel; updated on resize */
   private unitsPerPx = 0.03;
   private listeners: Array<() => void> = [];
   onFirstInput: (() => void) | null = null;
   onPauseKey: (() => void) | null = null;
+  onSpeedKey: (() => void) | null = null;
   enabled = true;
 
   constructor(private readonly surface: HTMLElement) {
@@ -53,6 +55,13 @@ export class InputController {
           this.overdriveRequested = true;
           e.preventDefault();
         }
+      } else if (k === 'e' || k === 'E' || k === 'Shift') {
+        if (this.enabled && !e.repeat) {
+          this.aegisRequested = true;
+          this.fireFirst();
+        }
+      } else if ((k === 'x' || k === 'X') && !e.repeat) {
+        this.onSpeedKey?.();
       } else if (k === 'Escape' || k === 'p' || k === 'P') {
         this.onPauseKey?.();
       }
@@ -92,7 +101,6 @@ export class InputController {
   }
 
   setScale(surfaceWidthPx: number, visibleWorldWidth: number): void {
-    // Slightly > 1:1 so a thumb sweep across ~70% of the screen crosses the whole track.
     this.unitsPerPx = (visibleWorldWidth / Math.max(1, surfaceWidthPx)) * 1.25;
   }
 
@@ -113,6 +121,19 @@ export class InputController {
     return requested;
   }
 
+  requestAegis(): void {
+    if (this.enabled) {
+      this.aegisRequested = true;
+      this.fireFirst();
+    }
+  }
+
+  consumeAegis(): boolean {
+    const requested = this.aegisRequested;
+    this.aegisRequested = false;
+    return requested;
+  }
+
   consumeDrag(): number {
     const d = this.dragAccum;
     this.dragAccum = 0;
@@ -122,6 +143,7 @@ export class InputController {
   reset(): void {
     this.dragAccum = 0;
     this.overdriveRequested = false;
+    this.aegisRequested = false;
     this.keys.clear();
   }
 

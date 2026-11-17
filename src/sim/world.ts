@@ -52,7 +52,8 @@ import {
   normalizeZero,
 } from './math';
 import { computeMirrorFlags, spawnReadyRunwayEncounters, stepTrackAndSpawner } from './spawner';
-import { tryStartManualOverdrive } from './resonance';
+import { getEffectiveOverdriveDuration, tryStartManualOverdrive } from './resonance';
+import { tryTriggerAegisPulse } from './aegis';
 import { stepProjectilesAndAutoFire } from './weapons';
 
 export function reconcileFormationAndDps(world: SimWorld): void {
@@ -119,6 +120,12 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
   world.resonance = 0;
   world.overdriveTimer = 0;
   world.overdriveJustStarted = false;
+  world.aegisTimer = 0;
+  world.aegisCooldown = 0;
+  world.aegisMaxCooldown = Math.max(4, world.mods.aegisCooldownSec ?? 14);
+  world.aegisDurationSec = Math.max(0.5, world.mods.aegisDurationSec ?? 1.25);
+  world.autoAegisCharges = Math.max(0, Math.floor(world.mods.autoAegisCharges ?? 0));
+  world.critSeed = ((world.mods.layoutSeed ?? 1) ^ 0x9e3779b9) >>> 0;
   world.defeatReason = null;
 
   world.stats = {
@@ -179,6 +186,12 @@ export function createSimWorld(): SimWorld {
     resonance: 0,
     overdriveTimer: 0,
     overdriveJustStarted: false,
+    aegisTimer: 0,
+    aegisCooldown: 0,
+    aegisMaxCooldown: 14,
+    aegisDurationSec: 1.25,
+    autoAegisCharges: 0,
+    critSeed: 0x9e3779b9,
     trueSquadDps: computeTrueSquadDps(1, 'pulse', 1, 0, false),
 
     defeatReason: null,
@@ -232,6 +245,10 @@ export function resetSimWorldForSector(
       bossHpMult: Math.max(1, mods.bossHpMult ?? 1),
       endless: mods.endless === true,
       manualEndlessDraft: mods.manualEndlessDraft === true,
+      aegisCooldownSec: mods.aegisCooldownSec,
+      aegisDurationSec: mods.aegisDurationSec,
+      autoAegisCharges: mods.autoAegisCharges,
+      critChance: mods.critChance,
     };
   }
   const endless = world.mods.endless === true;
@@ -385,8 +402,15 @@ function decayTimersAndPulses(world: SimWorld): void {
       world.overdriveJustStarted = false;
     } else {
       world.overdriveTimer = snapTimerZero(world.overdriveTimer - FIXED_DT);
-      world.resonance = world.overdriveTimer > 0 ? world.overdriveTimer / OVERDRIVE_DURATION : 0;
+      const maxOd = getEffectiveOverdriveDuration(world);
+      world.resonance = world.overdriveTimer > 0 ? world.overdriveTimer / maxOd : 0;
     }
+  }
+  if (world.aegisTimer > 0) {
+    world.aegisTimer = snapTimerZero(world.aegisTimer - FIXED_DT);
+  }
+  if (world.aegisCooldown > 0) {
+    world.aegisCooldown = snapTimerZero(world.aegisCooldown - FIXED_DT);
   }
 
   for (let i = 0; i < world.gates.length; i++) {
@@ -452,6 +476,9 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
   world.squadX = clampSquadX(rawSquadX, world.formationRadius);
   if (input.overdrive === true) {
     tryStartManualOverdrive(world, events);
+  }
+  if (input.aegisPulse === true) {
+    tryTriggerAegisPulse(world, events, false);
   }
 
   // Step 2: Track & Spawner
@@ -696,6 +723,9 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
     masteryCount: world.masteryCount,
     resonance: world.resonance,
     overdriveTimer: world.overdriveTimer,
+    aegisTimer: world.aegisTimer,
+    aegisCooldown: world.aegisCooldown,
+    aegisMaxCooldown: world.aegisMaxCooldown,
     trueSquadDps: world.trueSquadDps,
     defeatReason: world.defeatReason,
     stats: {

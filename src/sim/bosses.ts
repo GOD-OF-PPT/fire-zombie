@@ -14,6 +14,7 @@ import { spawnGateRow } from './gates';
 import { clamp, clampSquadCount, normalizeZero } from './math';
 import { addResonance } from './resonance';
 import { advanceEndlessStage } from './endless';
+import { mitigateLossWithAegis } from './aegis';
 import { spawnPrismLens } from './weapons';
 
 const BOSS_INTRO_DURATION_SEC = 1.2;
@@ -751,8 +752,10 @@ export function resolveBossAttacks(world: SimWorld, events: SimEvent[]): boolean
 
       if (Math.abs(world.squadX - zone.x) <= zone.halfWidth + 0.45 * world.formationRadius) {
         zone.damageApplied = true;
+        const rawStrike = scaledBossLoss(zone.strikeLoss, world.squadCount);
+        const mitigatedStrike = mitigateLossWithAegis(world, rawStrike, events);
         const before = world.squadCount;
-        world.squadCount = clampSquadCount(before - scaledBossLoss(zone.strikeLoss, before));
+        world.squadCount = clampSquadCount(before - mitigatedStrike);
         const lost = before - world.squadCount;
 
         if (lost > 0) {
@@ -803,8 +806,10 @@ export function resolveBossAttacks(world: SimWorld, events: SimEvent[]): boolean
       world.projectilePool.release(p);
       world.projectiles.splice(i, 1);
 
+      const rawOrbLoss = scaledBossLoss(p.hostileLoss, world.squadCount);
+      const mitigatedOrbLoss = mitigateLossWithAegis(world, rawOrbLoss, events);
       const before = world.squadCount;
-      world.squadCount = clampSquadCount(before - scaledBossLoss(p.hostileLoss, before));
+      world.squadCount = clampSquadCount(before - mitigatedOrbLoss);
       const lost = before - world.squadCount;
 
       if (lost > 0) {

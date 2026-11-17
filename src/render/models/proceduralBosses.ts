@@ -16,18 +16,19 @@ import {
 } from './proceduralRig';
 
 /**
- * Procedural fallback bosses (crystal golem Warden, twin serpent Hydra, giant-eye Omega), rebuilt as
- * rigid-skinned rigs with the clip names the renderer plays on the GLB bosses. All face +Z.
+ * High-detail sculpted procedural bosses (Warden-01 Magma Gargoyle King, Hydra-02 Twin Dragons,
+ * Omega-Zero Abyssal Demon Overlord), matching all GLB clip names and bounds.
  */
 
 const WHITE = 0xfff4ea;
+const GOLD = 0xffc531;
 const add3 = (a: V3, b: V3): V3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const framePose = (f: Frame) => ({ p: f.p, q: f.q });
 
 // ------------------------------------------------------------------ WARDEN-01
 function warden(): ActorTemplate {
-  const ROCK = 0x3a1220;
-  const ROCK2 = 0x5a1a2a;
+  const ROCK = 0x38101e;
+  const ROCK2 = 0x5c192c;
   const RED = 0xff2a4a;
   const EMBER = 0xffa04a;
 
@@ -47,32 +48,41 @@ function warden(): ActorTemplate {
     .add(box(1.6, 0.5, 1.0), ROCK, 0, { p: [0, 0.05, 0] })
     .add(ico(1.25, 0), ROCK, 0, { p: [0, 1.25, 0], s: [1.35, 1.05, 0.85] })
     .add(ico(0.9, 0), ROCK2, 0, { p: [0, 1.45, 0.25], s: [1.3, 0.9, 0.8] })
-    .add(oct(0.55), RED, 3.2, { p: [0, 1.35, 0.95], s: [1, 1.35, 0.7] })
-    .add(tor(0.62, 0.07, 5, 18), EMBER, 2.4, { p: [0, 1.35, 0.9] })
+    .add(oct(0.56), RED, 3.2, { p: [0, 1.35, 0.95], s: [1, 1.35, 0.7] })
+    .add(tor(0.64, 0.075, 5, 18), GOLD, 2.4, { p: [0, 1.35, 0.9] })
     .add(box(0.08, 0.9, 0.05), EMBER, 2.4, { p: [0.55, 1.1, 0.78], r: [0, 0, 0.5] })
     .add(box(0.08, 0.7, 0.05), EMBER, 2.4, { p: [-0.6, 1.0, 0.76], r: [0, 0, -0.6] })
     .add(box(0.5, 0.08, 0.05), EMBER, 2.2, { p: [0, 0.4, 0.62] });
+  // Swept magma gargoyle wings + shoulder crystals
   for (const s of [1, -1]) {
     torso
-      .add(ico(0.55, 0), ROCK2, 0, { p: [s * 1.45, 1.9, 0] })
-      .add(cone(0.22, 1.1, 5), RED, 2.6, { p: [s * 1.55, 2.55, -0.05], r: [-0.15, 0, -s * 0.35] })
-      .add(cone(0.15, 0.75, 5), RED, 2.4, { p: [s * 1.85, 2.3, 0.15], r: [0.2, 0, -s * 0.8] })
-      .add(cone(0.13, 0.6, 5), EMBER, 2.2, { p: [s * 1.2, 2.45, -0.3], r: [-0.4, 0, -s * 0.15] });
+      .add(ico(0.56, 0), ROCK2, 0, { p: [s * 1.45, 1.9, 0] })
+      .add(cone(0.22, 1.15, 5), RED, 2.6, { p: [s * 1.55, 2.55, -0.05], r: [-0.15, 0, -s * 0.35] })
+      .add(cone(0.15, 0.78, 5), GOLD, 2.4, { p: [s * 1.85, 2.3, 0.15], r: [0.2, 0, -s * 0.8] })
+      .add(box(1.35, 0.85, 0.1), ROCK2, 0, { p: [s * 1.75, 2.15, -0.55], r: [0.15, -s * 0.32, s * 0.38] })
+      .add(box(1.15, 0.09, 0.12), RED, 2.2, { p: [s * 1.75, 2.55, -0.55], r: [0.15, -s * 0.32, s * 0.38] });
   }
   for (let i = 0; i < 4; i++) {
-    torso.add(cone(0.18 - i * 0.02, 0.9 - i * 0.12, 5), RED, 2.2, { p: [0, 2.2 - i * 0.35, -0.65 - i * 0.05], r: [-0.9, 0, 0] });
+    torso.add(cone(0.18 - i * 0.02, 0.9 - i * 0.12, 5), RED, 2.2, {
+      p: [0, 2.2 - i * 0.35, -0.65 - i * 0.05],
+      r: [-0.9, 0, 0],
+    });
   }
 
   const head = new GeoBuilder();
   head
     .add(ico(0.48, 0), ROCK, 0, { s: [1.15, 0.9, 1] })
     .add(box(0.8, 0.12, 0.3), ROCK2, 0, { p: [0, 0.08, 0.32] })
+    // Sovereign Golden Crown
+    .add(tor(0.36, 0.055, 5, 16), GOLD, 2.2, { p: [0, 0.36, 0.02], r: [Math.PI / 2, 0, 0] })
+    .add(cone(0.09, 0.34, 5), GOLD, 2.6, { p: [0, 0.56, 0.28] })
+    .add(cone(0.075, 0.26, 5), GOLD, 2.4, { p: [0.24, 0.52, 0.2], r: [0, 0, -0.25] })
+    .add(cone(0.075, 0.26, 5), GOLD, 2.4, { p: [-0.24, 0.52, 0.2], r: [0, 0, 0.25] })
     .add(oct(0.1), 0xffe14a, 3.4, { p: [0.2, 0.0, 0.45], s: [1.6, 0.8, 0.5] })
     .add(oct(0.1), 0xffe14a, 3.4, { p: [-0.2, 0.0, 0.45], s: [1.6, 0.8, 0.5] })
     .add(box(0.42, 0.05, 0.05), EMBER, 2.4, { p: [0, -0.25, 0.42] })
     .add(cone(0.12, 0.85, 5), RED, 2.4, { p: [0.38, 0.5, -0.05], r: [-0.3, 0, -0.5] })
-    .add(cone(0.12, 0.85, 5), RED, 2.4, { p: [-0.38, 0.5, -0.05], r: [-0.3, 0, 0.5] })
-    .add(cone(0.1, 0.55, 5), EMBER, 2.2, { p: [0, 0.55, -0.1], r: [-0.4, 0, 0] });
+    .add(cone(0.12, 0.85, 5), RED, 2.4, { p: [-0.38, 0.5, -0.05], r: [-0.3, 0, 0.5] });
 
   const arm = (s: number): THREE.BufferGeometry => {
     const a = new GeoBuilder();
@@ -81,7 +91,7 @@ function warden(): ActorTemplate {
     a.add(ico(0.32, 0), ROCK2, 0, { p: [s * 0.45, -1.15, 0.35] })
       .add(ico(0.62, 0), ROCK2, 0, { p: [s * 0.52, -2.35, 1.1], s: [1, 0.9, 1] })
       .add(oct(0.32), RED, 3, { p: [s * 0.52, -2.3, 1.62], s: [1, 1, 1.2] })
-      .add(cone(0.12, 0.5, 4), RED, 2.6, { p: [s * 0.9, -2.2, 1.2], r: [0, 0, -s * 1.3] })
+      .add(cone(0.12, 0.5, 4), GOLD, 2.6, { p: [s * 0.9, -2.2, 1.2], r: [0, 0, -s * 1.3] })
       .add(cone(0.12, 0.5, 4), RED, 2.6, { p: [s * 0.52, -1.85, 1.2], r: [-0.3, 0, 0] })
       .add(box(0.06, 0.6, 0.05), EMBER, 2.2, { p: [s * 0.25, -0.6, 0.35], r: [0.3, 0, s * 0.35] });
     return a.build();
@@ -120,7 +130,6 @@ function warden(): ActorTemplate {
       [0.15 + Math.sin(ph * 2) * 0.04, 0, 0],
     );
   };
-  // Both fists swing up over the head, then slam down in front
   const punch: PoseFn = (u) => {
     const raise = u < 0.4 ? ease(u / 0.4) : 1 - ease((u - 0.4) / 0.3);
     const slam = u < 0.4 ? 0 : bump(u, 0.62, 0.25);
@@ -145,7 +154,7 @@ function warden(): ActorTemplate {
   );
 }
 
-// ------------------------------------------------------------------ HYDRA-02 (one serpent per template)
+// ------------------------------------------------------------------ HYDRA-02 (Twin Dragons)
 function serpent(id: string, hide: number, belly: number, accent: number, eye: number, k: number, targetHeight: number): ActorTemplate {
   const NECK = 9;
   const coil = new GeoBuilder();
@@ -163,11 +172,17 @@ function serpent(id: string, hide: number, belly: number, accent: number, eye: n
   const coilGeo = coil.build();
   coilGeo.scale(k, k, k);
 
-  const segment = (r: number): THREE.BufferGeometry => {
+  const segment = (r: number, withWings: boolean): THREE.BufferGeometry => {
     const sg = new GeoBuilder();
     sg.add(sph(1, 12, 8), hide, 0, { s: [1, 0.9, 1] })
       .add(sph(0.82, 10, 6), belly, 0, { p: [0, -0.05, 0.3], s: [0.9, 0.85, 0.8] })
-      .add(cone(0.22, 0.6, 4), accent, 2.4, { p: [0, 0.95, -0.2], r: [-0.5, 0, 0] });
+      .add(cone(0.24, 0.65, 4), accent, 2.4, { p: [0, 0.96, -0.2], r: [-0.5, 0, 0] });
+    if (withWings) {
+      for (const s of [1, -1]) {
+        sg.add(box(2.4, 1.3, 0.12), belly, 0.4, { p: [s * 1.9, 0.55, -0.3], r: [0.2, -s * 0.28, s * 0.42] })
+          .add(box(2.3, 0.14, 0.16), accent, 2.4, { p: [s * 1.9, 1.18, -0.3], r: [0.2, -s * 0.28, s * 0.42] });
+      }
+    }
     const g = sg.build();
     g.scale(r, r, r);
     return g;
@@ -188,11 +203,11 @@ function serpent(id: string, hide: number, belly: number, accent: number, eye: n
     .add(cone(0.05, 0.18, 4), WHITE, 0.3, { p: [0.32, -0.3, 0.95], r: [Math.PI, 0, 0] })
     .add(cone(0.05, 0.18, 4), WHITE, 0.3, { p: [-0.32, -0.3, 0.95], r: [Math.PI, 0, 0] });
   for (const s of [1, -1]) {
-    hg.add(cone(0.14, 1.2, 5), 0xffd84a, 1.6, { p: [s * 0.45, 0.6, -0.35], r: [-1.0, 0, -s * 0.35] })
-      .add(cone(0.1, 0.7, 5), accent, 2.2, { p: [s * 0.7, 0.3, -0.2], r: [-1.2, 0, -s * 1.0] })
+    hg.add(cone(0.15, 1.3, 6), 0xffd84a, 1.8, { p: [s * 0.45, 0.62, -0.35], r: [-1.0, 0, -s * 0.35] })
+      .add(cone(0.1, 0.75, 5), accent, 2.2, { p: [s * 0.7, 0.3, -0.2], r: [-1.2, 0, -s * 1.0] })
       .add(cone(0.08, 0.5, 4), accent, 2.2, { p: [s * 0.62, -0.05, 0.1], r: [-1.3, 0, -s * 1.3] });
   }
-  hg.add(oct(0.24), accent, 3.2, { p: [0, 0.62, 0.15], s: [1, 1.6, 0.6] });
+  hg.add(oct(0.25), accent, 3.2, { p: [0, 0.64, 0.15], s: [1, 1.6, 0.6] });
   const headGeo = hg.build();
   headGeo.scale(k, k, k);
 
@@ -212,7 +227,6 @@ function serpent(id: string, hide: number, belly: number, accent: number, eye: n
   const p2 = new THREE.Vector3();
   const pt = new THREE.Vector3();
 
-  /** Head position/attitude drive the neck: a quadratic bezier from the coil top to behind the head. */
   const pose = (sway: number, bob: number, pitch: number, jawOpen: number, lunge: number): Pose => {
     const hx = sway;
     const hy = headY + bob - lunge * 1.1 * k;
@@ -240,7 +254,7 @@ function serpent(id: string, hide: number, belly: number, accent: number, eye: n
   const at = (name: string): V3 => rest[name]!.p!;
   const parts: PartSpec[] = [{ name: 'coil', joint: [0, 0, 0], geo: coilGeo }];
   for (let i = 0; i < NECK; i++) {
-    parts.push({ name: `neck${i}`, joint: at(`neck${i}`), geo: segment((0.62 - i * 0.035) * k) });
+    parts.push({ name: `neck${i}`, joint: at(`neck${i}`), geo: segment((0.62 - i * 0.035) * k, i === 4) });
   }
   parts.push({ name: 'head', joint: at('head'), geo: headGeo }, { name: 'jaw', joint: at('jaw'), geo: jawGeo });
 
@@ -276,8 +290,8 @@ function serpent(id: string, hide: number, belly: number, accent: number, eye: n
 
 // ------------------------------------------------------------------ OMEGA-ZERO
 function omega(): ActorTemplate {
-  const SHELL = 0x1c0f24;
-  const GOLD = 0xffc531;
+  const SHELL = 0x1e0e2a;
+  const CRIMSON = 0xeb1c44;
   const HOVER: V3 = [0, 3, 0];
   const TENT = 6;
   const SEG = 7;
@@ -286,22 +300,30 @@ function omega(): ActorTemplate {
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * TAU;
     shell
-      .add(box(0.9, 0.5, 0.9), SHELL, 0, { p: [Math.cos(a) * 1.75, Math.sin(a) * 1.75, -0.5], r: [0, 0, a] })
-      .add(cone(0.22, 1.1, 4), i % 2 ? 0xff3355 : GOLD, 2.4, {
-        p: [Math.cos(a) * 2.45, Math.sin(a) * 2.45, -0.5],
+      .add(box(0.92, 0.52, 0.92), SHELL, 0, { p: [Math.cos(a) * 1.75, Math.sin(a) * 1.75, -0.5], r: [0, 0, a] })
+      .add(cone(0.24, 1.15, 5), i % 2 ? CRIMSON : GOLD, 2.4, {
+        p: [Math.cos(a) * 2.48, Math.sin(a) * 2.48, -0.5],
         r: [0, 0, a - Math.PI / 2],
       });
   }
-  shell.add(sph(1.75, 18, 12), SHELL, 0, { p: [0, 0, -0.45], s: [1, 1, 0.8] });
+  // Grand curved abyssal demon horns & royal crest atop shell
+  for (const s of [1, -1]) {
+    shell.add(cone(0.32, 1.55, 6), GOLD, 2.2, { p: [s * 1.35, 2.15, -0.2], r: [0.25, 0, -s * 0.48] });
+  }
+  shell.add(oct(0.42), CRIMSON, 3.0, { p: [0, 2.45, -0.15], s: [0.85, 1.45, 0.6] });
+  shell.add(sph(1.76, 18, 12), SHELL, 0, { p: [0, 0, -0.45], s: [1, 1, 0.8] });
 
   const eg = new GeoBuilder();
-  eg.add(sph(1.45, 24, 16), 0xf3e9f6, 0.15)
+  eg.add(sph(1.45, 24, 16), 0xf5ecf8, 0.15)
     .add(cyl(0.95, 0.95, 0.06, 28).rotateX(Math.PI / 2), GOLD, 2.8, { p: [0, 0, 1.36] })
-    .add(tor(0.95, 0.06, 6, 28), 0xff3355, 2.8, { p: [0, 0, 1.38] })
+    .add(tor(0.95, 0.06, 6, 28), CRIMSON, 2.8, { p: [0, 0, 1.38] })
     .add(cyl(0.42, 0.42, 0.08, 20).rotateX(Math.PI / 2), 0x05010a, 0, { p: [0, 0, 1.4], s: [0.55, 1.25, 1] });
   for (let i = 0; i < 10; i++) {
     const a = (i / 10) * TAU;
-    eg.add(box(0.04, 0.5, 0.02), 0xff3355, 1.4, { p: [Math.cos(a) * 1.2, Math.sin(a) * 1.2, 0.8], r: [0, 0, a + Math.PI / 2] });
+    eg.add(box(0.04, 0.5, 0.02), CRIMSON, 1.4, {
+      p: [Math.cos(a) * 1.2, Math.sin(a) * 1.2, 0.8],
+      r: [0, 0, a + Math.PI / 2],
+    });
   }
 
   const lb = new GeoBuilder();
@@ -317,26 +339,22 @@ function omega(): ActorTemplate {
   const ringGeo = (i: number): THREE.BufferGeometry => {
     const rg = new GeoBuilder();
     const R = 2.75 + i * 0.4;
-    rg.add(tor(R, 0.07, 6, 48), i === 1 ? 0xff3355 : GOLD, 2.6);
+    rg.add(tor(R, 0.075, 6, 48), i === 1 ? CRIMSON : GOLD, 2.6);
     for (let j = 0; j < 4; j++) {
       const a = (j / 4) * TAU;
-      rg.add(oct(0.16), 0xffffff, 3, { p: [Math.cos(a) * R, Math.sin(a) * R, 0] });
+      rg.add(oct(0.18), 0xffffff, 3, { p: [Math.cos(a) * R, Math.sin(a) * R, 0] });
     }
     return rg.build();
   };
   const segGeo = new GeoBuilder()
     .add(sph(1, 10, 8), 0x2c1236, 0)
-    .add(tor(0.9, 0.12, 4, 12), 0xff3355, 2.2, { r: [Math.PI / 2, 0, 0] })
+    .add(tor(0.9, 0.12, 4, 12), CRIMSON, 2.2, { r: [Math.PI / 2, 0, 0] })
     .build();
   const tipGeo = new GeoBuilder()
     .add(cone(0.6, 1.8, 6).rotateX(Math.PI), 0x2c1236, 0)
     .add(oct(0.45), GOLD, 3, { p: [0, -0.2, 0] })
     .build();
 
-  /**
-   * `rage` (0 | 1) doubles ring spin and tentacle tempo while keeping whole cycles per loop;
-   * `lunge` pushes the eye toward the squad, `lid` overrides the blink, `sink` lowers the hover.
-   */
   const pose = (u: number, rage: number, lunge = 0, lid: number | null = null, sink = 0, spin = 0): Pose => {
     const ph = u * TAU;
     const hover: Frame = { p: [0, HOVER[1] + Math.sin(ph * 2) * 0.22 - sink, lunge * 0.9], q: new THREE.Quaternion() };
@@ -418,8 +436,8 @@ function omega(): ActorTemplate {
 export function buildProceduralBosses(): GltfLibrary['bosses'] {
   return {
     warden: warden(),
-    hydraA: serpent('hydraA', 0x4a0f3e, 0xc23a8e, 0xff3fd2, 0xffe14a, 1.5, 4.6),
-    hydraB: serpent('hydraB', 0x0e2f4a, 0x3aa6c2, 0x5fd8ff, 0xfff4ea, 1.25, 3.6),
+    hydraA: serpent('hydraA', 0x4e1042, 0xc93c94, 0xff4ae0, 0xffe14a, 1.5, 4.6),
+    hydraB: serpent('hydraB', 0x0e3250, 0x3ab0ce, 0x62f4ff, 0xfff4ea, 1.25, 3.6),
     omega: omega(),
   };
 }

@@ -17,38 +17,40 @@ interface DetailPalette {
 }
 
 const CITY_SPAN = 130;
+const TRAFFIC_COUNT = 28;
+const SEARCHLIGHT_COUNT = 8;
 
 function billboardTexture(): THREE.CanvasTexture {
   const { ctx, tex } = makeCanvasTexture(1536, 256);
-  const titles = ['PRISM', 'NOVA', 'SECTOR'];
-  const subtitles = ['NEON PROTOCOL  //  07', 'OPTICAL TRANSIT', 'AUTHORIZED ROUTE'];
-  const accents = ['#8ffaff', '#ffc531', '#c29bff'];
+  const titles = ['PRISM', 'NOVA', 'AEGIS'];
+  const subtitles = ['NEON PROTOCOL  //  V2', 'HYPER TRANSIT', 'PHASE SHIELD READY'];
+  const accents = ['#62f4ff', '#ffc531', '#d29bff'];
   for (let panel = 0; panel < 3; panel++) {
     ctx.save();
     ctx.translate(panel * 512, 0);
     const bg = ctx.createLinearGradient(0, 0, 512, 256);
-    bg.addColorStop(0, 'rgba(2,12,30,0.94)');
-    bg.addColorStop(1, 'rgba(10,32,58,0.72)');
+    bg.addColorStop(0, 'rgba(3,12,32,0.95)');
+    bg.addColorStop(1, 'rgba(12,34,64,0.78)');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, 512, 256);
     ctx.strokeStyle = accents[panel]!;
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 6;
     ctx.strokeRect(8, 8, 496, 240);
-    ctx.strokeStyle = 'rgba(180,240,255,0.2)';
+    ctx.strokeStyle = 'rgba(180,240,255,0.18)';
     ctx.lineWidth = 2;
     for (let y = 28; y < 240; y += 24) {
       ctx.beginPath(); ctx.moveTo(14, y); ctx.lineTo(498, y); ctx.stroke();
     }
     ctx.fillStyle = '#ffffff';
-    ctx.font = `900 ${panel === 2 ? 58 : 70}px Arial, sans-serif`;
+    ctx.font = `900 ${panel === 2 ? 62 : 70}px Arial, sans-serif`;
     ctx.fillText(titles[panel]!, 34, 102);
     ctx.fillStyle = accents[panel]!;
     ctx.font = '700 25px Arial, sans-serif';
     ctx.fillText(subtitles[panel]!, 38, 148);
-    ctx.fillRect(38, 176, 278, 8);
+    ctx.fillRect(38, 176, 286, 8);
     ctx.fillStyle = '#ffffff';
     ctx.font = '700 19px Arial, sans-serif';
-    ctx.fillText(['OPTICAL TRANSIT NETWORK', 'SWARM LINK ESTABLISHED', 'GATE CONTROL ONLINE'][panel]!, 38, 216);
+    ctx.fillText(['OPTICAL TRANSIT NETWORK', 'SWARM LINK ESTABLISHED', 'TACTICAL PULSE ONLINE'][panel]!, 38, 216);
     ctx.strokeStyle = accents[panel]!;
     ctx.fillStyle = accents[panel]!;
     ctx.lineWidth = 10;
@@ -70,8 +72,8 @@ function billboardTexture(): THREE.CanvasTexture {
 }
 
 /**
- * Instanced architectural detail layer. Adds silhouette and material variety for a handful of
- * draw calls, independently from the simulation and actor pools.
+ * Instanced cyberpunk megacity layer: tower crowns, gantries, holographic billboards,
+ * distant flying sky-traffic light trails, and sweeping atmospheric searchlight cones.
  */
 export class EnvironmentDetail {
   readonly group = new THREE.Group();
@@ -80,10 +82,14 @@ export class EnvironmentDetail {
   private readonly antennas: THREE.InstancedMesh;
   private readonly gantries: THREE.InstancedMesh;
   private readonly billboards: THREE.InstancedMesh;
+  private readonly traffic: THREE.InstancedMesh;
+  private readonly searchlights: THREE.InstancedMesh;
   private readonly bandMat: THREE.MeshStandardMaterial;
   private readonly crownMat: THREE.MeshStandardMaterial;
   private readonly gantryMat: THREE.MeshStandardMaterial;
   private readonly billboardMat: THREE.MeshBasicMaterial;
+  private readonly trafficMat: THREE.MeshBasicMaterial;
+  private readonly searchlightMat: THREE.MeshBasicMaterial;
   private readonly starMat: THREE.PointsMaterial;
   private readonly dummy = new THREE.Object3D();
 
@@ -92,7 +98,7 @@ export class EnvironmentDetail {
     this.bandMat = new THREE.MeshStandardMaterial({
       color: 0x315279,
       emissive: 0x3ef3ff,
-      emissiveIntensity: 0.32,
+      emissiveIntensity: 0.36,
       metalness: 0.72,
       roughness: 0.28,
     });
@@ -102,7 +108,7 @@ export class EnvironmentDetail {
     this.crownMat = new THREE.MeshStandardMaterial({
       color: 0x172a4b,
       emissive: 0x1c3468,
-      emissiveIntensity: 0.3,
+      emissiveIntensity: 0.32,
       metalness: 0.82,
       roughness: 0.3,
     });
@@ -117,7 +123,7 @@ export class EnvironmentDetail {
     this.gantryMat = new THREE.MeshStandardMaterial({
       color: 0x1a2d4c,
       emissive: 0x3ef3ff,
-      emissiveIntensity: 0.18,
+      emissiveIntensity: 0.22,
       metalness: 0.85,
       roughness: 0.32,
     });
@@ -128,7 +134,7 @@ export class EnvironmentDetail {
       map: billboardTexture(),
       color: 0x9fefff,
       transparent: true,
-      opacity: 0.88,
+      opacity: 0.9,
       depthWrite: false,
       side: THREE.DoubleSide,
       toneMapped: false,
@@ -148,25 +154,59 @@ export class EnvironmentDetail {
     this.billboards = new THREE.InstancedMesh(billboardGeo, this.billboardMat, 12);
     this.billboards.frustumCulled = false;
 
-    const starPositions = new Float32Array(180 * 3);
+    // Distant flying neon sky-traffic streaks along multi-altitude lanes
+    this.trafficMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    });
+    this.traffic = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.09, 2.4), this.trafficMat, TRAFFIC_COUNT);
+    this.traffic.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(TRAFFIC_COUNT * 3), 3);
+    this.traffic.frustumCulled = false;
+
+    // Sweeping megacity sky searchlights
+    const coneGeo = new THREE.ConeGeometry(2.1, 26, 12, 1, true);
+    coneGeo.translate(0, 13, 0);
+    coneGeo.rotateZ(Math.PI);
+    // Flip cone so narrow tip is at base (y=0) and wide beam fans upward (y=+26)
+    const coneUp = new THREE.CylinderGeometry(2.3, 0.14, 26, 12, 1, true);
+    coneUp.translate(0, 13, 0);
+    coneGeo.dispose();
+    this.searchlightMat = new THREE.MeshBasicMaterial({
+      color: 0x48f5ff,
+      transparent: true,
+      opacity: 0.055,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      forceSinglePass: true,
+      toneMapped: false,
+    });
+    this.searchlights = new THREE.InstancedMesh(coneUp, this.searchlightMat, SEARCHLIGHT_COUNT);
+    this.searchlights.frustumCulled = false;
+
+    const starPositions = new Float32Array(200 * 3);
     let seed = 19;
     const rnd = (): number => {
       seed = (seed * 16807) % 2147483647;
       return seed / 2147483647;
     };
-    for (let i = 0; i < 180; i++) {
-      starPositions[i * 3] = (rnd() - 0.5) * 150;
-      starPositions[i * 3 + 1] = 8 + rnd() * 48;
-      starPositions[i * 3 + 2] = -70 - rnd() * 100;
+    for (let i = 0; i < 200; i++) {
+      starPositions[i * 3] = (rnd() - 0.5) * 155;
+      starPositions[i * 3 + 1] = 8 + rnd() * 50;
+      starPositions[i * 3 + 2] = -70 - rnd() * 105;
     }
     const starGeo = new THREE.BufferGeometry();
     starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
     this.starMat = new THREE.PointsMaterial({
       color: 0xbfe8ff,
-      size: 0.32,
+      size: 0.34,
       map: makeGlowTexture(),
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.7,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,
@@ -175,7 +215,16 @@ export class EnvironmentDetail {
     const stars = new THREE.Points(starGeo, this.starMat);
     stars.frustumCulled = false;
 
-    this.group.add(this.bands, this.crowns, this.antennas, this.gantries, this.billboards, stars);
+    this.group.add(
+      this.bands,
+      this.crowns,
+      this.antennas,
+      this.gantries,
+      this.billboards,
+      this.traffic,
+      this.searchlights,
+      stars,
+    );
   }
 
   setPalette(pal: DetailPalette): void {
@@ -192,6 +241,14 @@ export class EnvironmentDetail {
       this.billboards.setColorAt(i, tint);
     }
     if (this.billboards.instanceColor) this.billboards.instanceColor.needsUpdate = true;
+
+    for (let i = 0; i < TRAFFIC_COUNT; i++) {
+      tint.set(i % 2 === 0 ? pal.edge : i % 3 === 0 ? 0xffa64d : pal.grid).multiplyScalar(0.92);
+      this.traffic.setColorAt(i, tint);
+    }
+    if (this.traffic.instanceColor) this.traffic.instanceColor.needsUpdate = true;
+
+    this.searchlightMat.color.set(pal.edge).lerp(new THREE.Color(0xffffff), 0.35);
     this.starMat.color.set(pal.edge).lerp(new THREE.Color(0xffffff), 0.62);
   }
 
@@ -257,6 +314,37 @@ export class EnvironmentDetail {
       this.billboards.setMatrixAt(i, d.matrix);
     }
     this.billboards.instanceMatrix.needsUpdate = true;
-    this.billboardMat.opacity = 0.78 + Math.sin(time * 0.8) * 0.06;
+    this.billboardMat.opacity = 0.8 + Math.sin(time * 0.8) * 0.06;
+
+    // Update sky-traffic lanes (counter-flowing airborne light trails)
+    for (let i = 0; i < TRAFFIC_COUNT; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const dir = i % 4 < 2 ? 1 : -1;
+      const speed = 18 + (i % 5) * 4.5;
+      const laneX = side * (9.5 + (i % 4) * 3.8);
+      const laneY = 2.2 + (i % 6) * 2.1;
+      const rawZ = i * 9.7 + scroll * 0.85 + time * speed * dir;
+      const z = -118 + (((rawZ % 134) + 134) % 134);
+      d.position.set(laneX, laneY, z);
+      d.rotation.set(0, 0, 0);
+      d.scale.set(1, 1, 0.75 + (i % 3) * 0.35);
+      d.updateMatrix();
+      this.traffic.setMatrixAt(i, d.matrix);
+    }
+    this.traffic.instanceMatrix.needsUpdate = true;
+
+    // Update sweeping volumetric megacity searchlights
+    for (let i = 0; i < SEARCHLIGHT_COUNT; i++) {
+      const side = i % 2 === 0 ? -1 : 1;
+      const z = -98 + i * 13.5;
+      d.position.set(side * (12.5 + (i % 3) * 3.2), 2.5, z);
+      const swayX = Math.sin(time * (0.45 + i * 0.07) + i * 1.9) * 0.24;
+      const swayZ = -side * (0.28 + Math.cos(time * 0.38 + i) * 0.16);
+      d.rotation.set(swayX, 0, swayZ);
+      d.scale.set(1, 1, 1);
+      d.updateMatrix();
+      this.searchlights.setMatrixAt(i, d.matrix);
+    }
+    this.searchlights.instanceMatrix.needsUpdate = true;
   }
 }

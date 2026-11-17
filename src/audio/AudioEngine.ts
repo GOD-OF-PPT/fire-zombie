@@ -3,8 +3,10 @@ import type { SectorId } from '../types/game';
 type Wave = OscillatorType;
 
 /**
- * Procedural Web Audio engine: synthesized SFX + a lightweight look-ahead step sequencer for music.
- * No external assets; everything is generated so it stays in sync with gameplay events.
+ * V2 Multi-Track Procedural Synthwave Audio Engine:
+ * - Synthesized tactical SFX (weapons, crits, phase aegis shock-shield, gate pentatonics, achievements)
+ * - 8-bar look-ahead step sequencer with sector-specific harmonic progressions, punchy bass,
+ *   arpeggiator, Fever percussion ride, and Boss Phase lead melody.
  */
 export class AudioEngine {
   private ctx: AudioContext | null = null;
@@ -18,9 +20,10 @@ export class AudioEngine {
   private seqTimer: number | null = null;
   private nextNoteTime = 0;
   private step = 0;
-  private tempo = 120;
+  private tempo = 122;
   private musicSector: SectorId = 1;
   private intensity: 0 | 1 | 2 = 0; // 0 calm/title, 1 run, 2 boss
+  private feverHot = false;
 
   get isMuted(): boolean {
     return this.muted;
@@ -31,6 +34,10 @@ export class AudioEngine {
     if (this.master && this.ctx) {
       this.master.gain.setTargetAtTime(m ? 0 : 0.9, this.ctx.currentTime, 0.03);
     }
+  }
+
+  setFever(hot: boolean): void {
+    this.feverHot = hot;
   }
 
   /** Must be called from a user gesture. */
@@ -46,10 +53,10 @@ export class AudioEngine {
       comp.ratio.value = 4;
       this.master.connect(comp).connect(this.ctx.destination);
       this.sfx = this.ctx.createGain();
-      this.sfx.gain.value = 0.8;
+      this.sfx.gain.value = 0.82;
       this.sfx.connect(this.master);
       this.music = this.ctx.createGain();
-      this.music.gain.value = 0.32;
+      this.music.gain.value = 0.34;
       this.music.connect(this.master);
       const len = this.ctx.sampleRate;
       this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -127,25 +134,49 @@ export class AudioEngine {
     if (!this.throttle('shoot', 0.075)) return;
     switch (weapon) {
       case 'scatter':
-        this.noise(0.06, { vol: 0.05, freq: 3200, type: 'bandpass', q: 1.2 });
+        this.noise(0.06, { vol: 0.055, freq: 3400, type: 'bandpass', q: 1.2 });
         break;
       case 'rail':
-        this.tone(1400, 0.12, { type: 'sawtooth', vol: 0.045, slideTo: 300 });
+        this.tone(1480, 0.12, { type: 'sawtooth', vol: 0.048, slideTo: 290 });
         break;
       case 'plasma':
-        this.tone(220, 0.14, { type: 'triangle', vol: 0.08, slideTo: 90 });
+        this.tone(230, 0.14, { type: 'triangle', vol: 0.085, slideTo: 85 });
         break;
       case 'cryo':
-        this.tone(1900, 0.06, { type: 'sine', vol: 0.04, slideTo: 1200 });
+        this.tone(1950, 0.065, { type: 'sine', vol: 0.045, slideTo: 1220 });
         break;
       default:
-        this.tone(880 + Math.random() * 60, 0.045, { type: 'square', vol: 0.025, slideTo: 520 });
+        this.tone(900 + Math.random() * 60, 0.045, { type: 'square', vol: 0.026, slideTo: 520 });
     }
   }
 
   hit(): void {
     if (!this.throttle('hit', 0.05)) return;
-    this.tone(320 + Math.random() * 80, 0.04, { type: 'square', vol: 0.03, slideTo: 180 });
+    this.tone(330 + Math.random() * 80, 0.04, { type: 'square', vol: 0.03, slideTo: 180 });
+  }
+
+  crit(): void {
+    if (!this.throttle('crit', 0.085)) return;
+    this.tone(1568, 0.09, { type: 'triangle', vol: 0.085, slideTo: 2349 });
+    this.tone(2093, 0.07, { type: 'sine', vol: 0.06 });
+  }
+
+  aegisPulse(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.noise(0.45, { vol: 0.18, freq: 650, slideTo: 5600, type: 'bandpass', q: 2.2 });
+    [392, 587.33, 783.99, 1174.66].forEach((f, i) =>
+      this.tone(f, 0.24, { type: 'triangle', vol: 0.09, when: t + i * 0.032 }),
+    );
+    this.tone(110, 0.35, { type: 'sine', vol: 0.22, slideTo: 48 });
+  }
+
+  achievement(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5, 1567.98].forEach((f, i) =>
+      this.tone(f, 0.28, { type: 'triangle', vol: 0.11, when: t + i * 0.065 }),
+    );
   }
 
   kill(big: boolean): void {
@@ -161,7 +192,6 @@ export class AudioEngine {
 
   gateTick(value: number): void {
     if (!this.throttle('gatetick', 0.06)) return;
-    // value mapped to a rising pentatonic pitch so improving a gate "sounds" like climbing
     const scale = [0, 2, 4, 7, 9];
     const idx = Math.max(0, Math.min(24, value + 10));
     const semis = Math.floor(idx / 5) * 12 + (scale[idx % 5] ?? 0);
@@ -286,7 +316,7 @@ export class AudioEngine {
   setMusic(sector: SectorId, intensity: 0 | 1 | 2): void {
     this.musicSector = sector;
     this.intensity = intensity;
-    this.tempo = intensity === 2 ? 142 : [0, 112, 122, 132][sector] ?? 120;
+    this.tempo = intensity === 2 ? 144 : [0, 116, 124, 132, 128][sector] ?? 122;
     if (!this.ctx) return;
     if (this.seqTimer === null) {
       this.nextNoteTime = this.ctx.currentTime + 0.05;
@@ -309,49 +339,99 @@ export class AudioEngine {
     while (this.nextNoteTime < ctx.currentTime + 0.12) {
       this.playStep(this.step, this.nextNoteTime, spb);
       this.nextNoteTime += spb;
-      this.step = (this.step + 1) % 64;
+      this.step = (this.step + 1) % 128;
     }
   }
 
   private playStep(step: number, t: number, spb: number): void {
     const dest = this.music!;
     const roots: Record<SectorId, number[]> = {
-      1: [0, 0, -4, -2], // i - i - VI - VII (A minor feel)
-      2: [0, -2, -4, -5],
-      3: [0, 1, -2, -4],
-      4: [0, -5, -2, -7],
+      1: [0, 0, -4, -2, 0, -5, -4, -2],
+      2: [0, -2, -4, -5, 3, 0, -2, -5],
+      3: [0, 1, -2, -4, 0, 1, 3, -2],
+      4: [0, -5, -2, -7, 0, -4, 3, -2],
     };
     const baseFreq = [0, 110, 98, 92.5, 103.8][this.musicSector] ?? 110;
-    const bar = Math.floor(step / 16) % 4;
+    const bar = Math.floor(step / 16) % 8;
     const root = roots[this.musicSector][bar] ?? 0;
     const s = step % 16;
     const f = (semi: number): number => baseFreq * Math.pow(2, (root + semi) / 12);
 
-    // Kick
+    // 1. Punchy Four-on-the-Floor Synthwave Kick
     if (this.intensity > 0 && s % 4 === 0) {
-      this.tone(150, 0.18, { type: 'sine', vol: 0.5, slideTo: 40, when: t, dest });
+      this.tone(155, 0.17, { type: 'sine', vol: 0.48, slideTo: 38, when: t, dest });
     }
-    // Hats
-    if (this.intensity > 0 && s % 2 === 1) {
-      this.noise(0.04, { vol: this.intensity === 2 ? 0.12 : 0.07, freq: 8000, type: 'highpass', when: t, dest });
+    // 2. Crisp Hi-Hats & Fever Ride Shimmer
+    if (this.intensity > 0 && (s % 2 === 1 || (this.feverHot && s % 2 === 0))) {
+      const accentHat = s % 4 === 2;
+      this.noise(accentHat ? 0.055 : 0.032, {
+        vol: this.intensity === 2 ? 0.11 : this.feverHot ? 0.085 : 0.065,
+        freq: accentHat ? 7200 : 9200,
+        type: 'highpass',
+        when: t,
+        dest,
+      });
     }
-    if (this.intensity === 2 && s % 8 === 4) {
-      this.noise(0.14, { vol: 0.22, freq: 1800, type: 'bandpass', q: 0.7, when: t, dest });
+    // 3. Snare / Clap on 2 and 4 during Run (soft) and Boss (punchy)
+    if (this.intensity > 0 && s % 8 === 4) {
+      this.noise(this.intensity === 2 ? 0.15 : 0.09, {
+        vol: this.intensity === 2 ? 0.22 : 0.1,
+        freq: 1850,
+        type: 'bandpass',
+        q: 0.75,
+        when: t,
+        dest,
+      });
     }
-    // Bass (offbeat pulse)
-    if (s % 2 === 0) {
-      this.tone(f(s % 4 === 2 ? 12 : 0) / 2, spb * 1.6, { type: 'sawtooth', vol: this.intensity === 0 ? 0.08 : 0.13, when: t, dest });
+    // 4. Driving 16th-note Synthwave Octave Bass
+    if (this.intensity === 0 ? s % 4 === 0 : s % 2 === 0 || this.intensity === 2) {
+      const octUp = s % 4 === 2 ? 12 : 0;
+      this.tone(f(octUp) / 2, spb * 1.45, {
+        type: 'sawtooth',
+        vol: this.intensity === 0 ? 0.075 : s % 4 === 0 ? 0.09 : 0.13,
+        when: t,
+        dest,
+      });
     }
-    // Arp
-    const arp = [0, 7, 12, 15, 12, 7, 3, 7];
+    // 5. Shimmering Cyber-Arpeggiator
+    const arpPatterns: Record<SectorId, number[]> = {
+      1: [0, 7, 12, 15, 12, 7, 3, 7],
+      2: [0, 3, 7, 10, 15, 10, 7, 3],
+      3: [0, 1, 7, 12, 13, 12, 7, 1],
+      4: [0, 7, 10, 14, 19, 14, 10, 7],
+    };
+    const arp = arpPatterns[this.musicSector];
     if (this.intensity === 0 ? s % 4 === 0 : true) {
       const semi = arp[s % 8] ?? 0;
-      this.tone(f(semi) * 2, spb * 0.9, { type: 'square', vol: this.intensity === 2 ? 0.045 : 0.035, when: t, dest });
+      this.tone(f(semi) * 2, spb * 0.88, {
+        type: 'triangle',
+        vol: this.intensity === 2 ? 0.055 : 0.042,
+        when: t,
+        dest,
+      });
     }
-    // Pad on bar start
+    // 6. Boss / Fever Heroic Lead Hook
+    if ((this.intensity === 2 || this.feverHot) && (s === 0 || s === 3 || s === 6 || s === 10 || s === 12)) {
+      const leadNotes: Record<number, number> = { 0: 12, 3: 15, 6: 19, 10: 17, 12: 15 };
+      const semi = leadNotes[s] ?? 12;
+      this.tone(f(semi) * 2, spb * 2.4, {
+        type: 'sawtooth',
+        vol: this.intensity === 2 ? 0.045 : 0.028,
+        attack: 0.012,
+        when: t,
+        dest,
+      });
+    }
+    // 7. Warm lush triad pad on bar start
     if (s === 0) {
-      [0, 3, 7].forEach((semi) =>
-        this.tone(f(semi) * 2, spb * 15, { type: 'triangle', vol: 0.035, attack: 0.25, when: t, dest }),
+      [0, 3, 7, 12].forEach((semi) =>
+        this.tone(f(semi) * 2, spb * 15.5, {
+          type: 'triangle',
+          vol: 0.032,
+          attack: 0.22,
+          when: t,
+          dest,
+        }),
       );
     }
   }

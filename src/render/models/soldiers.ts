@@ -4,17 +4,17 @@ import { GeoBuilder, addLimb, box, capsule, cone, cyl, oct, sph, tor, type V3 } 
 import type { RigPartDef } from './rig';
 
 /**
- * The player's squad: 「棱镜战士」.
- * Tier 1 = chibi trooper, tier 2 = heavy trooper (represents 5), tier 3 = Prism mech (represents 25).
- * All face −Z (away from the camera) — backs, backpacks, helmets and guns are the readable silhouette.
+ * The player's squad: 「棱镜战士」 (V2 High-Detail Chibi Sculpt).
+ * Tier 1 = Cobalt-Cyan Vanguard Trooper, Tier 2 = Golden Heavy Captain, Tier 3 = Sovereign Assault Mech.
+ * All face −Z (away from the camera) — reactor packs, thrusters, crests, and weapons read crisply at scale.
  */
 
-const SUIT = 0x1b2442;
-const SUIT_DARK = 0x0c1122;
-const ARMOR = 0xeaf7ff;
+const SUIT = 0x192548;
+const SUIT_DARK = 0x0b1022;
+const ARMOR = 0xeaf8ff;
 const CYAN = 0x3ef3ff;
 const GOLD = 0xffc531;
-const GOLD_ARMOR = 0xfff0c4;
+const GOLD_ARMOR = 0xfff2cc;
 
 export const WEAPON_GLOW: Record<WeaponId, number> = {
   pulse: 0x3ef3ff,
@@ -29,54 +29,66 @@ const along = (len: number, r: number, seg = 10): THREE.BufferGeometry => cyl(r,
 /** Weapon model in "hand space": grip at origin, barrel pointing −Z. ~0.5 units long at scale 1. */
 export function buildWeaponGeo(weapon: WeaponId | 'blades', scale = 1): THREE.BufferGeometry {
   const b = new GeoBuilder();
-  const metal = 0x2a3350;
-  const dark = 0x10142a;
+  const metal = 0x2c3858;
+  const silver = 0xa8c2dc;
+  const dark = 0x0f1428;
   const g = weapon === 'blades' ? GOLD : WEAPON_GLOW[weapon];
   switch (weapon) {
     case 'pulse':
-      b.add(box(0.07, 0.09, 0.3), metal, 0, { p: [0, 0, -0.1] })
+      b.add(box(0.075, 0.095, 0.32), metal, 0, { p: [0, 0, -0.1] })
+        .add(box(0.082, 0.032, 0.22), silver, 0, { p: [0, 0.036, -0.11] })
         .add(box(0.05, 0.1, 0.06), dark, 0, { p: [0, -0.07, 0.0], r: [0.3, 0, 0] })
-        .add(along(0.16, 0.022), dark, 0, { p: [0, 0.01, -0.32] })
-        .add(box(0.075, 0.02, 0.2), g, 2.2, { p: [0, 0.045, -0.1] })
-        .add(sph(0.03, 8, 6), g, 3, { p: [0, 0.01, -0.41] })
-        .add(box(0.05, 0.05, 0.08), dark, 0, { p: [0, 0.07, -0.05] });
+        .add(along(0.18, 0.024), dark, 0, { p: [0, 0.015, -0.33] })
+        .add(tor(0.032, 0.009, 5, 12), g, 2.5, { p: [0, 0.015, -0.34] })
+        .add(box(0.078, 0.022, 0.22), g, 2.4, { p: [0, 0.052, -0.1] })
+        .add(sph(0.033, 10, 8), g, 3, { p: [0, 0.015, -0.43] })
+        .add(box(0.052, 0.052, 0.09), dark, 0, { p: [0, 0.075, -0.05] });
       break;
     case 'scatter':
-      b.add(box(0.12, 0.1, 0.26), metal, 0, { p: [0, 0, -0.08] })
+      b.add(box(0.13, 0.105, 0.27), metal, 0, { p: [0, 0, -0.08] })
+        .add(box(0.136, 0.03, 0.18), silver, 0, { p: [0, 0.04, -0.08] })
         .add(box(0.05, 0.1, 0.06), dark, 0, { p: [0, -0.07, 0.02], r: [0.3, 0, 0] });
-      for (const x of [-0.04, 0, 0.04]) b.add(along(0.14, 0.022), dark, 0, { p: [x, 0.015, -0.27] });
-      b.add(box(0.15, 0.03, 0.03), g, 2.6, { p: [0, 0.015, -0.34] })
-        .add(box(0.13, 0.02, 0.16), g, 1.6, { p: [0, 0.06, -0.08] });
+      for (const x of [-0.042, 0, 0.042]) {
+        b.add(along(0.16, 0.023), dark, 0, { p: [x, 0.015, -0.28] });
+      }
+      b.add(box(0.16, 0.035, 0.035), g, 2.8, { p: [0, 0.015, -0.36] })
+        .add(box(0.135, 0.022, 0.17), g, 1.8, { p: [0, 0.062, -0.08] });
       break;
     case 'rail':
-      b.add(box(0.06, 0.08, 0.32), metal, 0, { p: [0, 0, -0.08] })
+      b.add(box(0.065, 0.088, 0.34), metal, 0, { p: [0, 0, -0.08] })
         .add(box(0.05, 0.1, 0.06), dark, 0, { p: [0, -0.07, 0.02], r: [0.3, 0, 0] })
-        .add(along(0.42, 0.018), dark, 0, { p: [0, 0.01, -0.44] })
-        .add(along(0.12, 0.028), dark, 0, { p: [0, 0.075, -0.1] });
-      for (let i = 0; i < 4; i++) b.add(tor(0.035, 0.01, 4, 10), g, 2.6, { p: [0, 0.01, -0.3 - i * 0.09] });
-      b.add(sph(0.032, 8, 6), g, 3, { p: [0, 0.01, -0.66] });
+        .add(along(0.45, 0.019), silver, 0, { p: [0, 0.012, -0.45] })
+        .add(along(0.14, 0.03), dark, 0, { p: [0, 0.08, -0.1] });
+      for (let i = 0; i < 4; i++) {
+        b.add(tor(0.038, 0.011, 5, 12), g, 2.8, { p: [0, 0.012, -0.3 - i * 0.095] });
+      }
+      b.add(oct(0.038), g, 3, { p: [0, 0.012, -0.68] });
       break;
     case 'plasma':
-      b.add(along(0.46, 0.075, 12), metal, 0, { p: [0, 0.05, -0.12] })
-        .add(tor(0.078, 0.02, 6, 14), dark, 0, { p: [0, 0.05, -0.34] })
-        .add(tor(0.078, 0.02, 6, 14), dark, 0, { p: [0, 0.05, 0.08] })
-        .add(sph(0.06, 10, 8), g, 3, { p: [0, 0.05, -0.34] })
+      b.add(along(0.48, 0.078, 12), metal, 0, { p: [0, 0.05, -0.12] })
+        .add(tor(0.084, 0.022, 6, 14), silver, 0, { p: [0, 0.05, -0.35] })
+        .add(tor(0.084, 0.022, 6, 14), dark, 0, { p: [0, 0.05, 0.09] })
+        .add(sph(0.065, 12, 10), g, 3, { p: [0, 0.05, -0.36] })
         .add(box(0.05, 0.1, 0.06), dark, 0, { p: [0, -0.05, -0.05] })
-        .add(box(0.02, 0.06, 0.28), g, 1.6, { p: [0.07, 0.05, -0.12] });
+        .add(box(0.024, 0.065, 0.3), g, 1.8, { p: [0.074, 0.05, -0.12] })
+        .add(box(0.024, 0.065, 0.3), g, 1.8, { p: [-0.074, 0.05, -0.12] });
       break;
     case 'cryo':
-      b.add(box(0.08, 0.09, 0.28), metal, 0, { p: [0, 0, -0.08] })
+      b.add(box(0.085, 0.095, 0.29), metal, 0, { p: [0, 0, -0.08] })
         .add(box(0.05, 0.1, 0.06), dark, 0, { p: [0, -0.07, 0.02], r: [0.3, 0, 0] })
-        .add(cone(0.05, 0.14, 8).rotateX(-Math.PI / 2), dark, 0, { p: [0, 0.01, -0.29] })
-        .add(along(0.18, 0.045, 10), g, 1.8, { p: [0, 0.09, -0.06] })
-        .add(sph(0.035, 8, 6), 0xffffff, 3, { p: [0, 0.01, -0.37] });
+        .add(cone(0.055, 0.16, 8).rotateX(-Math.PI / 2), silver, 0, { p: [0, 0.012, -0.3] })
+        .add(along(0.2, 0.048, 10), g, 2.0, { p: [0, 0.095, -0.06] })
+        .add(oct(0.042), 0xffffff, 3, { p: [0, 0.012, -0.39] });
       break;
     case 'blades':
-      for (let i = 0; i < 3; i++) {
-        const a = (i / 3) * Math.PI * 2;
-        b.add(cone(0.07, 0.36, 3).rotateZ(-Math.PI / 2), GOLD_ARMOR, 1.2, { p: [Math.cos(a) * 0.18, 0, Math.sin(a) * 0.18], r: [0, -a, 0] });
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2;
+        b.add(cone(0.075, 0.38, 4).rotateZ(-Math.PI / 2), GOLD_ARMOR, 1.4, {
+          p: [Math.cos(a) * 0.19, 0, Math.sin(a) * 0.19],
+          r: [0, -a, 0],
+        });
       }
-      b.add(cyl(0.08, 0.08, 0.05, 10), GOLD, 2.4);
+      b.add(cyl(0.09, 0.09, 0.055, 12), GOLD, 2.6).add(oct(0.055), CYAN, 3, { p: [0, 0.05, 0] });
       break;
   }
   const geo = b.build();
@@ -96,60 +108,74 @@ export interface SoldierModel {
 function trooper(heavy: boolean): SoldierModel {
   const armor = heavy ? GOLD_ARMOR : ARMOR;
   const accent = heavy ? GOLD : CYAN;
+  const subAccent = heavy ? 0xff7a2e : 0x2b7dff;
   const k = heavy ? 1.32 : 1;
   const hipY = 0.3;
   const legs = (side: 1 | -1): THREE.BufferGeometry => {
     const b = new GeoBuilder();
-    b.add(box(0.1, 0.16, 0.12), SUIT, 0, { p: [0, -0.07, 0] })
-      .add(box(0.11, 0.07, 0.12), armor, 0, { p: [0, -0.16, -0.012] })
-      .add(box(0.095, 0.1, 0.11), SUIT, 0, { p: [0, -0.22, 0] })
-      .add(box(0.12, 0.07, 0.18), SUIT_DARK, 0, { p: [0, -0.275, -0.025] })
-      .add(box(0.02, 0.02, 0.1), accent, 1.6, { p: [side * 0.055, -0.275, -0.03] });
+    b.add(box(0.105, 0.16, 0.125), SUIT, 0, { p: [0, -0.07, 0] })
+      .add(box(0.118, 0.078, 0.132), armor, 0, { p: [0, -0.158, -0.012] })
+      .add(box(0.04, 0.032, 0.02), accent, 2.0, { p: [0, -0.158, -0.08] })
+      .add(box(0.098, 0.1, 0.115), SUIT, 0, { p: [0, -0.22, 0] })
+      .add(box(0.126, 0.074, 0.19), SUIT_DARK, 0, { p: [0, -0.275, -0.025] })
+      .add(box(0.024, 0.024, 0.11), accent, 1.8, { p: [side * 0.058, -0.275, -0.03] });
     return b.build();
   };
   const body = new GeoBuilder();
   body
-    .add(box(0.28, 0.26, 0.19), SUIT, 0, { p: [0, 0.14, 0] })
-    .add(box(0.3, 0.15, 0.2), armor, 0, { p: [0, 0.2, -0.005] })
-    .add(box(0.3, 0.05, 0.2), SUIT_DARK, 0, { p: [0, 0.03, 0] })
-    .add(box(0.05, 0.035, 0.02), accent, 2, { p: [0, 0.03, -0.105] })
-    // backpack (faces the camera)
-    .add(box(0.22, 0.22, 0.1), 0x24345e, 0, { p: [0, 0.18, 0.14] })
-    .add(box(0.035, 0.15, 0.02), accent, 2.2, { p: [0.055, 0.18, 0.195] })
-    .add(box(0.035, 0.15, 0.02), accent, 2.2, { p: [-0.055, 0.18, 0.195] })
-    .add(cyl(0.01, 0.01, 0.16, 5), SUIT_DARK, 0, { p: [0.08, 0.36, 0.15] })
-    .add(sph(0.018, 6, 4), accent, 3, { p: [0.08, 0.45, 0.15] })
-    // shoulder pads
-    .add(sph(0.085, 10, 6), armor, 0, { p: [0.18, 0.27, 0], s: [1.1, 0.8, 1.1] })
-    .add(sph(0.085, 10, 6), armor, 0, { p: [-0.18, 0.27, 0], s: [1.1, 0.8, 1.1] })
-    .add(box(0.02, 0.02, 0.12), accent, 2, { p: [0.2, 0.31, 0] })
-    .add(box(0.02, 0.02, 0.12), accent, 2, { p: [-0.2, 0.31, 0] });
+    .add(box(0.285, 0.265, 0.195), SUIT, 0, { p: [0, 0.14, 0] })
+    .add(box(0.31, 0.16, 0.21), armor, 0, { p: [0, 0.205, -0.005] })
+    .add(oct(0.046), accent, 2.8, { p: [0, 0.2, -0.112], s: [1, 1.15, 0.5] })
+    .add(box(0.305, 0.052, 0.205), SUIT_DARK, 0, { p: [0, 0.03, 0] })
+    .add(box(0.06, 0.038, 0.025), accent, 2.2, { p: [0, 0.03, -0.108] })
+    // Detailed camera-facing reactor backpack + winglets
+    .add(box(0.23, 0.23, 0.11), 0x21325c, 0, { p: [0, 0.185, 0.142] })
+    .add(oct(0.045), accent, 2.8, { p: [0, 0.185, 0.202], s: [1, 1.3, 0.5] })
+    .add(box(0.036, 0.16, 0.022), accent, 2.4, { p: [0.068, 0.185, 0.2] })
+    .add(box(0.036, 0.16, 0.022), accent, 2.4, { p: [-0.068, 0.185, 0.2] })
+    .add(box(0.09, 0.03, 0.07), armor, 0, { p: [0.145, 0.26, 0.15], r: [0, 0, -0.38] })
+    .add(box(0.09, 0.03, 0.07), armor, 0, { p: [-0.145, 0.26, 0.15], r: [0, 0, 0.38] })
+    .add(cyl(0.011, 0.014, 0.17, 6), SUIT_DARK, 0, { p: [0.085, 0.365, 0.15] })
+    .add(sph(0.02, 8, 6), accent, 3, { p: [0.085, 0.46, 0.15] })
+    // Layered shoulder pauldrons
+    .add(sph(0.09, 12, 8), armor, 0, { p: [0.185, 0.272, 0], s: [1.15, 0.85, 1.12] })
+    .add(sph(0.09, 12, 8), armor, 0, { p: [-0.185, 0.272, 0], s: [1.15, 0.85, 1.12] })
+    .add(box(0.024, 0.024, 0.13), accent, 2.2, { p: [0.205, 0.315, 0] })
+    .add(box(0.024, 0.024, 0.13), accent, 2.2, { p: [-0.205, 0.315, 0] });
   if (heavy) {
-    // jetpack thrusters + big pauldrons
     body
-      .add(cyl(0.045, 0.06, 0.16, 8), 0x3a3320, 0, { p: [0.07, 0.1, 0.21] })
-      .add(cyl(0.045, 0.06, 0.16, 8), 0x3a3320, 0, { p: [-0.07, 0.1, 0.21] })
-      .add(cone(0.05, 0.1, 8).rotateX(Math.PI), GOLD, 2.6, { p: [0.07, -0.02, 0.21] })
-      .add(cone(0.05, 0.1, 8).rotateX(Math.PI), GOLD, 2.6, { p: [-0.07, -0.02, 0.21] })
-      .add(box(0.12, 0.05, 0.16), armor, 0, { p: [0.21, 0.33, 0], r: [0, 0, -0.35] })
-      .add(box(0.12, 0.05, 0.16), armor, 0, { p: [-0.21, 0.33, 0], r: [0, 0, 0.35] });
+      .add(cyl(0.048, 0.064, 0.17, 10), 0x3a3020, 0, { p: [0.075, 0.1, 0.215] })
+      .add(cyl(0.048, 0.064, 0.17, 10), 0x3a3020, 0, { p: [-0.075, 0.1, 0.215] })
+      .add(cone(0.052, 0.11, 8).rotateX(Math.PI), GOLD, 2.8, { p: [0.075, -0.025, 0.215] })
+      .add(cone(0.052, 0.11, 8).rotateX(Math.PI), GOLD, 2.8, { p: [-0.075, -0.025, 0.215] })
+      .add(box(0.135, 0.055, 0.17), armor, 0, { p: [0.215, 0.335, 0], r: [0, 0, -0.35] })
+      .add(box(0.135, 0.055, 0.17), armor, 0, { p: [-0.215, 0.335, 0], r: [0, 0, 0.35] })
+      .add(box(0.11, 0.02, 0.14), subAccent, 2.0, { p: [0.22, 0.365, 0], r: [0, 0, -0.35] })
+      .add(box(0.11, 0.02, 0.14), subAccent, 2.0, { p: [-0.22, 0.365, 0], r: [0, 0, 0.35] });
   }
   const head = new GeoBuilder();
-  const helmet = heavy ? 0xffa81a : 0x2f7bff;
+  const helmet = heavy ? 0xffa81a : 0x2c78ff;
   head
-    .add(sph(0.155, 14, 10), helmet, 0, { p: [0, 0.11, 0] })
-    .add(sph(0.158, 14, 10, ), SUIT_DARK, 0, { p: [0, 0.07, -0.02], s: [1, 0.55, 1] })
-    .add(box(0.2, 0.06, 0.05), accent, 2.6, { p: [0, 0.1, -0.13] })
-    .add(box(0.03, 0.03, 0.3), accent, 2.2, { p: [0, 0.27, 0.01] })
-    .add(cyl(0.035, 0.035, 0.05, 8).rotateZ(Math.PI / 2), accent, 2.2, { p: [0.16, 0.1, 0] })
-    .add(cyl(0.035, 0.035, 0.05, 8).rotateZ(Math.PI / 2), accent, 2.2, { p: [-0.16, 0.1, 0] });
-  if (heavy) head.add(cone(0.05, 0.16, 6), GOLD, 1.4, { p: [0, 0.3, 0.04], r: [-0.4, 0, 0] });
+    .add(sph(0.162, 16, 12), helmet, 0, { p: [0, 0.115, 0] })
+    .add(sph(0.135, 14, 10), armor, 0, { p: [0, 0.145, 0.025], s: [0.92, 0.85, 0.96] })
+    .add(sph(0.164, 14, 10), SUIT_DARK, 0, { p: [0, 0.072, -0.02], s: [1, 0.55, 1] })
+    .add(box(0.215, 0.066, 0.055), accent, 2.8, { p: [0, 0.105, -0.135] })
+    .add(box(0.036, 0.038, 0.31), accent, 2.4, { p: [0, 0.278, 0.01] })
+    .add(cyl(0.04, 0.04, 0.055, 10).rotateZ(Math.PI / 2), armor, 0, { p: [0.162, 0.105, 0] })
+    .add(cyl(0.04, 0.04, 0.055, 10).rotateZ(Math.PI / 2), armor, 0, { p: [-0.162, 0.105, 0] })
+    .add(cyl(0.024, 0.024, 0.062, 10).rotateZ(Math.PI / 2), accent, 2.4, { p: [0.165, 0.105, 0] })
+    .add(cyl(0.024, 0.024, 0.062, 10).rotateZ(Math.PI / 2), accent, 2.4, { p: [-0.165, 0.105, 0] });
+  if (heavy) {
+    head
+      .add(cone(0.055, 0.18, 6), GOLD, 1.8, { p: [0, 0.31, 0.04], r: [-0.38, 0, 0] })
+      .add(tor(0.11, 0.014, 5, 16), GOLD, 2.4, { p: [0, 0.28, 0], r: [Math.PI / 2, 0, 0] });
+  }
   const arms = new GeoBuilder();
-  addLimb(arms, [0.18, 0, 0], [0.13, -0.12, -0.12], 0.045, 0.04, SUIT);
-  addLimb(arms, [-0.18, 0, 0], [-0.02, -0.08, -0.22], 0.045, 0.04, SUIT);
+  addLimb(arms, [0.18, 0, 0], [0.13, -0.12, -0.12], 0.046, 0.042, SUIT);
+  addLimb(arms, [-0.18, 0, 0], [-0.02, -0.08, -0.22], 0.046, 0.042, SUIT);
   arms
-    .add(sph(0.045, 8, 6), armor, 0, { p: [0.12, -0.12, -0.13] })
-    .add(sph(0.045, 8, 6), armor, 0, { p: [-0.01, -0.08, -0.23] });
+    .add(sph(0.048, 8, 6), armor, 0, { p: [0.12, -0.12, -0.13] })
+    .add(sph(0.048, 8, 6), armor, 0, { p: [-0.01, -0.08, -0.23] });
   const weapons = {} as Record<WeaponId, THREE.BufferGeometry>;
   for (const w of ['pulse', 'scatter', 'rail', 'plasma', 'cryo'] as WeaponId[]) {
     const g = buildWeaponGeo(w, 1);
@@ -176,51 +202,56 @@ function trooper(heavy: boolean): SoldierModel {
 
 function mech(): SoldierModel {
   const k = 1;
-  const shell = 0xfff3cf;
-  const frame = 0x2b2c3a;
+  const shell = 0xf4f8ff;
+  const trim = 0x2c6dff;
+  const frame = 0x1d2338;
   const legs = (side: 1 | -1): THREE.BufferGeometry => {
     const b = new GeoBuilder();
-    addLimb(b, [0, 0, 0], [side * 0.05, -0.28, 0.1], 0.1, 0.08, frame);
-    b.add(box(0.2, 0.22, 0.2), shell, 0, { p: [side * 0.03, -0.12, 0.02] });
-    addLimb(b, [side * 0.05, -0.28, 0.1], [side * 0.05, -0.56, -0.02], 0.08, 0.07, frame);
-    b.add(box(0.16, 0.2, 0.16), shell, 0, { p: [side * 0.05, -0.42, 0.03] })
-      .add(box(0.24, 0.08, 0.34), frame, 0, { p: [side * 0.05, -0.6, -0.04] })
-      .add(box(0.04, 0.04, 0.2), GOLD, 2.4, { p: [side * 0.16, -0.6, -0.04] });
+    addLimb(b, [0, 0, 0], [side * 0.05, -0.28, 0.1], 0.105, 0.085, frame);
+    b.add(box(0.21, 0.23, 0.21), shell, 0, { p: [side * 0.03, -0.12, 0.02] })
+      .add(box(0.18, 0.05, 0.22), trim, 0, { p: [side * 0.03, -0.22, 0.02] });
+    addLimb(b, [side * 0.05, -0.28, 0.1], [side * 0.05, -0.56, -0.02], 0.085, 0.072, frame);
+    b.add(box(0.17, 0.21, 0.17), shell, 0, { p: [side * 0.05, -0.42, 0.03] })
+      .add(box(0.25, 0.085, 0.36), frame, 0, { p: [side * 0.05, -0.6, -0.04] })
+      .add(box(0.045, 0.042, 0.22), CYAN, 2.4, { p: [side * 0.165, -0.6, -0.04] });
     return b.build();
   };
   const body = new GeoBuilder();
   body
-    .add(box(0.6, 0.42, 0.5), shell, 0, { p: [0, 0.3, 0] })
-    .add(box(0.62, 0.1, 0.52), frame, 0, { p: [0, 0.08, 0] })
-    .add(box(0.36, 0.28, 0.2), frame, 0, { p: [0, 0.32, 0.32] })
-    .add(cyl(0.07, 0.09, 0.22, 8), 0x3a3320, 0, { p: [0.12, 0.2, 0.42] })
-    .add(cyl(0.07, 0.09, 0.22, 8), 0x3a3320, 0, { p: [-0.12, 0.2, 0.42] })
-    .add(cone(0.08, 0.18, 8).rotateX(Math.PI), GOLD, 3, { p: [0.12, 0.02, 0.42] })
-    .add(cone(0.08, 0.18, 8).rotateX(Math.PI), GOLD, 3, { p: [-0.12, 0.02, 0.42] })
-    .add(box(0.3, 0.04, 0.03), GOLD, 2.4, { p: [0, 0.42, 0.425] })
-    .add(box(0.3, 0.04, 0.03), GOLD, 2.4, { p: [0, 0.34, 0.425] })
-    .add(box(0.22, 0.12, 0.3), shell, 0, { p: [0.4, 0.46, 0], r: [0, 0, -0.3] })
-    .add(box(0.22, 0.12, 0.3), shell, 0, { p: [-0.4, 0.46, 0], r: [0, 0, 0.3] })
-    .add(box(0.03, 0.03, 0.3), GOLD, 2.4, { p: [0.47, 0.52, 0], r: [0, 0, -0.3] })
-    .add(box(0.03, 0.03, 0.3), GOLD, 2.4, { p: [-0.47, 0.52, 0], r: [0, 0, 0.3] });
+    .add(box(0.62, 0.44, 0.52), shell, 0, { p: [0, 0.3, 0] })
+    .add(box(0.56, 0.12, 0.54), trim, 0, { p: [0, 0.44, 0] })
+    .add(box(0.64, 0.1, 0.54), frame, 0, { p: [0, 0.08, 0] })
+    // Twin reactor backpack + shoulder missile pods
+    .add(box(0.4, 0.3, 0.22), frame, 0, { p: [0, 0.32, 0.33] })
+    .add(oct(0.085), CYAN, 3, { p: [0, 0.32, 0.45], s: [1, 1.3, 0.5] })
+    .add(cyl(0.075, 0.095, 0.24, 10), 0x2d3550, 0, { p: [0.135, 0.19, 0.43] })
+    .add(cyl(0.075, 0.095, 0.24, 10), 0x2d3550, 0, { p: [-0.135, 0.19, 0.43] })
+    .add(cone(0.085, 0.2, 10).rotateX(Math.PI), CYAN, 3, { p: [0.135, 0.0, 0.43] })
+    .add(cone(0.085, 0.2, 10).rotateX(Math.PI), CYAN, 3, { p: [-0.135, 0.0, 0.43] })
+    .add(box(0.24, 0.14, 0.32), shell, 0, { p: [0.42, 0.48, 0], r: [0, 0, -0.28] })
+    .add(box(0.24, 0.14, 0.32), shell, 0, { p: [-0.42, 0.48, 0], r: [0, 0, 0.28] })
+    .add(box(0.16, 0.14, 0.22), trim, 0, { p: [0.44, 0.6, 0.04] })
+    .add(box(0.16, 0.14, 0.22), trim, 0, { p: [-0.44, 0.6, 0.04] })
+    .add(box(0.035, 0.035, 0.32), GOLD, 2.6, { p: [0.49, 0.54, 0], r: [0, 0, -0.28] })
+    .add(box(0.035, 0.035, 0.32), GOLD, 2.6, { p: [-0.49, 0.54, 0], r: [0, 0, 0.28] });
   const head = new GeoBuilder();
   head
-    .add(sph(0.2, 14, 10), frame, 0, { s: [1.2, 0.8, 1.1], p: [0, 0.08, -0.05] })
-    .add(sph(0.16, 14, 10), CYAN, 1.8, { s: [1.1, 0.6, 1], p: [0, 0.1, -0.14] })
-    .add(cone(0.035, 0.3, 5), GOLD, 1.6, { p: [0.14, 0.3, 0.05], r: [-0.3, 0, -0.2] })
-    .add(cone(0.035, 0.3, 5), GOLD, 1.6, { p: [-0.14, 0.3, 0.05], r: [-0.3, 0, 0.2] });
+    .add(sph(0.21, 16, 12), shell, 0, { s: [1.22, 0.82, 1.12], p: [0, 0.09, -0.05] })
+    .add(sph(0.165, 14, 10), CYAN, 2.4, { s: [1.15, 0.6, 1], p: [0, 0.105, -0.145] })
+    .add(cone(0.04, 0.32, 6), GOLD, 2.0, { p: [0.15, 0.31, 0.05], r: [-0.3, 0, -0.22] })
+    .add(cone(0.04, 0.32, 6), GOLD, 2.0, { p: [-0.15, 0.31, 0.05], r: [-0.3, 0, 0.22] });
   const arms = new GeoBuilder();
   for (const s of [1, -1]) {
-    addLimb(arms, [s * 0.4, 0, 0], [s * 0.46, -0.2, -0.12], 0.08, 0.07, frame);
+    addLimb(arms, [s * 0.41, 0, 0], [s * 0.47, -0.2, -0.12], 0.085, 0.075, frame);
     arms
-      .add(box(0.2, 0.2, 0.36), shell, 0, { p: [s * 0.46, -0.24, -0.2] })
-      .add(along(0.3, 0.05), frame, 0, { p: [s * 0.46, -0.24, -0.5] })
-      .add(tor(0.055, 0.015, 4, 10), GOLD, 2.6, { p: [s * 0.46, -0.24, -0.62] });
+      .add(box(0.21, 0.21, 0.38), shell, 0, { p: [s * 0.47, -0.24, -0.2] })
+      .add(along(0.32, 0.052), frame, 0, { p: [s * 0.47, -0.24, -0.51] })
+      .add(tor(0.06, 0.016, 5, 12), CYAN, 2.8, { p: [s * 0.47, -0.24, -0.64] });
   }
   const weapons = {} as Record<WeaponId, THREE.BufferGeometry>;
   for (const w of ['pulse', 'scatter', 'rail', 'plasma', 'cryo'] as WeaponId[]) {
-    const g = buildWeaponGeo(w, 1.7);
-    g.translate(0, 0.32, -0.15); // shoulder-mounted main gun
+    const g = buildWeaponGeo(w, 1.72);
+    g.translate(0, 0.32, -0.15);
     weapons[w] = g;
   }
   return {
@@ -245,25 +276,30 @@ export function buildSoldierModels(): SoldierModel[] {
 
 /** Floating hologram model shown inside reward vaults. */
 export function buildRewardDisplayGeo(reward: RewardId): THREE.BufferGeometry {
-  if (reward === 'blades') return buildWeaponGeo('blades', 2.4);
-  const g = buildWeaponGeo(reward, 2.6);
+  if (reward === 'blades') return buildWeaponGeo('blades', 2.45);
+  const g = buildWeaponGeo(reward, 2.65);
   g.center();
   return g;
 }
 
-/** Orbital Bit-Blade (shuriken). */
+/** Orbital Bit-Blade (6-wing plasma star shuriken). */
 export function buildBladeGeo(): THREE.BufferGeometry {
   const b = new GeoBuilder();
-  for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2;
-    b.add(cone(0.1, 0.5, 3).rotateZ(-Math.PI / 2), GOLD_ARMOR, 1.4, { p: [Math.cos(a) * 0.24, 0, Math.sin(a) * 0.24], r: [0, -a, 0], s: [1, 0.35, 1] });
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    b.add(cone(0.095, 0.52, 4).rotateZ(-Math.PI / 2), GOLD_ARMOR, 1.6, {
+      p: [Math.cos(a) * 0.25, 0, Math.sin(a) * 0.25],
+      r: [0, -a + 0.22, 0],
+      s: [1, 0.32, 1],
+    });
   }
-  b.add(cyl(0.12, 0.12, 0.08, 12), GOLD, 2.6).add(oct(0.06), 0xffffff, 3, { p: [0, 0.06, 0] });
+  b.add(tor(0.22, 0.025, 5, 18).rotateX(Math.PI / 2), CYAN, 2.4)
+    .add(cyl(0.125, 0.125, 0.085, 12), GOLD, 2.8)
+    .add(oct(0.07), 0xffffff, 3, { p: [0, 0.065, 0] });
   return b.build();
 }
 
-/** Projectile bolt (unit-length capsule pointing +Z, scaled per weapon). */
+/** Projectile bolt (sleek faceted energy lance pointing +Z, scaled per weapon). */
 export function buildBoltGeo(): THREE.BufferGeometry {
-  return capsule(0.5, 1, 3, 8).rotateX(Math.PI / 2).scale(1, 1, 0.5);
+  return capsule(0.5, 1.05, 4, 10).rotateX(Math.PI / 2).scale(1, 1, 0.52);
 }
-

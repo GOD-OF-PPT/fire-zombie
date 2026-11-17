@@ -22,6 +22,8 @@ import {
 } from '../config/enemies';
 import { CRYO_BRITTLE_DAMAGE_MULT, CRYO_SLOW_MOVE_SCALE } from '../config/weapons';
 import { getEndlessEnemyHpMult } from '../config/endless';
+import { hasSynergy } from '../config/protocols';
+import { mitigateLossWithAegis } from './aegis';
 import { allocEntityId, type SimEnemy, type SimWorld } from './entities';
 import { applyFlatDeltaToGate, findGateById } from './gates';
 import { clamp, clampSquadCount, normalizeZero } from './math';
@@ -191,7 +193,8 @@ export function stepOrbitalBlades(world: SimWorld, events: SimEvent[]): void {
       const dist = Math.hypot(enemy.x - bx, enemy.z - bz);
       if (dist <= BLADES_HIT_RADIUS + enemy.radius) {
         enemy.bladeHitCooldown = BLADES_HIT_COOLDOWN;
-        damageEnemy(world, enemy, BLADES_DAMAGE, 0, events);
+        const bladeMult = hasSynergy(world.endless?.upgrades, 'tempest_blades') ? 1.4 : 1.0;
+        damageEnemy(world, enemy, BLADES_DAMAGE * bladeMult, 0, events);
         break;
       }
     }
@@ -301,7 +304,8 @@ export function resolveEnemyBreaches(world: SimWorld, events: SimEvent[]): boole
         enemy.telegraphTimer = 0;
 
         const cfg = ENEMY_CONFIGS[enemy.kind];
-        const breachLoss = clamp(Math.ceil(enemy.hp / cfg.hpPerDroneLoss), 1, cfg.maxLoss);
+        const rawBreachLoss = clamp(Math.ceil(enemy.hp / cfg.hpPerDroneLoss), 1, cfg.maxLoss);
+        const breachLoss = mitigateLossWithAegis(world, rawBreachLoss, events);
         const before = world.squadCount;
         world.squadCount = clampSquadCount(before - breachLoss);
         const actualLost = before - world.squadCount;

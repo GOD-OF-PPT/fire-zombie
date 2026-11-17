@@ -22,6 +22,8 @@ export interface InputSample {
   keyAxisX: number;
   /** Fire a charged Resonance Overdrive (honoured when the run uses manualOverdrive). */
   overdrive?: boolean;
+  /** Trigger active Phase Aegis tactical shock-shield when off cooldown. */
+  aegisPulse?: boolean;
 }
 
 export interface TierBreakdown {
@@ -151,6 +153,7 @@ export interface BossSnapshot {
 export type SimEvent =
   | { type: 'SHOOT'; weapon: WeaponId; amplified: boolean }
   | { type: 'ENEMY_HIT'; x: number; z: number; fatal: boolean; kind: EnemyKind }
+  | { type: 'CRIT_HIT'; x: number; z: number; damage: number }
   | { type: 'GATE_HIT'; gateId: number; x: number; z: number; newValue: number; flippedPositive: boolean }
   | { type: 'GATE_PASS'; gateId: number; x: number; z: number; delta: number; polarity: GatePolarity }
   | { type: 'VAULT_HIT'; x: number; z: number }
@@ -158,6 +161,7 @@ export type SimEvent =
   | { type: 'BARREL_EXPLODE'; x: number; z: number; radius: number; chainIndex: number; kills: number }
   | { type: 'LENS_REFRACT'; x: number; z: number }
   | { type: 'OVERDRIVE_START'; x: number; z: number }
+  | { type: 'AEGIS_PULSE'; x: number; z: number; orbsCleared: number; enemiesRepelled: number; autoTriggered?: boolean }
   | { type: 'SQUAD_LOSS'; x: number; z: number; lost: number; reason: Exclude<DefeatReason, null> }
   | { type: 'BOSS_INTRO'; bossId: BossSnapshot['id']; name: string }
   | { type: 'BOSS_PHASE_BREAK'; phase: 2 | 3; x: number; z: number }
@@ -202,6 +206,9 @@ export interface SimSnapshot {
   masteryCount: number;
   resonance: number;           // [0, 1] gauge
   overdriveTimer: number;      // >0 while 6s V-Wing Overdrive active
+  aegisTimer: number;          // >0 while Phase Aegis force-dome active
+  aegisCooldown: number;       // >0 remaining cooldown seconds
+  aegisMaxCooldown: number;    // max cooldown seconds for UI ring
   trueSquadDps: number;
   defeatReason: DefeatReason;
   stats: {
@@ -246,6 +253,14 @@ export interface RunModifiers {
   endless?: boolean;
   /** Wait for a between-stage protocol choice; headless simulations may leave this disabled. */
   manualEndlessDraft?: boolean;
+  /** Cooldown seconds of Phase Aegis tactical pulse (default 14). */
+  aegisCooldownSec?: number;
+  /** Active shield duration seconds of Phase Aegis (default 1.25). */
+  aegisDurationSec?: number;
+  /** Emergency auto-trigger Phase Aegis charges per run (default 0). */
+  autoAegisCharges?: number;
+  /** Critical strike probability in [0, 0.75] (default 0). */
+  critChance?: number;
 }
 
 export interface SimulationController {

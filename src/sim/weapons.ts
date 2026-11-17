@@ -22,6 +22,7 @@ import {
   VAULT_HALF_WIDTH,
 } from '../config/constants';
 import { getVolleyStreamCount, getWeaponLevelStats } from '../config/weapons';
+import { hasSynergy } from '../config/protocols';
 import {
   allocEntityId,
   type SimPrismLens,
@@ -156,11 +157,13 @@ function emitPlayerVolley(world: SimWorld, events: SimEvent[]): void {
   const overdriveActive = world.overdriveTimer > 0;
   const masteryMult = 1 + MASTERY_DAMAGE_PER_VAULT * Math.max(0, world.masteryCount);
   // Total volley damage is normalized against base shotsPerSecond so Overdrive's 1.5x fire rate yields exact 1.5x DPS
+  const synMult = hasSynergy(world.endless?.upgrades, 'singularity_matrix') ? 1.15 : 1.0;
+  const synPierce = hasSynergy(world.endless?.upgrades, 'singularity_matrix') ? 1 : 0;
   const totalVolleyDamage =
-    (BASE_DRONE_DPS * world.squadCount * stats.dpsMult * masteryMult * world.mods.damageMult) /
+    (BASE_DRONE_DPS * world.squadCount * stats.dpsMult * masteryMult * world.mods.damageMult * synMult) /
     stats.shotsPerSecond;
   const damagePerProjectile = totalVolleyDamage / streamCount;
-  const pierce = stats.basePierce + (overdriveActive ? OVERDRIVE_BONUS_PIERCE : 0);
+  const pierce = stats.basePierce + (overdriveActive ? OVERDRIVE_BONUS_PIERCE : 0) + synPierce;
   const powerScale = computeProjectilePowerScale(world.squadCount, level, false);
   const muzzleZ = PLAYER_Z - 0.35;
 

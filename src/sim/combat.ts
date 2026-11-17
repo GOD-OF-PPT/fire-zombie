@@ -1,4 +1,6 @@
 import { getWeaponCounterMult } from '../config/weapons';
+import { hasSynergy } from '../config/protocols';
+import { rollDeterministicCrit } from './aegis';
 import type { SimEvent } from '../types/game';
 import { applyBarrelBlastToBoss, damageBossCore, damageBossPylon } from './bosses';
 import { damageBarrel } from './barrels';
@@ -427,7 +429,10 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
           const enemy = world.enemies[cand.index];
           if (enemy && enemy.active && !enemy.consumed && !enemy.bypassed && enemy.hp > 0) {
             proj.hitIds.add(cand.targetId);
-            damageEnemy(world, enemy, proj.damage * getWeaponCounterMult(proj.weapon, enemy.kind), proj.cryoSlowDuration, events);
+            const isCrit = rollDeterministicCrit(world);
+            const dmg = proj.damage * getWeaponCounterMult(proj.weapon, enemy.kind) * (isCrit ? 1.75 : 1.0);
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.round(dmg) });
+            damageEnemy(world, enemy, dmg, proj.cryoSlowDuration, events);
             solidHitApplied = true;
           }
         } else if (cand.kind === 'gate') {
@@ -456,21 +461,30 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
           const pylon = boss?.pylons[cand.index];
           if (boss && boss.active && boss.hp > 0 && pylon && !pylon.destroyed && pylon.hp > 0) {
             proj.hitIds.add(cand.targetId);
-            damageBossPylon(world, pylon, proj.damage, events);
+            const isCrit = rollDeterministicCrit(world);
+            const bossMult = (isCrit ? 1.75 : 1.0) * (hasSynergy(world.endless?.upgrades, 'hyper_annihilation') ? 1.2 : 1.0);
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.round(proj.damage * bossMult) });
+            damageBossPylon(world, pylon, proj.damage * bossMult, events);
             solidHitApplied = true;
           }
         } else if (cand.kind === 'boss_core') {
           const boss = world.boss;
           if (boss && boss.active && boss.hp > 0) {
             proj.hitIds.add(cand.targetId);
-            damageBossCore(world, false, proj.damage, events);
+            const isCrit = rollDeterministicCrit(world);
+            const bossMult = (isCrit ? 1.75 : 1.0) * (hasSynergy(world.endless?.upgrades, 'hyper_annihilation') ? 1.2 : 1.0);
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.round(proj.damage * bossMult) });
+            damageBossCore(world, false, proj.damage * bossMult, events);
             solidHitApplied = true;
           }
         } else if (cand.kind === 'boss_secondary') {
           const boss = world.boss;
           if (boss && boss.active && boss.hp > 0 && boss.secondaryCore) {
             proj.hitIds.add(cand.targetId);
-            damageBossCore(world, true, proj.damage, events);
+            const isCrit = rollDeterministicCrit(world);
+            const bossMult = (isCrit ? 1.75 : 1.0) * (hasSynergy(world.endless?.upgrades, 'hyper_annihilation') ? 1.2 : 1.0);
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.round(proj.damage * bossMult) });
+            damageBossCore(world, true, proj.damage * bossMult, events);
             solidHitApplied = true;
           }
         }

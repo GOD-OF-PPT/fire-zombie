@@ -1,7 +1,7 @@
 import { generateEndlessStage } from '../config/endless';
 import type { SimWorld } from './entities';
 import { clampSquadCount } from './math';
-import { getProtocolOffers } from '../config/protocols';
+import { getProtocolOffers, hasSynergy } from '../config/protocols';
 import type { EndlessUpgradeId } from '../types/game';
 import { BLADES_MAX_COUNT } from '../config/constants';
 
@@ -21,12 +21,14 @@ export function advanceEndlessStage(world: SimWorld): EndlessStageTransition {
   state.wave += 1;
 
   const completedWave = state.wave - 1;
-  const bonus = Math.min(40, 10 + completedWave * 2) + (state.upgrades.supply ?? 0) * 12;
+  const synBonus = hasSynergy(state.upgrades, 'immortal_legion') ? 10 : 0;
+  const bonus = Math.min(40, 10 + completedWave * 2) + (state.upgrades.supply ?? 0) * 12 + synBonus;
   world.squadCount = clampSquadCount(world.squadCount + bonus);
   world.stats.peakSquad = Math.max(world.stats.peakSquad, world.squadCount);
   world.resonance = 1;
   world.overdriveTimer = 0;
   world.overdriveJustStarted = false;
+  world.aegisCooldown = 0;
 
   world.gateRowPool.releaseAll(world.gateRows);
   world.gatePool.releaseAll(world.gates);

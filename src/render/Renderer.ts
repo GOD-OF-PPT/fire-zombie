@@ -27,6 +27,7 @@ import {
   gateTextureKey,
   makeCanvasTexture,
   makeGlowTexture,
+  makeHexCommandTexture,
   makeSkyTexture,
   makeStripeTexture,
   paintGatePlate,
@@ -35,7 +36,7 @@ import {
 } from './textures';
 import { makeCharacterMaterial } from './models/rig';
 import { buildBladeGeo, buildBoltGeo, buildRewardDisplayGeo } from './models/soldiers';
-import { GeoBuilder, box, cyl, sph, tor } from './models/kit';
+import { GeoBuilder, box, cyl, oct, sph, tor } from './models/kit';
 import {
   AnimatedActor,
   loadGltfLibrary,
@@ -299,6 +300,12 @@ export class Renderer {
   // squad & shared VFX meshes
   private squadGlow!: THREE.Mesh;
   private squadGlowMat!: THREE.MeshBasicMaterial;
+  private squadRing!: THREE.Mesh;
+  private squadRingMat!: THREE.MeshBasicMaterial;
+  private aegisGroup!: THREE.Group;
+  private aegisWire!: THREE.Mesh;
+  private aegisWireMat!: THREE.MeshBasicMaterial;
+  private aegisShellMat!: THREE.MeshBasicMaterial;
   private blades!: THREE.InstancedMesh;
   private flashes!: THREE.InstancedMesh;
   private flashMat!: THREE.MeshBasicMaterial;
@@ -326,6 +333,8 @@ export class Renderer {
 
   // shared props
   private glowTex = makeGlowTexture();
+  private hexTex = makeHexCommandTexture();
+  private readonly forceProcedural: boolean;
   private stripeTex = makeStripeTexture();
   private propMat = makeCharacterMaterial(0xbfe8ff, 0.35, 1.6);
   private vaultToonMat = createToonCharMaterial({ rimColor: 0xffffff, rimStrength: 0.55 });
@@ -346,7 +355,8 @@ export class Renderer {
   private bossBlend = 0;
   private fov = 58;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, opts: { forceProcedural?: boolean } = {}) {
+    this.forceProcedural = opts.forceProcedural === true;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
@@ -383,10 +393,12 @@ export class Renderer {
 
   private async loadActorModels(): Promise<void> {
     let lib: GltfLibrary | null = null;
-    try {
-      lib = await withTimeout(loadGltfLibrary(), GLTF_LOAD_TIMEOUT_MS, 'GLB model load');
-    } catch (err) {
-      console.error('GLB models unavailable, using procedural fallback models:', err);
+    if (!this.forceProcedural) {
+      try {
+        lib = await withTimeout(loadGltfLibrary(), GLTF_LOAD_TIMEOUT_MS, 'GLB model load');
+      } catch (err) {
+        console.error('GLB models unavailable, using procedural fallback models:', err);
+      }
     }
     const source = lib ? 'gltf' : 'procedural';
     lib ??= buildProceduralLibrary();
@@ -628,6 +640,8 @@ export class Renderer {
         uEdge: { value: new THREE.Color(0x48f5ff) },
         uFog: { value: new THREE.Color(0x122a68) },
         uHalf: { value: TRACK_HALF_WIDTH },
+        uOverdrive: { value: 0 },
+        uBoss: { value: 0 },
       },
       vertexShader: /* glsl */ `
         varying vec3 vW;
@@ -637,7 +651,7 @@ export class Renderer {
           gl_Position = projectionMatrix * viewMatrix * w;
         }`,
       fragmentShader: /* glsl */ `
-        uniform float uScroll; uniform float uTime; uniform float uHalf;
+        uniform float uScroll; uniform float uTime; uniform float uHalf; uniform float uOverdrive; uniform float uBoss;
         uniform vec3 uTrack; uniform vec3 uGrid; uniform vec3 uEdge; uniform vec3 uFog;
         varying vec3 vW;
         float line(float v, float w) { float f = abs(fract(v) - 0.5); return smoothstep(w, 0.0, 0.5 - f); }
@@ -673,10 +687,25 @@ export class Renderer {
           // Forward speed chevrons remain at the outer lane, clear of combat readability.
           float chev = fract((zz + ax * 0.85) / 10.0);
           c += uEdge * smoothstep(0.026, 0.0, abs(chev - 0.5)) * smoothstep(uHalf, uHalf - 1.1, ax) * smoothstep(uHalf - 2.3, uHalf - 1.4, ax) * 0.3;
+          // Pulsing neon data-conduit traces running along the lane dividers
+          float lanePos = abs(fract((vW.x + uHalf) / (uHalf * 2.0 / 3.0)) - 0.5);
+          float conduit = smoothstep(0.018, 0.003, lanePos);
+          float packet = pow(max(0.0, sin((zz + uTime * 22.0) * 0.28)), 8.0);
+          c += mix(uGrid, uEdge, 0.5) * conduit * (0.12 + packet * 0.28);
+          // Overdrive golden hyper-warp streaks
+          if (uOverdrive > 0.01) {
+            float warp = pow(max(0.0, sin(vW.x * 14.0) * sin((zz + uTime * 48.0) * 0.35)), 6.0);
+            c += vec3(1.0, 0.88, 0.35) * warp * uOverdrive * 0.32;
+          }
+          // Boss arena crimson perimeter hazard ticks
+          if (uBoss > 0.01) {
+            float bossBand = smoothstep(uHalf - 0.85, uHalf - 0.32, ax) * step(0.5, fract((zz - uTime * 6.0) / 2.4));
+            c += vec3(1.0, 0.18, 0.32) * bossBand * uBoss * 0.26;
+          }
           float scan = exp(-900.0 * pow(fract((zz + uTime * 4.0) / 32.0) - 0.5, 2.0));
-          c += uEdge * scan * smoothstep(uHalf, 0.0, ax) * 0.055;
+          c += uEdge * scan * smoothstep(uHalf, 0.0, ax) * 0.065;
           float edge = smoothstep(uHalf - 0.32, uHalf, ax);
-          c = mix(c, uEdge * 0.9, edge * 0.82);
+          c = mix(c, uEdge * 0.92, edge * 0.85);
           float fog = smoothstep(22.0, 96.0, -vW.z);
           c = mix(c, uFog, fog);
           gl_FragColor = vec4(c, 1.0);
@@ -832,6 +861,33 @@ export class Renderer {
     this.squadGlow.rotation.x = -Math.PI / 2;
     this.squadGlow.position.y = 0.03;
     this.scene.add(this.squadGlow);
+
+    this.squadRingMat = additive(0x3ef3ff, 0.52, this.hexTex);
+    this.squadRing = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.squadRingMat);
+    this.squadRing.rotation.x = -Math.PI / 2;
+    this.squadRing.position.y = 0.038;
+    this.scene.add(this.squadRing);
+
+    // 3D Geodesic Phase Aegis Force-Dome
+    this.aegisGroup = new THREE.Group();
+    this.aegisWireMat = new THREE.MeshBasicMaterial({
+      color: 0x62f4ff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.65,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    });
+    this.aegisWire = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), this.aegisWireMat);
+    this.aegisShellMat = additive(0x3ef3ff, 0.16);
+    const aegisShell = new THREE.Mesh(
+      new THREE.SphereGeometry(0.98, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62),
+      this.aegisShellMat,
+    );
+    this.aegisGroup.add(aegisShell, this.aegisWire);
+    this.aegisGroup.visible = false;
+    this.scene.add(this.aegisGroup);
 
     // Crisp contact shadows under every soldier & monster so characters sit solidly on the bridge deck
     const shadowMat = new THREE.MeshBasicMaterial({
@@ -1165,6 +1221,8 @@ export class Renderer {
     const scroll = snap.endless?.distance ?? snap.runwayProgress * sectorCfg.runwayLength;
     this.trackMat.uniforms.uScroll!.value = scroll;
     this.trackMat.uniforms.uTime!.value = t;
+    this.trackMat.uniforms.uOverdrive!.value = snap.overdriveTimer > 0 ? Math.min(1, snap.overdriveTimer * 2) : 0;
+    this.trackMat.uniforms.uBoss!.value = this.bossBlend;
     this.groundMat.uniforms.uScroll!.value = scroll;
     this.towerMat.uniforms.uTime!.value = t;
 
@@ -1423,9 +1481,15 @@ export class Renderer {
       actor.root.scale.setScalar(sc);
 
       const spawnFlash = Math.max(0, (1 - slot.s) * 0.8);
+      const aegisOn = (snap.aegisTimer ?? 0) > 0;
       if (overdrive) {
         const od = 1.08 + Math.sin(t * 18 + i) * 0.08;
-        actor.setVisuals(spawnFlash, od * 1.08, od * 1.04, od * 0.88);
+        actor.setVisuals(spawnFlash, od * 1.1, od * 1.04, od * 0.86);
+        if (Math.random() < dt * 16) {
+          this.effects.burst(slot.x, 0.38, slot.z + 0.25, 0xffe66d, 1, { speed: 2.2, size: 0.22, life: 0.22, up: -0.4, gravity: -3 });
+        }
+      } else if (aegisOn) {
+        actor.setVisuals(spawnFlash, 0.92, 1.06, 1.14);
       } else {
         actor.setVisuals(spawnFlash, 1, 1, 1);
       }
@@ -1454,12 +1518,35 @@ export class Renderer {
     if (this.flashes.instanceColor) this.flashes.instanceColor.needsUpdate = true;
     d.rotation.set(0, 0, 0);
 
-    this.squadGlowMat.color.setHex(overdrive ? 0xffea75 : wc);
+    const aegisActive = (snap.aegisTimer ?? 0) > 0;
+    this.squadGlowMat.color.setHex(overdrive ? 0xffea75 : aegisActive ? 0x62f4ff : wc);
     const gs = snap.formationRadius * 2.5 + 1.5 + (overdrive ? 0.8 : 0);
     this.squadGlow.scale.set(gs, gs, 1);
     this.squadGlow.position.set(snap.squadX, 0.03, PLAYER_Z - 0.05);
     this.squadGlow.visible = snap.squadCount > 0;
-    this.squadGlowMat.opacity = 0.28 + (overdrive ? 0.24 : 0);
+    this.squadGlowMat.opacity = 0.28 + (overdrive ? 0.24 : aegisActive ? 0.18 : 0);
+
+    const ringScale = snap.formationRadius * 2.15 + 1.05 + Math.sin(t * 4) * 0.04;
+    this.squadRing.scale.set(ringScale, ringScale, 1);
+    this.squadRing.position.set(snap.squadX, 0.038, PLAYER_Z);
+    this.squadRing.rotation.z = t * (overdrive ? 1.6 : 0.48);
+    this.squadRing.visible = snap.squadCount > 0;
+    this.squadRingMat.color.setHex(overdrive ? 0xffe46b : aegisActive ? 0x62f4ff : wc);
+    this.squadRingMat.opacity = 0.38 + (overdrive ? 0.28 : 0);
+
+    if (aegisActive && snap.squadCount > 0) {
+      this.aegisGroup.visible = true;
+      const domeR = snap.formationRadius + 1.35;
+      this.aegisGroup.position.set(snap.squadX, 0.15, PLAYER_Z);
+      this.aegisGroup.scale.set(domeR, Math.max(1.85, domeR * 0.92), domeR);
+      this.aegisWire.rotation.y = t * 1.8;
+      this.aegisWire.rotation.z = Math.sin(t * 2.5) * 0.2;
+      const fade = Math.min(1, (snap.aegisTimer ?? 0) * 3.5);
+      this.aegisWireMat.opacity = (0.52 + Math.sin(t * 18) * 0.14) * fade;
+      this.aegisShellMat.opacity = (0.14 + Math.sin(t * 12) * 0.04) * fade;
+    } else {
+      this.aegisGroup.visible = false;
+    }
 
     const nb = snap.bladesCount;
     this.blades.count = nb;
@@ -1717,8 +1804,12 @@ export class Renderer {
       d.updateMatrix();
       this.projMesh.setMatrixAt(n, d.matrix);
       // Slight >1 HDR boost so UnrealBloomPass gives projectiles a clean neon glow
-      this.tmpColor.setHex(p.amplified ? 0xffe27a : WEAPON_COLOR[p.weapon]).multiplyScalar(1.32);
+      const boltHex = p.amplified ? 0xffe27a : WEAPON_COLOR[p.weapon];
+      this.tmpColor.setHex(boltHex).multiplyScalar(1.36);
       this.projMesh.setColorAt(n, this.tmpColor);
+      if ((p.amplified || p.weapon === 'plasma' || p.weapon === 'rail') && Math.random() < 0.14) {
+        this.effects.burst(p.x, 0.65, p.z + 0.3, boltHex, 1, { speed: 1.4, size: p.weapon === 'plasma' ? 0.26 : 0.18, life: 0.16, gravity: 0 });
+      }
       n++;
     }
     this.projMesh.count = n;
@@ -1749,7 +1840,7 @@ export class Renderer {
     const postGeo = hardware.build();
     const postL = new THREE.Mesh(postGeo, postMat);
     const postR = new THREE.Mesh(postGeo, postMat);
-    const beam = new THREE.Mesh(new GeoBuilder().add(box(1, 0.16, 0.28), 0x617889).add(box(1, 0.04, 0.3), 0xd2eeff, 0, { p: [0, -0.1, 0] }).build(), postMat);
+    const beam = new THREE.Mesh(new GeoBuilder().add(box(1, 0.16, 0.28), 0x617889).add(box(1, 0.045, 0.31), 0xd2eeff, 0, { p: [0, -0.1, 0] }).add(oct(0.18), 0xffffff, 0, { p: [0, 0.26, 0], s: [0.85, 1.35, 0.6] }).build(), postMat);
     beam.position.y = 2.9;
     const curtainMat = additive(0xffffff, 0.18);
     const curtain = new THREE.Mesh(new THREE.PlaneGeometry(1, 2.8).translate(0, 1.4, 0), curtainMat);

@@ -289,6 +289,12 @@ export interface SimWorld {
   resonance: number;
   overdriveTimer: number;
   overdriveJustStarted: boolean;
+  aegisTimer: number;
+  aegisCooldown: number;
+  aegisMaxCooldown: number;
+  aegisDurationSec: number;
+  autoAegisCharges: number;
+  critSeed: number;
   trueSquadDps: number;
 
   defeatReason: DefeatReason;

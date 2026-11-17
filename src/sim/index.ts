@@ -43,6 +43,7 @@ export function createSimulation(): SimulationController {
   let pendingDragDeltaX = 0;
   let cachedSnapshot: SimSnapshot | null = null;
   let pendingOverdrive = false;
+  let pendingAegisPulse = false;
   let initialMods: Partial<RunModifiers> = {};
 
   function invalidateSnapshot(): void {
@@ -54,6 +55,7 @@ export function createSimulation(): SimulationController {
       accumulator = 0;
       pendingDragDeltaX = 0;
       pendingOverdrive = false;
+      pendingAegisPulse = false;
       // explicit (possibly empty) mods replace the previous run's modifiers
       initialMods = { ...mods };
       resetSimWorldForSector(world, sector, initialMods);
@@ -83,6 +85,7 @@ export function createSimulation(): SimulationController {
         accumulator = 0;
         pendingDragDeltaX = 0;
         pendingOverdrive = false;
+        pendingAegisPulse = false;
         invalidateSnapshot();
       }
       return chosen;
@@ -92,6 +95,7 @@ export function createSimulation(): SimulationController {
       accumulator = 0;
       pendingDragDeltaX = 0;
       pendingOverdrive = false;
+      pendingAegisPulse = false;
       resetSimWorldForSector(world, world.sector, initialMods);
       invalidateSnapshot();
     },
@@ -119,7 +123,7 @@ export function createSimulation(): SimulationController {
       const keyAxisX = Number.isFinite(input.keyAxisX)
         ? Math.max(-1, Math.min(1, input.keyAxisX))
         : 0;
-      const events = stepWorldFixed(world, { dragDeltaX, keyAxisX, overdrive: input.overdrive === true });
+      const events = stepWorldFixed(world, { dragDeltaX, keyAxisX, overdrive: input.overdrive === true, aegisPulse: input.aegisPulse === true });
       invalidateSnapshot();
       return events;
     },
@@ -139,6 +143,7 @@ export function createSimulation(): SimulationController {
 
       pendingDragDeltaX += dragDeltaX;
       if (input.overdrive === true) pendingOverdrive = true;
+      if (input.aegisPulse === true) pendingAegisPulse = true;
       accumulator += clampedWallDt * world.speedMultiplier;
 
       const stepsToRun = Math.floor((accumulator + ACCUMULATOR_EPS) / FIXED_DT);
@@ -163,8 +168,10 @@ export function createSimulation(): SimulationController {
           dragDeltaX: perStepDrag,
           keyAxisX,
           overdrive: pendingOverdrive,
+          aegisPulse: pendingAegisPulse,
         });
         pendingOverdrive = false;
+        pendingAegisPulse = false;
         for (let j = 0; j < stepEvents.length; j++) {
           const ev = stepEvents[j];
           if (ev !== undefined) {

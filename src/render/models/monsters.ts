@@ -1,53 +1,57 @@
 import * as THREE from 'three';
 import type { EnemyKind } from '../../types/game';
-import { GeoBuilder, addLimb, box, cone, cyl, sph, tor } from './kit';
+import { GeoBuilder, addLimb, box, cone, cyl, oct, sph, tor } from './kit';
 import type { RigPartDef } from './rig';
 
 /**
- * Procedural monster roster used as the fallback when the GLB models are unavailable.
- * All monsters face +Z (toward the squad); parts hang off named joints so the fallback
- * library can animate them. Built at their sim base radius.
+ * High-detail stylized monster roster (used alongside or in place of GLB models).
+ * All monsters face +Z (toward the squad) with crisp Q-version silhouettes & high-contrast accents.
  */
 
 export interface MonsterModel {
   parts: RigPartDef[];
   baseRadius: number;
-  /** Approximate standing height at scale 1 */
   height: number;
 }
 
-const WHITE = 0xfff4ea;
-const BLACK = 0x0c1020;
+const WHITE = 0xfff6ee;
+const BLACK = 0x0a0e1d;
 
 function crawler(): MonsterModel {
-  const main = 0xff2e55;
+  const main = 0xff2852;
+  const carapace = 0x8f1133;
   const body = new GeoBuilder();
   body
-    .add(sph(0.3, 14, 10), main, 0, { p: [0, 0.04, -0.2], s: [1, 0.8, 1.25] })
-    .add(sph(0.22, 14, 10), 0xff5a7a, 0, { p: [0, 0, 0.12] })
-    .add(sph(0.088, 10, 8), 0xffe14a, 2.6, { p: [0, 0.08, 0.3] })
-    .add(sph(0.04, 8, 6), BLACK, 0, { p: [0, 0.08, 0.38] })
-    .add(sph(0.05, 8, 6), 0xffe14a, 2.4, { p: [0.11, 0.12, 0.25] })
-    .add(sph(0.05, 8, 6), 0xffe14a, 2.4, { p: [-0.11, 0.12, 0.25] })
-    .add(cone(0.035, 0.16, 6), WHITE, 0.2, { p: [0.08, -0.08, 0.34], r: [Math.PI / 2, 0, 0.4] })
-    .add(cone(0.035, 0.16, 6), WHITE, 0.2, { p: [-0.08, -0.08, 0.34], r: [Math.PI / 2, 0, -0.4] });
-  for (let i = 0; i < 3; i++) {
-    body.add(box(0.36 - i * 0.06, 0.025, 0.035), 0xff3fd2, 2, { p: [0, 0.26 - i * 0.015, -0.08 - i * 0.12] });
-    body.add(cone(0.04, 0.14, 5), 0xffd0dc, 1, { p: [0, 0.28 - i * 0.02, -0.12 - i * 0.12], r: [-0.4, 0, 0] });
+    .add(sph(0.31, 16, 12), main, 0, { p: [0, 0.05, -0.18], s: [1.05, 0.84, 1.28] })
+    .add(sph(0.26, 14, 10), carapace, 0, { p: [0, 0.13, -0.16], s: [0.95, 0.65, 1.15] })
+    .add(sph(0.23, 14, 10), 0xff5878, 0, { p: [0, 0.0, 0.13] })
+    // Expressive glowing compound eyes & mandibles
+    .add(sph(0.094, 10, 8), 0xffe44d, 2.6, { p: [0, 0.09, 0.31] })
+    .add(sph(0.044, 8, 6), BLACK, 0, { p: [0, 0.09, 0.39] })
+    .add(sph(0.058, 8, 6), 0xffe44d, 2.4, { p: [0.125, 0.125, 0.25] })
+    .add(sph(0.058, 8, 6), 0xffe44d, 2.4, { p: [-0.125, 0.125, 0.25] })
+    .add(cone(0.04, 0.19, 6), WHITE, 0.2, { p: [0.095, -0.075, 0.35], r: [Math.PI / 2, 0, 0.42] })
+    .add(cone(0.04, 0.19, 6), WHITE, 0.2, { p: [-0.095, -0.075, 0.35], r: [Math.PI / 2, 0, -0.42] });
+  for (let i = 0; i < 4; i++) {
+    body.add(oct(0.068 - i * 0.01), 0xff4ae0, 2.2, {
+      p: [0, 0.3 - i * 0.025, 0.02 - i * 0.12],
+      s: [0.7, 1.45, 0.8],
+      r: [-0.35, 0, 0],
+    });
   }
   const legs = (side: 1 | -1): THREE.BufferGeometry => {
     const b = new GeoBuilder();
-    for (const z of [0.14, 0, -0.15]) {
+    for (const z of [0.15, 0, -0.16]) {
       const dz = z * 0.6;
-      addLimb(b, [0, 0, z], [side * 0.28, 0.14, z + dz], 0.035, 0.03, 0x8a1030);
-      addLimb(b, [side * 0.28, 0.14, z + dz], [side * 0.43, -0.34, z + dz * 1.5], 0.03, 0.016, 0x8a1030);
-      b.add(sph(0.025, 6, 4), 0xff3fd2, 2, { p: [side * 0.43, -0.34, z + dz * 1.5] });
+      addLimb(b, [0, 0, z], [side * 0.29, 0.15, z + dz], 0.038, 0.032, carapace);
+      addLimb(b, [side * 0.29, 0.15, z + dz], [side * 0.44, -0.34, z + dz * 1.5], 0.032, 0.016, main);
+      b.add(oct(0.03), 0xff4ae0, 2, { p: [side * 0.44, -0.34, z + dz * 1.5] });
     }
     return b.build();
   };
   return {
     baseRadius: 0.48,
-    height: 0.75,
+    height: 0.78,
     parts: [
       { name: 'body', geo: body.build(), joint: [0, 0.38, 0] },
       { name: 'legsL', geo: legs(1), joint: [0.15, 0.36, 0] },
@@ -57,42 +61,54 @@ function crawler(): MonsterModel {
 }
 
 function dasher(): MonsterModel {
-  const hide = 0xff6b1a;
-  const dark = 0xb84a14;
+  const hide = 0xff6a18;
+  const armor = 0x3b1710;
+  const flame = 0xffcf38;
   const body = new GeoBuilder();
   body
-    .add(sph(0.22, 14, 10), hide, 0, { s: [1, 0.9, 1.6] })
-    .add(sph(0.18, 12, 8), 0xffe047, 0, { p: [0, -0.05, 0.05], s: [0.9, 0.8, 1.4] });
-  for (let i = 0; i < 4; i++) {
-    body.add(cone(0.05, 0.2 - i * 0.02, 4), 0xffc531, 1.6, { p: [0, 0.22 - i * 0.01, 0.22 - i * 0.15], r: [-0.6, 0, 0] });
+    .add(sph(0.23, 14, 10), hide, 0, { s: [1.02, 0.92, 1.62] })
+    .add(sph(0.18, 12, 8), armor, 0, { p: [0, 0.1, -0.02], s: [0.92, 0.6, 1.45] })
+    .add(sph(0.18, 12, 8), flame, 0.6, { p: [0, -0.05, 0.06], s: [0.88, 0.78, 1.38] });
+  for (let i = 0; i < 5; i++) {
+    body.add(cone(0.055, 0.23 - i * 0.022, 5), flame, 2.0, {
+      p: [0, 0.24 - i * 0.012, 0.24 - i * 0.13],
+      r: [-0.65, 0, 0],
+    });
   }
-  addLimb(body, [0, 0.05, -0.3], [0, 0.22, -0.62], 0.06, 0.015, hide);
-  body.add(sph(0.03, 6, 4), 0xffc531, 2.5, { p: [0, 0.22, -0.62] });
+  addLimb(body, [0, 0.05, -0.3], [0, 0.26, -0.66], 0.065, 0.018, hide);
+  body.add(oct(0.055), flame, 2.8, { p: [0, 0.27, -0.68], s: [0.7, 1.3, 1.5] });
+
   const head = new GeoBuilder();
   head
-    .add(sph(0.17, 14, 10), 0xff7a2a, 0, { p: [0, 0.03, 0.08], s: [0.85, 0.75, 1.2] })
-    .add(box(0.14, 0.09, 0.18), 0xff7a2a, 0, { p: [0, -0.01, 0.24] })
-    .add(sph(0.042, 8, 6), WHITE, 1, { p: [0.075, 0.07, 0.19] })
-    .add(sph(0.042, 8, 6), WHITE, 1, { p: [-0.075, 0.07, 0.19] })
-    .add(sph(0.022, 6, 4), BLACK, 0, { p: [0.08, 0.075, 0.225] })
-    .add(sph(0.022, 6, 4), BLACK, 0, { p: [-0.08, 0.075, 0.225] })
-    .add(cone(0.035, 0.22, 5), 0xffe2c0, 0.1, { p: [0.09, 0.15, 0.0], r: [-1.1, 0, -0.3] })
-    .add(cone(0.035, 0.22, 5), 0xffe2c0, 0.1, { p: [-0.09, 0.15, 0.0], r: [-1.1, 0, 0.3] });
-  for (const x of [-0.045, 0, 0.045]) head.add(cone(0.014, 0.05, 4), WHITE, 0.2, { p: [x, -0.07, 0.31], r: [Math.PI, 0, 0] });
+    .add(sph(0.175, 14, 10), 0xff7c28, 0, { p: [0, 0.035, 0.08], s: [0.88, 0.78, 1.24] })
+    .add(box(0.148, 0.095, 0.19), 0xff7c28, 0, { p: [0, -0.01, 0.24] })
+    .add(box(0.16, 0.035, 0.12), armor, 0, { p: [0, 0.09, 0.16], r: [0.22, 0, 0] })
+    .add(sph(0.045, 8, 6), 0x62f4ff, 2.4, { p: [0.078, 0.07, 0.19] })
+    .add(sph(0.045, 8, 6), 0x62f4ff, 2.4, { p: [-0.078, 0.07, 0.19] })
+    .add(sph(0.022, 6, 4), BLACK, 0, { p: [0.084, 0.075, 0.228] })
+    .add(sph(0.022, 6, 4), BLACK, 0, { p: [-0.084, 0.075, 0.228] })
+    .add(cone(0.042, 0.26, 6), flame, 1.2, { p: [0.095, 0.16, -0.01], r: [-1.05, 0, -0.32] })
+    .add(cone(0.042, 0.26, 6), flame, 1.2, { p: [-0.095, 0.16, -0.01], r: [-1.05, 0, 0.32] });
+  for (const x of [-0.048, 0, 0.048]) {
+    head.add(cone(0.015, 0.055, 4), WHITE, 0.2, { p: [x, -0.07, 0.315], r: [Math.PI, 0, 0] });
+  }
   const jaw = new GeoBuilder();
-  jaw.add(box(0.12, 0.04, 0.2), 0x8a2a10, 0, { p: [0, -0.02, 0.1] }).add(box(0.09, 0.015, 0.16), 0xff2965, 1.2, { p: [0, 0.0, 0.1] });
-  for (const x of [-0.04, 0.04]) jaw.add(cone(0.014, 0.05, 4), WHITE, 0.2, { p: [x, 0.02, 0.18] });
+  jaw
+    .add(box(0.125, 0.042, 0.205), armor, 0, { p: [0, -0.02, 0.1] })
+    .add(box(0.092, 0.018, 0.165), 0xff2965, 1.6, { p: [0, 0.0, 0.1] });
+  for (const x of [-0.042, 0.042]) jaw.add(cone(0.015, 0.055, 4), WHITE, 0.2, { p: [x, 0.022, 0.185] });
+
   const leg = (): THREE.BufferGeometry => {
     const b = new GeoBuilder();
-    addLimb(b, [0, 0, 0], [0, -0.25, -0.06], 0.065, 0.045, hide);
-    addLimb(b, [0, -0.25, -0.06], [0, -0.5, 0.02], 0.045, 0.035, dark);
-    b.add(sph(0.05, 8, 6), dark, 0, { p: [0, -0.5, 0.04], s: [1, 0.6, 1.3] });
-    b.add(cone(0.012, 0.05, 4), WHITE, 0.2, { p: [0, -0.52, 0.1], r: [Math.PI / 2, 0, 0] });
+    addLimb(b, [0, 0, 0], [0, -0.25, -0.06], 0.068, 0.048, hide);
+    addLimb(b, [0, -0.25, -0.06], [0, -0.5, 0.02], 0.048, 0.036, armor);
+    b.add(sph(0.052, 8, 6), armor, 0, { p: [0, -0.5, 0.04], s: [1, 0.6, 1.35] });
+    b.add(cone(0.014, 0.055, 4), flame, 1.2, { p: [0, -0.52, 0.105], r: [Math.PI / 2, 0, 0] });
     return b.build();
   };
   return {
     baseRadius: 0.58,
-    height: 0.9,
+    height: 0.92,
     parts: [
       { name: 'body', geo: body.build(), joint: [0, 0.55, 0] },
       { name: 'head', geo: head.build(), joint: [0, 0.66, 0.36] },
@@ -106,56 +122,77 @@ function dasher(): MonsterModel {
 }
 
 function bastion(): MonsterModel {
-  const hide = 0xd91e44;
+  const hide = 0xd61c42;
+  const darkIron = 0x261626;
   const plate = 0xffc531;
-  const glow = 0xff9a3c;
+  const glow = 0xff8c2e;
   const body = new GeoBuilder();
   body
-    .add(sph(0.7, 16, 12), hide, 0, { p: [0, 0.2, 0], s: [1.15, 0.9, 0.75] })
-    .add(box(0.7, 0.4, 0.2), plate, 0, { p: [0, 0.3, 0.42] })
-    .add(box(0.5, 0.03, 0.03), glow, 2.2, { p: [0, 0.38, 0.53] })
-    .add(box(0.03, 0.3, 0.03), glow, 2.2, { p: [0, 0.25, 0.53] })
-    .add(sph(0.32, 12, 8), plate, 0, { p: [0.62, 0.42, 0] })
-    .add(sph(0.32, 12, 8), plate, 0, { p: [-0.62, 0.42, 0] });
+    .add(sph(0.72, 16, 12), hide, 0, { p: [0, 0.21, 0], s: [1.18, 0.92, 0.78] })
+    .add(box(0.76, 0.44, 0.24), darkIron, 0, { p: [0, 0.3, 0.41] })
+    .add(box(0.68, 0.36, 0.06), plate, 0, { p: [0, 0.3, 0.52] })
+    .add(oct(0.14), glow, 2.8, { p: [0, 0.3, 0.57], s: [1, 1.25, 0.5] })
+    .add(sph(0.35, 12, 10), darkIron, 0, { p: [0.64, 0.44, 0] })
+    .add(sph(0.35, 12, 10), darkIron, 0, { p: [-0.64, 0.44, 0] })
+    .add(tor(0.34, 0.045, 5, 14), plate, 1.4, { p: [0.64, 0.44, 0], r: [0, 0, -0.4] })
+    .add(tor(0.34, 0.045, 5, 14), plate, 1.4, { p: [-0.64, 0.44, 0], r: [0, 0, 0.4] });
   for (const s of [1, -1]) {
-    for (let i = 0; i < 3; i++) body.add(cone(0.07, 0.3, 5), 0xfff3cf, 1.2, { p: [s * (0.55 + i * 0.1), 0.72 - i * 0.05, -0.05 + i * 0.05], r: [0, 0, -s * (0.3 + i * 0.25)] });
+    for (let i = 0; i < 3; i++) {
+      body.add(cone(0.075, 0.34, 5), WHITE, 1.2, {
+        p: [s * (0.56 + i * 0.11), 0.75 - i * 0.05, -0.05 + i * 0.05],
+        r: [0, 0, -s * (0.3 + i * 0.25)],
+      });
+    }
   }
   const head = new GeoBuilder();
   head
-    .add(box(0.36, 0.3, 0.34), hide, 0, { p: [0, 0.12, 0] })
-    .add(sph(0.1, 10, 8), WHITE, 1.2, { p: [0.08, 0.14, 0.15] })
-    .add(sph(0.1, 10, 8), WHITE, 1.2, { p: [-0.08, 0.14, 0.15] })
-    .add(sph(0.045, 8, 6), BLACK, 0, { p: [0.08, 0.14, 0.24] })
-    .add(sph(0.045, 8, 6), BLACK, 0, { p: [-0.08, 0.14, 0.24] })
-    .add(box(0.4, 0.06, 0.06), plate, 0, { p: [0, 0.25, 0.16] })
-    .add(cone(0.06, 0.3, 5), 0xfff3cf, 0.1, { p: [0.2, 0.3, 0], r: [0, 0, -0.6] })
-    .add(cone(0.06, 0.3, 5), 0xfff3cf, 0.1, { p: [-0.2, 0.3, 0], r: [0, 0, 0.6] });
+    .add(box(0.38, 0.32, 0.35), hide, 0, { p: [0, 0.12, 0] })
+    .add(box(0.42, 0.11, 0.22), darkIron, 0, { p: [0, 0.25, 0.08] })
+    .add(sph(0.1, 10, 8), 0xffe44d, 2.4, { p: [0.09, 0.14, 0.16] })
+    .add(sph(0.1, 10, 8), 0xffe44d, 2.4, { p: [-0.09, 0.14, 0.16] })
+    .add(sph(0.045, 8, 6), BLACK, 0, { p: [0.09, 0.14, 0.25] })
+    .add(sph(0.045, 8, 6), BLACK, 0, { p: [-0.09, 0.14, 0.25] })
+    .add(cone(0.07, 0.36, 6), plate, 0.8, { p: [0.22, 0.32, 0], r: [0, 0, -0.62] })
+    .add(cone(0.07, 0.36, 6), plate, 0.8, { p: [-0.22, 0.32, 0], r: [0, 0, 0.62] })
+    .add(cone(0.04, 0.14, 5), WHITE, 0.2, { p: [0.11, 0.02, 0.22], r: [0.4, 0, 0] })
+    .add(cone(0.04, 0.14, 5), WHITE, 0.2, { p: [-0.11, 0.02, 0.22], r: [0.4, 0, 0] });
+
   const arm = (side: 1 | -1): THREE.BufferGeometry => {
     const b = new GeoBuilder();
-    addLimb(b, [0, 0, 0], [side * 0.1, -0.48, 0.12], 0.17, 0.14, hide);
-    addLimb(b, [side * 0.1, -0.48, 0.12], [side * 0.05, -0.92, 0.3], 0.15, 0.18, plate);
-    b.add(sph(0.23, 12, 8), hide, 0, { p: [side * 0.05, -1.0, 0.34] });
-    for (const z of [-0.1, 0.1]) b.add(cone(0.05, 0.16, 5), 0xfff3cf, 1.4, { p: [side * 0.2, -0.95, 0.34 + z], r: [0, 0, -side * 1.3] });
-    b.add(box(0.03, 0.3, 0.03), glow, 2, { p: [side * 0.18, -0.7, 0.24] });
+    addLimb(b, [0, 0, 0], [side * 0.1, -0.48, 0.12], 0.18, 0.15, hide);
+    addLimb(b, [side * 0.1, -0.48, 0.12], [side * 0.05, -0.92, 0.3], 0.16, 0.19, darkIron);
+    b.add(sph(0.24, 12, 8), plate, 0, { p: [side * 0.05, -1.0, 0.34] });
+    for (const z of [-0.1, 0.1]) {
+      b.add(cone(0.055, 0.18, 5), WHITE, 1.4, {
+        p: [side * 0.21, -0.95, 0.34 + z],
+        r: [0, 0, -side * 1.3],
+      });
+    }
+    if (side === -1) {
+      // Spiked magma war-club in right hand
+      b.add(cyl(0.06, 0.05, 0.95, 8).rotateX(Math.PI / 2), darkIron, 0, { p: [-0.05, -1.0, 0.72] })
+        .add(cyl(0.18, 0.13, 0.52, 8).rotateX(Math.PI / 2), darkIron, 0, { p: [-0.05, -1.0, 1.12] })
+        .add(tor(0.18, 0.035, 5, 12), glow, 2.4, { p: [-0.05, -1.0, 1.2] });
+    }
     return b.build();
   };
   const leg = (): THREE.BufferGeometry => {
     const b = new GeoBuilder();
-    addLimb(b, [0, 0, 0], [0, -0.48, 0.02], 0.2, 0.17, hide);
-    b.add(box(0.34, 0.14, 0.44), 0x6b4228, 0, { p: [0, -0.55, 0.06] });
+    addLimb(b, [0, 0, 0], [0, -0.48, 0.02], 0.21, 0.18, hide);
+    b.add(box(0.36, 0.15, 0.46), darkIron, 0, { p: [0, -0.55, 0.06] });
     return b.build();
   };
   const shield = new GeoBuilder();
   shield
-    .add(cyl(0.95, 0.95, 0.12, 6).rotateX(Math.PI / 2), 0x6b4228, 0)
-    .add(cyl(0.78, 0.78, 0.04, 6).rotateX(Math.PI / 2), 0x8a5432, 0.55, { p: [0, 0, 0.07] })
-    .add(tor(0.93, 0.05, 4, 6).rotateZ(Math.PI / 6), plate, 2.4, { p: [0, 0, 0.07] })
-    .add(tor(0.45, 0.03, 4, 6).rotateZ(Math.PI / 6), glow, 2.2, { p: [0, 0, 0.1] })
-    .add(box(1.5, 0.035, 0.03), plate, 1.8, { p: [0, 0, 0.1] })
-    .add(box(0.035, 1.5, 0.03), plate, 1.8, { p: [0, 0, 0.1] });
+    .add(cyl(0.96, 0.96, 0.13, 6).rotateX(Math.PI / 2), darkIron, 0)
+    .add(cyl(0.78, 0.78, 0.045, 6).rotateX(Math.PI / 2), 0x6b2038, 0.55, { p: [0, 0, 0.075] })
+    .add(tor(0.94, 0.055, 5, 6).rotateZ(Math.PI / 6), plate, 2.4, { p: [0, 0, 0.075] })
+    .add(oct(0.22), glow, 2.8, { p: [0, 0, 0.13], s: [1, 1, 0.5] })
+    .add(box(1.52, 0.04, 0.03), plate, 1.8, { p: [0, 0, 0.1] })
+    .add(box(0.04, 1.52, 0.03), plate, 1.8, { p: [0, 0, 0.1] });
   return {
     baseRadius: 1.15,
-    height: 2.1,
+    height: 2.12,
     parts: [
       { name: 'body', geo: body.build(), joint: [0, 1.0, 0] },
       { name: 'head', geo: head.build(), joint: [0, 1.62, 0.05] },
@@ -171,26 +208,37 @@ function bastion(): MonsterModel {
 function mitosis(): MonsterModel {
   const body = new GeoBuilder();
   body
-    .add(sph(0.62, 24, 16), 0xff3bd4, 0.55)
-    .add(sph(0.6, 20, 10), 0x9f2bff, 0.1, { p: [0, -0.18, 0], s: [1.04, 0.55, 1.04] });
-  const spots: Array<[number, number, number]> = [[0.3, 0.45, 0.1], [-0.35, 0.4, -0.15], [0.05, 0.55, -0.3], [0.45, 0.15, -0.35], [-0.5, 0.1, 0.15]];
-  for (const p of spots) body.add(sph(0.09, 8, 6), 0xffa3ec, 1.8, { p });
+    .add(sph(0.62, 24, 16), 0xff3ad6, 0.45)
+    .add(sph(0.6, 20, 12), 0x8f24ff, 0.15, { p: [0, -0.18, 0], s: [1.06, 0.56, 1.06] })
+    // Twin internal dividing nuclei crowns
+    .add(oct(0.18), 0x62f4ff, 2.8, { p: [0.18, 0.48, 0], r: [0, 0, -0.25] })
+    .add(oct(0.18), 0xffea75, 2.8, { p: [-0.18, 0.48, 0], r: [0, 0, 0.25] });
+  const spots: Array<[number, number, number]> = [
+    [0.32, 0.42, 0.12],
+    [-0.35, 0.38, -0.15],
+    [0.05, 0.54, -0.32],
+    [0.46, 0.15, -0.35],
+    [-0.5, 0.12, 0.15],
+  ];
+  for (const p of spots) body.add(sph(0.095, 8, 6), 0xffb3f4, 2.0, { p });
   const face = new GeoBuilder();
   for (const s of [1, -1]) {
     face
-      .add(sph(0.17, 12, 10), WHITE, 0.5, { p: [s * 0.21, 0.13, 0.48] })
-      .add(sph(0.085, 10, 8), BLACK, 0, { p: [s * 0.2, 0.12, 0.62] })
-      .add(sph(0.03, 6, 4), 0xffffff, 3, { p: [s * 0.17, 0.16, 0.69] });
+      .add(sph(0.175, 12, 10), WHITE, 0.5, { p: [s * 0.21, 0.13, 0.48] })
+      .add(sph(0.09, 10, 8), BLACK, 0, { p: [s * 0.2, 0.12, 0.62] })
+      .add(sph(0.034, 6, 4), 0xffffff, 3, { p: [s * 0.17, 0.16, 0.69] });
   }
-  face.add(tor(0.11, 0.028, 4, 12, Math.PI), 0x3a0030, 0, { p: [0, -0.1, 0.57], r: [0, 0, Math.PI] });
+  face.add(tor(0.115, 0.03, 5, 14, Math.PI), 0x3a0034, 0, { p: [0, -0.1, 0.57], r: [0, 0, Math.PI] });
   const cells = new GeoBuilder();
-  for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2;
-    cells.add(sph(0.11, 10, 8), 0xff7ae0, 1.4, { p: [Math.cos(a) * 0.82, 0.1 + (i % 2) * 0.25, Math.sin(a) * 0.82] });
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    cells.add(sph(0.115, 10, 8), i % 2 ? 0x62f4ff : 0xff85e8, 2.0, {
+      p: [Math.cos(a) * 0.84, 0.08 + (i % 3) * 0.18, Math.sin(a) * 0.84],
+    });
   }
   return {
     baseRadius: 0.72,
-    height: 1.24,
+    height: 1.28,
     parts: [
       { name: 'body', geo: body.build(), joint: [0, 0.62, 0] },
       { name: 'face', geo: face.build(), joint: [0, 0.62, 0] },
@@ -200,18 +248,26 @@ function mitosis(): MonsterModel {
 }
 
 function siphon(): MonsterModel {
-  const main = 0x8c38ff;
+  const main = 0x7c2eff;
+  const skull = 0xf4ecff;
+  const soul = 0x5eff9a;
   const head = new GeoBuilder();
   head
-    .add(new THREE.SphereGeometry(0.45, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), main, 0.5)
-    .add(cyl(0.45, 0.36, 0.1, 18), 0x4a1a8a, 0, { p: [0, -0.05, 0] })
-    .add(tor(0.45, 0.035, 6, 24).rotateX(Math.PI / 2), 0xd08bff, 2.2)
-    .add(sph(0.17, 12, 10), 0xfff7eb, 0.3, { p: [0, 0.14, 0.33] })
-    .add(sph(0.095, 10, 8), 0x7dff6b, 2.6, { p: [0, 0.14, 0.45] })
-    .add(sph(0.045, 8, 6), BLACK, 0, { p: [0, 0.14, 0.53] });
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2 + 0.3;
-    head.add(sph(0.05, 6, 4), 0x7dff6b, 2, { p: [Math.cos(a) * 0.3, 0.3, Math.sin(a) * 0.3 - 0.05] });
+    .add(new THREE.SphereGeometry(0.46, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.58), main, 0.4)
+    .add(cyl(0.45, 0.34, 0.12, 18), 0x3a1270, 0, { p: [0, -0.06, 0] })
+    .add(tor(0.47, 0.036, 6, 24).rotateX(Math.PI / 2), 0xd896ff, 2.4)
+    // Necromancer crown spikes + skull mask
+    .add(sph(0.24, 12, 10), skull, 0.1, { p: [0, 0.12, 0.28], s: [0.95, 0.9, 0.85] })
+    .add(box(0.2, 0.1, 0.12), skull, 0.1, { p: [0, -0.06, 0.36] })
+    .add(sph(0.085, 10, 8), soul, 2.8, { p: [0.09, 0.14, 0.44] })
+    .add(sph(0.085, 10, 8), soul, 2.8, { p: [-0.09, 0.14, 0.44] })
+    .add(oct(0.11), soul, 3.0, { p: [0, 0.56, 0.05], s: [0.8, 1.5, 0.8] });
+  for (let i = 0; i < 5; i++) {
+    const a = ((i - 2) / 4) * 1.4;
+    head.add(cone(0.045, 0.22, 5), 0xffc531, 1.6, {
+      p: [Math.sin(a) * 0.34, 0.46, Math.cos(a) * 0.12],
+      r: [0.15, 0, -a * 0.65],
+    });
   }
   const tents = (offset: number): THREE.BufferGeometry => {
     const b = new GeoBuilder();
@@ -219,15 +275,15 @@ function siphon(): MonsterModel {
       const a = (i / 3) * Math.PI * 2 + offset;
       const rx = Math.cos(a) * 0.26;
       const rz = Math.sin(a) * 0.26;
-      addLimb(b, [rx, 0, rz], [rx * 1.35, -0.4, rz * 1.35], 0.07, 0.045, 0x6a2acc);
-      addLimb(b, [rx * 1.35, -0.4, rz * 1.35], [rx * 1.05, -0.85, rz * 1.05], 0.045, 0.018, 0x6a2acc);
-      b.add(sph(0.03, 6, 4), 0x7dff6b, 2.6, { p: [rx * 1.05, -0.86, rz * 1.05] });
+      addLimb(b, [rx, 0, rz], [rx * 1.38, -0.4, rz * 1.38], 0.072, 0.046, 0x5c20b8);
+      addLimb(b, [rx * 1.38, -0.4, rz * 1.38], [rx * 1.05, -0.85, rz * 1.05], 0.046, 0.018, 0x9b4dff);
+      b.add(oct(0.042), soul, 2.8, { p: [rx * 1.05, -0.86, rz * 1.05] });
     }
     return b.build();
   };
   return {
     baseRadius: 0.68,
-    height: 1.7,
+    height: 1.72,
     parts: [
       { name: 'head', geo: head.build(), joint: [0, 1.25, 0] },
       { name: 'tentA', geo: tents(0), joint: [0, 1.18, 0] },

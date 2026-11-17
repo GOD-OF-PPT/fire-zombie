@@ -47,42 +47,62 @@ export function gateTextureKey(g: GateSnapshot): string {
   return `${g.label}|${g.polarity}|${g.mutable ? 1 : 0}|${Math.round(g.chargeRatio * 20)}|${Math.ceil(g.lockHp)}|${g.dimmed ? 1 : 0}`;
 }
 
-/** Paints a gate's number plate. Text is drawn huge with a dark stroke so it stays readable while moving/scaling. */
+/** Paints a gate's holographic number plate with high-contrast chamfered glass, scanlines, and crisp typography. */
 export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: number, g: GateSnapshot): void {
   ctx.clearRect(0, 0, w, h);
   const { main, dark } = gateColors(g);
   const pad = 14;
   const grad = ctx.createLinearGradient(0, 0, 0, h);
   grad.addColorStop(0, dark);
-  grad.addColorStop(1, 'rgba(0,0,0,0.85)');
-  roundRect(ctx, pad, pad, w - pad * 2, h - pad * 2, 34);
-  ctx.globalAlpha = g.dimmed ? 0.35 : 0.86;
+  grad.addColorStop(0.55, 'rgba(4,12,24,0.88)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.92)');
+  roundRect(ctx, pad, pad, w - pad * 2, h - pad * 2, 32);
+  ctx.globalAlpha = g.dimmed ? 0.35 : 0.9;
   ctx.fillStyle = grad;
   ctx.fill();
   ctx.globalAlpha = g.dimmed ? 0.4 : 1;
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 6;
   ctx.strokeStyle = main;
   ctx.stroke();
 
-  // Instrument glass: inner bevel, scan lines and small engraved identification.
+  // Inner holographic bezel, diagonal specular reflection & telemetry header
   ctx.save();
-  roundRect(ctx, pad + 8, pad + 8, w - pad * 2 - 16, h - pad * 2 - 16, 26);
+  roundRect(ctx, pad + 8, pad + 8, w - pad * 2 - 16, h - pad * 2 - 16, 24);
   ctx.clip();
-  const glass = ctx.createLinearGradient(0, 0, w, h);
-  glass.addColorStop(0, '#d8ffff26'); glass.addColorStop(0.45, '#d8ffff00'); glass.addColorStop(1, '#00000010');
-  ctx.fillStyle = glass; ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = '#bfffea0b';
-  for (let y = 24; y < h - 20; y += 7) ctx.fillRect(pad, y, w - pad * 2, 1);
-  ctx.font = '700 15px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = main;
-  ctx.fillText(g.mutable ? 'CHARGE // MODIFY' : 'SWARM // TRANSFER', 40, 46);
-  ctx.textAlign = 'right'; ctx.fillStyle = '#c8e0da88'; ctx.fillText('PR-07', w - 40, 46);
+  const glass = ctx.createLinearGradient(0, 0, w * 0.85, h);
+  glass.addColorStop(0, 'rgba(220,255,255,0.2)');
+  glass.addColorStop(0.38, 'rgba(220,255,255,0.03)');
+  glass.addColorStop(0.5, 'rgba(255,255,255,0.1)');
+  glass.addColorStop(0.62, 'rgba(0,0,0,0)');
+  glass.addColorStop(1, 'rgba(0,0,0,0.25)');
+  ctx.fillStyle = glass;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.fillStyle = 'rgba(195,255,245,0.05)';
+  for (let y = 22; y < h - 18; y += 6) ctx.fillRect(pad, y, w - pad * 2, 1.5);
+
+  // Subtle corner tech ticks
+  ctx.strokeStyle = main;
+  ctx.globalAlpha = g.dimmed ? 0.25 : 0.45;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(pad + 14, pad + 14, w - pad * 2 - 28, h - pad * 2 - 28);
+
+  ctx.globalAlpha = g.dimmed ? 0.35 : 0.92;
+  ctx.font = '800 15px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = g.mutable ? COLORS.gold : main;
+  ctx.fillText(g.mutable ? '◈ TARGETABLE // SHOOT TO BOOST' : '◈ SWARM GATE // FIXED', 36, 44);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(215,245,255,0.65)';
+  ctx.fillText('PRISM-V2', w - 36, 44);
   ctx.restore();
 
-  // Mutable gates: gold target brackets = "shoot me"
+  // Mutable gates: bold golden targeting reticle brackets
   if (g.mutable) {
     ctx.strokeStyle = COLORS.gold;
-    ctx.lineWidth = 14;
-    const L = 58;
+    ctx.lineWidth = 15;
+    ctx.lineCap = 'round';
+    const L = 62;
     const x0 = pad - 2;
     const y0 = pad - 2;
     const x1 = w - pad + 2;
@@ -93,12 +113,13 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
     ctx.moveTo(x0, y1 - L); ctx.lineTo(x0, y1); ctx.lineTo(x0 + L, y1);
     ctx.moveTo(x1 - L, y1); ctx.lineTo(x1, y1); ctx.lineTo(x1, y1 - L);
     ctx.stroke();
+    ctx.lineCap = 'butt';
   }
 
-  // Main label
+  // Main numeric label
   const isLock = g.lockHp > 0;
   const label = g.label;
-  let fontSize = label.length >= 3 ? 150 : 172;
+  let fontSize = label.length >= 3 ? 152 : 174;
   ctx.font = `900 ${fontSize}px ${FONT}`;
   while (ctx.measureText(label).width > w - 150 && fontSize > 80) {
     fontSize -= 8;
@@ -106,22 +127,21 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
   }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  const cy = g.mutable ? h * 0.44 : h * 0.5;
+  const cy = g.mutable ? h * 0.44 : h * 0.52;
   ctx.lineJoin = 'round';
-  ctx.lineWidth = 18;
-  ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+  ctx.lineWidth = 20;
+  ctx.strokeStyle = 'rgba(0,0,0,0.94)';
   ctx.strokeText(label, w / 2 + (isLock ? 34 : 0), cy);
   ctx.fillStyle = '#ffffff';
   ctx.fillText(label, w / 2 + (isLock ? 34 : 0), cy);
-  // tinted top highlight
+
   ctx.save();
   ctx.globalCompositeOperation = 'source-atop';
   ctx.fillStyle = main;
-  ctx.globalAlpha = 0.35;
+  ctx.globalAlpha = 0.36;
   ctx.fillRect(0, cy + fontSize * 0.08, w, fontSize * 0.5);
   ctx.restore();
 
-  // Arrow glyph
   if (!isLock && g.polarity !== 'neutral') {
     ctx.fillStyle = main;
     ctx.globalAlpha = g.dimmed ? 0.4 : 1;
@@ -129,16 +149,15 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
     const ay = cy;
     ctx.beginPath();
     if (g.polarity === 'positive') {
-      ctx.moveTo(ax, ay - 30); ctx.lineTo(ax + 26, ay + 18); ctx.lineTo(ax - 26, ay + 18);
+      ctx.moveTo(ax, ay - 32); ctx.lineTo(ax + 27, ay + 18); ctx.lineTo(ax - 27, ay + 18);
     } else {
-      ctx.moveTo(ax, ay + 30); ctx.lineTo(ax + 26, ay - 18); ctx.lineTo(ax - 26, ay - 18);
+      ctx.moveTo(ax, ay + 32); ctx.lineTo(ax + 27, ay - 18); ctx.lineTo(ax - 27, ay - 18);
     }
     ctx.closePath();
     ctx.fill();
   }
 
   if (isLock) {
-    // padlock
     const lx = 92;
     const ly = cy;
     ctx.globalAlpha = 1;
@@ -150,27 +169,37 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
     ctx.fillStyle = COLORS.gold;
     roundRect(ctx, lx - 34, ly - 14, 68, 54, 10);
     ctx.fill();
+    ctx.fillStyle = '#1d1200';
+    ctx.beginPath();
+    ctx.arc(lx, ly + 8, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(lx - 4, ly + 12, 8, 14);
   }
 
   if (g.mutable) {
-    // charge / lock bar
-    const bx = 70;
-    const bw = w - 140;
-    const by = h - 70;
-    const bh = 22;
-    roundRect(ctx, bx, by, bw, bh, 11);
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    const bx = 66;
+    const bw = w - 132;
+    const by = h - 68;
+    const bh = 24;
+    roundRect(ctx, bx, by, bw, bh, 12);
+    ctx.fillStyle = 'rgba(0,0,0,0.82)';
     ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,197,49,0.5)';
+    ctx.stroke();
     const ratio = isLock ? 1 - g.lockHp / Math.max(1, g.maxLockHp) : g.chargeRatio;
     if (ratio > 0) {
-      roundRect(ctx, bx, by, Math.max(22, bw * ratio), bh, 11);
-      ctx.fillStyle = COLORS.gold;
+      const barGrad = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+      barGrad.addColorStop(0, '#ffb21a');
+      barGrad.addColorStop(1, '#fff38a');
+      roundRect(ctx, bx + 2, by + 2, Math.max(20, (bw - 4) * ratio), bh - 4, 10);
+      ctx.fillStyle = barGrad;
       ctx.fill();
     }
-    ctx.font = `800 30px ${FONT}`;
+    ctx.font = `900 29px ${FONT}`;
     ctx.fillStyle = COLORS.gold;
     ctx.textAlign = 'center';
-    ctx.fillText(isLock ? `破锁 → ×2` : '射击提升 ▲', w / 2, by - 24);
+    ctx.fillText(isLock ? `破锁 (${Math.ceil(g.lockHp)}) → ×2` : '▲ 射击充能升阶 ▲', w / 2, by - 22);
   }
   ctx.globalAlpha = 1;
 }
@@ -185,30 +214,33 @@ export function paintVaultPlate(
 ): void {
   const meta = REWARD_META[reward];
   ctx.clearRect(0, 0, w, h);
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, 'rgba(18,10,46,0.92)');
+  bg.addColorStop(1, 'rgba(6,8,24,0.95)');
   roundRect(ctx, 8, 8, w - 16, h - 16, 26);
-  ctx.fillStyle = 'rgba(20,6,40,0.88)';
+  ctx.fillStyle = bg;
   ctx.fill();
-  ctx.lineWidth = 8;
+  ctx.lineWidth = 7;
   ctx.strokeStyle = meta.color;
   ctx.stroke();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `900 64px ${FONT}`;
+  ctx.font = `900 62px ${FONT}`;
   ctx.fillStyle = meta.color;
-  ctx.fillText(meta.glyph, 70, 74);
+  ctx.fillText(meta.glyph, 68, 70);
   ctx.textAlign = 'left';
-  ctx.font = `900 44px ${FONT}`;
+  ctx.font = `900 42px ${FONT}`;
   ctx.fillStyle = '#fff';
-  ctx.fillText(meta.name, 122, 56);
-  ctx.font = `800 30px ${FONT}`;
+  ctx.fillText(meta.name, 120, 52);
+  ctx.font = `800 27px ${FONT}`;
   ctx.fillStyle = meta.color;
-  ctx.fillText(meta.short + ' 升级', 124, 100);
+  ctx.fillText(`${meta.short}武装 · 射击解锁`, 122, 95);
   // HP bar
-  const bx = 30;
-  const bw = w - 60;
-  const by = h - 62;
+  const bx = 28;
+  const bw = w - 56;
+  const by = h - 60;
   roundRect(ctx, bx, by, bw, 34, 17);
-  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.fillStyle = 'rgba(0,0,0,0.84)';
   ctx.fill();
   const r = Math.max(0, Math.min(1, hp / Math.max(1, maxHp)));
   if (r > 0) {
@@ -217,7 +249,7 @@ export function paintVaultPlate(
     ctx.fill();
   }
   ctx.textAlign = 'center';
-  ctx.font = `900 30px ${FONT}`;
+  ctx.font = `900 29px ${FONT}`;
   ctx.lineWidth = 6;
   ctx.strokeStyle = '#000';
   ctx.strokeText(String(Math.ceil(hp)), w / 2, by + 18);
@@ -227,50 +259,152 @@ export function paintVaultPlate(
 
 export function paintLensPlate(ctx: CanvasRenderingContext2D, w: number, h: number): void {
   ctx.clearRect(0, 0, w, h);
+  const bg = ctx.createLinearGradient(0, 0, w, h);
+  bg.addColorStop(0, 'rgba(65,42,0,0.86)');
+  bg.addColorStop(1, 'rgba(28,16,0,0.9)');
   roundRect(ctx, 6, 6, w - 12, h - 12, 22);
-  ctx.fillStyle = 'rgba(60,40,0,0.7)';
+  ctx.fillStyle = bg;
   ctx.fill();
   ctx.lineWidth = 6;
   ctx.strokeStyle = COLORS.gold;
   ctx.stroke();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `900 56px ${FONT}`;
-  ctx.fillStyle = '#fff3c4';
-  ctx.fillText('✦ ×2 分裂', w / 2, h / 2 + 2);
+  ctx.font = `900 50px ${FONT}`;
+  ctx.fillStyle = '#fff5cc';
+  ctx.fillText('✦ 棱镜 ×2 增幅', w / 2, h / 2 + 2);
 }
 
+/** High-detail 1024×1024 stylized cyberpunk skybox with aurora nebula, ringed cyber-planet, and horizon spires. */
 export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTexture {
-  const { ctx, tex, canvas } = makeCanvasTexture(512, 1024);
+  const { ctx, tex, canvas } = makeCanvasTexture(1024, 1024);
   const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
   g.addColorStop(0, stops[0]);
-  g.addColorStop(0.62, stops[1]);
-  g.addColorStop(1, stops[2]);
+  g.addColorStop(0.54, stops[1]);
+  g.addColorStop(0.86, stops[2]);
+  g.addColorStop(1, stops[1]);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const haze = ctx.createRadialGradient(420, 425, 4, 420, 425, 380);
-  haze.addColorStop(0, '#859ecf22'); haze.addColorStop(0.5, '#8099bf0b'); haze.addColorStop(1, '#8099bf00');
-  ctx.fillStyle = haze; ctx.fillRect(0, 0, 768, 1024);
-  const mx = 345; const my = 188; const radius = 58;
-  const halo = ctx.createRadialGradient(mx, my, radius * 0.7, mx, my, radius * 1.8);
-  halo.addColorStop(0, '#8bc9ed22'); halo.addColorStop(0.5, '#8bc9ed0c'); halo.addColorStop(1, '#8bc9ed00');
-  ctx.fillStyle = halo; ctx.fillRect(mx - radius * 2, my - radius * 2, radius * 4, radius * 4);
-  ctx.save(); ctx.beginPath(); ctx.arc(mx, my, radius, 0, Math.PI * 2); ctx.clip();
-  const moon = ctx.createRadialGradient(mx - 24, my - 23, 5, mx + 8, my + 10, radius * 1.25);
-  moon.addColorStop(0, '#c9d9d6'); moon.addColorStop(0.45, '#8ba5b7'); moon.addColorStop(0.78, '#3c5679'); moon.addColorStop(1, '#13294b');
-  ctx.fillStyle = moon; ctx.fillRect(mx - radius, my - radius, radius * 2, radius * 2);
-  let seed = 47;
-  const rnd = (): number => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-  for (let i = 0; i < 190; i++) {
-    const x = mx + (rnd() - 0.5) * radius * 2;
-    const y = my + (rnd() - 0.5) * radius * 2;
-    const r = 1 + rnd() * 10;
-    ctx.fillStyle = i % 3 ? '#132b4210' : '#f5f2d40b';
-    ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.65, -0.4, 0, Math.PI * 2); ctx.fill();
+
+  // Diagonal aurora / nebula ribbons across upper sky
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  for (let band = 0; band < 3; band++) {
+    const ag = ctx.createLinearGradient(120 + band * 210, 40, 880 - band * 120, 560);
+    ag.addColorStop(0, 'rgba(0,0,0,0)');
+    ag.addColorStop(0.45, band === 1 ? 'rgba(255,140,240,0.11)' : 'rgba(90,235,255,0.13)');
+    ag.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = ag;
+    ctx.beginPath();
+    ctx.ellipse(512 + (band - 1) * 180, 290 + band * 55, 480, 95, -0.22 + band * 0.14, 0, Math.PI * 2);
+    ctx.fill();
   }
   ctx.restore();
-  ctx.strokeStyle = '#acdbf822'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.ellipse(mx, my, radius * 1.7, radius * 0.33, -0.33, 0, Math.PI * 2); ctx.stroke();
+
+  // Crisp starfield
+  let seed = 73;
+  const rnd = (): number => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+  for (let i = 0; i < 320; i++) {
+    const sx = rnd() * 1024;
+    const sy = rnd() * 680;
+    const sr = 0.6 + rnd() * (i % 19 === 0 ? 2.4 : 1.2);
+    ctx.fillStyle = i % 7 === 0 ? 'rgba(255,235,170,0.8)' : 'rgba(205,240,255,0.68)';
+    ctx.beginPath();
+    ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Ringed Cyber-Moon / Orbital Colony in upper-right vista
+  const mx = 710;
+  const my = 212;
+  const radius = 108;
+  const halo = ctx.createRadialGradient(mx, my, radius * 0.65, mx, my, radius * 2.3);
+  halo.addColorStop(0, 'rgba(145,225,255,0.28)');
+  halo.addColorStop(0.5, 'rgba(120,185,255,0.09)');
+  halo.addColorStop(1, 'rgba(120,185,255,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(mx - radius * 2.5, my - radius * 2.5, radius * 5, radius * 5);
+
+  // Back half of planetary ring
+  ctx.save();
+  ctx.translate(mx, my);
+  ctx.rotate(-0.32);
+  ctx.strokeStyle = 'rgba(165,235,255,0.28)';
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 1.92, radius * 0.36, 0, Math.PI, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // Moon sphere with cybernetic grid lines & lit craters
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(mx, my, radius, 0, Math.PI * 2);
+  ctx.clip();
+  const moon = ctx.createRadialGradient(mx - 42, my - 40, 10, mx + 16, my + 20, radius * 1.3);
+  moon.addColorStop(0, '#e0f4ff');
+  moon.addColorStop(0.42, '#8db4d2');
+  moon.addColorStop(0.76, '#334e78');
+  moon.addColorStop(1, '#0e1f3d');
+  ctx.fillStyle = moon;
+  ctx.fillRect(mx - radius, my - radius, radius * 2, radius * 2);
+
+  for (let i = 0; i < 140; i++) {
+    const x = mx + (rnd() - 0.5) * radius * 2;
+    const y = my + (rnd() - 0.5) * radius * 2;
+    const r = 2 + rnd() * 16;
+    ctx.fillStyle = i % 3 ? 'rgba(14,34,62,0.16)' : 'rgba(245,250,255,0.08)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, r, r * 0.68, -0.35, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Glowing orbital city arcs on night-side of moon
+  ctx.strokeStyle = 'rgba(98,244,255,0.38)';
+  ctx.lineWidth = 1.6;
+  for (let k = 0; k < 5; k++) {
+    ctx.beginPath();
+    ctx.arc(mx + 34, my + 26, 26 + k * 14, 0.2 + k * 0.3, 1.35 + k * 0.22);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Front half of planetary ring
+  ctx.save();
+  ctx.translate(mx, my);
+  ctx.rotate(-0.32);
+  ctx.strokeStyle = 'rgba(185,245,255,0.52)';
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 1.92, radius * 0.36, 0, 0, Math.PI);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,210,110,0.34)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, radius * 1.68, radius * 0.31, 0, 0, Math.PI);
+  ctx.stroke();
+  ctx.restore();
+
+  // Distant megastructure horizon glow & silhouette spires
+  const hg = ctx.createLinearGradient(0, 560, 0, 920);
+  hg.addColorStop(0, 'rgba(160,235,255,0)');
+  hg.addColorStop(0.55, 'rgba(150,220,255,0.16)');
+  hg.addColorStop(1, 'rgba(10,18,40,0.45)');
+  ctx.fillStyle = hg;
+  ctx.fillRect(0, 560, 1024, 360);
+
+  ctx.fillStyle = 'rgba(8,16,38,0.42)';
+  for (let x = 0; x < 1024; x += 28) {
+    const sh = 35 + Math.floor(rnd() * 125);
+    const sw = 16 + Math.floor(rnd() * 18);
+    ctx.fillRect(x, 790 - sh, sw, sh + 240);
+    if (sh > 95) {
+      ctx.fillRect(x + sw * 0.44, 790 - sh - 34, 3, 34);
+    }
+  }
+
   tex.generateMipmaps = false;
   tex.minFilter = THREE.LinearFilter;
   tex.needsUpdate = true;
@@ -281,10 +415,57 @@ export function makeGlowTexture(): THREE.CanvasTexture {
   const { ctx, tex } = makeCanvasTexture(128, 128);
   const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
   g.addColorStop(0, 'rgba(255,255,255,1)');
-  g.addColorStop(0.25, 'rgba(255,255,255,0.55)');
+  g.addColorStop(0.25, 'rgba(255,255,255,0.58)');
+  g.addColorStop(0.65, 'rgba(255,255,255,0.14)');
   g.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/** Crisp tactical hexagonal command ring decal rendered beneath the player's squad. */
+export function makeHexCommandTexture(): THREE.CanvasTexture {
+  const { ctx, tex } = makeCanvasTexture(256, 256);
+  ctx.clearRect(0, 0, 256, 256);
+  ctx.translate(128, 128);
+
+  // Outer segmented circle
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = 5;
+  for (let i = 0; i < 6; i++) {
+    const a0 = (i / 6) * Math.PI * 2 + 0.08;
+    const a1 = ((i + 1) / 6) * Math.PI * 2 - 0.08;
+    ctx.beginPath();
+    ctx.arc(0, 0, 108, a0, a1);
+    ctx.stroke();
+  }
+
+  // Inner tactical hexagon
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const x = Math.cos(a) * 82;
+    const y = Math.sin(a) * 82;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  // Forward directional chevron ticks
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    ctx.save();
+    ctx.rotate(a);
+    ctx.fillRect(92, -3, 12, 6);
+    ctx.restore();
+  }
+
   tex.colorSpace = THREE.NoColorSpace;
   tex.needsUpdate = true;
   return tex;

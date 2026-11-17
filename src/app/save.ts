@@ -1,4 +1,4 @@
-import type { SectorId } from '../types/game';
+import type { BossId, EnemyKind, SectorId } from '../types/game';
 import type { UpgradeId } from './meta';
 
 export interface SectorRecord {
@@ -15,6 +15,8 @@ export interface EndlessRecord {
   bosses: number;
 }
 
+export type CodexKillKey = EnemyKind | BossId;
+
 export interface SaveData {
   version: 1;
   unlocked: SectorId;
@@ -25,11 +27,41 @@ export interface SaveData {
   /** workshop currency */
   cores: number;
   upgrades: Record<UpgradeId, number>;
+  /** infinite endgame workshop overclock level */
+  apexLevel: number;
   /** completed one-time sector challenge ids */
   challenges: string[];
+  /** unlocked global achievement ids */
+  achievements: string[];
+  /** cumulative bestiary & boss kills */
+  bestiaryKills: Record<CodexKillKey, number>;
 }
 
 const KEY = 'prism-swarm-save-v1';
+
+const KILL_KEYS: readonly CodexKillKey[] = [
+  'crawler',
+  'dasher',
+  'bastion',
+  'mitosis',
+  'siphon',
+  'warden_01',
+  'hydra_02',
+  'omega_zero',
+];
+
+function defaultKills(): Record<CodexKillKey, number> {
+  return {
+    crawler: 0,
+    dasher: 0,
+    bastion: 0,
+    mitosis: 0,
+    siphon: 0,
+    warden_01: 0,
+    hydra_02: 0,
+    omega_zero: 0,
+  };
+}
 
 function defaults(): SaveData {
   return {
@@ -45,8 +77,11 @@ function defaults(): SaveData {
     muted: false,
     seenHints: [],
     cores: 0,
-    upgrades: { squad: 0, power: 0, reso: 0 },
+    upgrades: { squad: 0, power: 0, reso: 0, aegis: 0, crit: 0, bounty: 0 },
+    apexLevel: 0,
     challenges: [],
+    achievements: [],
+    bestiaryKills: defaultKills(),
   };
 }
 
@@ -72,6 +107,10 @@ export function loadSave(): SaveData {
         };
       }
     }
+    const kills = defaultKills();
+    for (const k of KILL_KEYS) {
+      kills[k] = Math.max(0, Math.floor(Number(parsed.bestiaryKills?.[k]) || 0));
+    }
     return {
       version: 1,
       unlocked,
@@ -90,8 +129,14 @@ export function loadSave(): SaveData {
         squad: clampLv(parsed.upgrades?.squad),
         power: clampLv(parsed.upgrades?.power),
         reso: clampLv(parsed.upgrades?.reso),
+        aegis: clampLv(parsed.upgrades?.aegis),
+        crit: clampLv(parsed.upgrades?.crit),
+        bounty: clampLv(parsed.upgrades?.bounty),
       },
+      apexLevel: Math.max(0, Math.floor(Number(parsed.apexLevel) || 0)),
       challenges: Array.isArray(parsed.challenges) ? parsed.challenges.filter((s) => typeof s === 'string') : [],
+      achievements: Array.isArray(parsed.achievements) ? parsed.achievements.filter((s) => typeof s === 'string') : [],
+      bestiaryKills: kills,
     };
   } catch {
     return base;

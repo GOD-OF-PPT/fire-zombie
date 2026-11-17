@@ -1,8 +1,13 @@
 import type { SimEvent } from '../types/game';
 import { OVERDRIVE_DURATION, PLAYER_Z } from '../config/constants';
+import { hasSynergy } from '../config/protocols';
 import type { SimWorld } from './entities';
 
 const FULL_EPS = 1e-9;
+
+export function getEffectiveOverdriveDuration(world: SimWorld): number {
+  return OVERDRIVE_DURATION + (hasSynergy(world.endless?.upgrades, 'tempest_blades') ? 1.5 : 0);
+}
 
 export function addResonance(world: SimWorld, gain: number, events: SimEvent[]): void {
   if (gain <= 0 || world.overdriveTimer > 0) {
@@ -29,7 +34,7 @@ export function tryStartManualOverdrive(world: SimWorld, events: SimEvent[]): bo
 
 function startOverdrive(world: SimWorld, events: SimEvent[]): void {
   world.resonance = 1.0;
-  world.overdriveTimer = OVERDRIVE_DURATION;
+  world.overdriveTimer = getEffectiveOverdriveDuration(world);
   world.overdriveJustStarted = true;
   events.push({
     type: 'OVERDRIVE_START',
