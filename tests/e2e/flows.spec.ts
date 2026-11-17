@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { PLAYER_Z } from '../../src/config/constants';
+import type { GateSnapshot, SimEvent, SimSnapshot } from '../../src/types/game';
 
 /**
  * End-to-end flow checks against the production build (`npm run test:e2e`).
@@ -170,15 +172,43 @@ test('endless is immediately available, drafts an upgrade, saves records, and re
     return g.renderer.bossViews.get(g.sim.getSnapshot().boss.id).root.visible;
   })).toBe(true);
 
-  // An inactive player can still kill a boss with their existing loadout. Choose at each
-  // refit stop until attrition ends the run; a draft is deliberately not a result screen.
-  for (let stage = 0; stage < 15 && (await snap(page)).phase !== 'DEFEAT'; stage++) {
-    await ff(page, 900, false);
-    if ((await snap(page)).state === 'draft') {
-      await page.locator('[data-protocol]').first().click();
-      expect((await snap(page)).state).toBe('playing');
+  // Stacked weapons sustain idle runs. Choose harmful gates at the last moment so
+  // auto-fire cannot improve them first. Drive only simulation inputs; never edit health.
+  const losses = await page.evaluate((playerZ) => {
+    const g = (window as any).__prism;
+    const after = (gate: GateSnapshot, n: number): number => {
+      switch (gate.op) {
+        case 'add': return n + Math.trunc(gate.value);
+        case 'sub': return n - Math.abs(Math.trunc(gate.value));
+        case 'mul': return Math.floor(n * Math.max(0, gate.value));
+        case 'div': return gate.value > 0 ? Math.floor(n / gate.value) : 0;
+      }
+    };
+    let negativeGates = 0;
+    for (let step = 0; step < 900 * 60; step++) {
+      const s = g.sim.getSnapshot() as SimSnapshot;
+      if (s.phase === 'DEFEAT') break;
+      if (g.state === 'draft') { g.chooseProtocol(s.endless!.offers[0]); continue; }
+      if (g.state !== 'playing') break;
+      const gates = s.gates.filter(v => !v.triggered && !v.dimmed && v.z < playerZ).sort((a, b) => b.z - a.z);
+      const next = gates[0];
+      let target = -5;
+      if (next) {
+        const row = gates.filter(v => v.rowId === next.rowId).sort((a, b) => after(a, s.squadCount) - after(b, s.squadCount));
+        const worst = row[0]!;
+        target = next.z >= playerZ - 0.5 ? worst.x : worst.x < 0 ? 5 : -5;
+      }
+      const events: readonly SimEvent[] = g.sim.stepFixed({ dragDeltaX: target - s.squadX, keyAxisX: 0 });
+      g.runTime += 1 / 60;
+      g.handleEvents(events, g.sim.getSnapshot(), true);
+      g.ui.updateFloats(1 / 60);
+      g.renderer.effects.update(1 / 60);
+      negativeGates += events.filter(e => e.type === 'GATE_PASS' && e.delta < 0).length;
     }
-  }
+    g.frame(0);
+    return negativeGates;
+  }, PLAYER_Z);
+  expect(losses).toBeGreaterThan(0);
   await expect(page.getByTestId('result-screen')).toBeVisible({ timeout: 20000 });
   expect((await snap(page)).phase).toBe('DEFEAT');
   const finalWave = (await snap(page)).endless!.wave;

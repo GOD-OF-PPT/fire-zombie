@@ -280,7 +280,13 @@ export interface SimWorld {
   weapon: WeaponId;
   weaponLevel: 1 | 2 | 3;
   learnedWeaponLevels: Record<WeaponId, 0 | 1 | 2 | 3>;
+  auxCooldowns: Record<WeaponId, number>;
+  overclockStacks: number;
+  rampageStacks: number;
+  rampageTimer: number;
+  gateStreak: number;
   fireCooldown: number;
+  volleyIndex: number;
 
   bladesCount: number;
   bladesAngle: number;
@@ -471,7 +477,7 @@ export function createEntityPools(): Pick<
   );
 
   const enemyPool = new EntityPool<SimEnemy>(
-    128,
+    320,
     () => ({
       id: 0,
       kind: 'crawler',
@@ -595,7 +601,7 @@ export function createEntityPools(): Pick<
   );
 
   const projectilePool = new EntityPool<SimProjectile>(
-    256,
+    1024,
     () => ({
       id: 0,
       prevX: 0,

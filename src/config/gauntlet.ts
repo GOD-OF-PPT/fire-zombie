@@ -141,6 +141,16 @@ export function generateGauntlet(seed: number): { boss: BossConfig; encounters: 
       if (kind === 'bastion' && ++bastions > 2) kind = 'crawler';
       units.push({ kind, x: round1(rand() * 6.6 - 3.3), dz: round1(i * 1.6 + rand() * 1.2) });
     }
+    // Add deterministic high-density crawler swarm escorts via isolated sub-PRNG so gate PRNG stays rock-solid
+    const subRand = mulberry32((Math.imul(d, 0x9e3779b1) ^ (seed >>> 0)) >>> 0);
+    const swarmExtra = 6 + Math.floor(t * 8);
+    for (let j = 0; j < swarmExtra; j++) {
+      units.push({
+        kind: 'crawler',
+        x: round1(subRand() * 6.6 - 3.3),
+        dz: round1(0.6 + j * 0.85 + subRand() * 0.7),
+      });
+    }
     out.push({ type: 'enemies', crossDist: d, units });
   };
 

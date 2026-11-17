@@ -481,10 +481,10 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
 
       boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
-        spawnEnemy(world, 'crawler', boss.x - 1.2, boss.z + 2.2);
-        spawnEnemy(world, 'crawler', boss.x, boss.z + 1.6);
-        spawnEnemy(world, 'crawler', boss.x + 1.2, boss.z + 2.2);
-        boss.summonTimer = 5.5;
+        for (const [ox, oz] of [[-2.4, 2.8], [-1.2, 2.1], [0, 1.6], [1.2, 2.1], [2.4, 2.8], [-0.6, 3.2], [0.6, 3.2]] as const) {
+          spawnEnemy(world, 'crawler', clamp(boss.x + ox, -3.6, 3.6), boss.z + oz, { hp: 5 });
+        }
+        boss.summonTimer = 4.6;
       }
 
       boss.lensTimer -= FIXED_DT;
@@ -511,9 +511,10 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
 
       boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
-        spawnEnemy(world, 'crawler', boss.x - 1.3, boss.z + 2.0);
-        spawnEnemy(world, 'crawler', boss.x + 1.3, boss.z + 2.0);
-        boss.summonTimer = 5.0;
+        for (const [ox, oz] of [[-2.6, 2.6], [-1.4, 1.9], [-0.4, 2.4], [0.4, 2.4], [1.4, 1.9], [2.6, 2.6], [0, 3.3]] as const) {
+          spawnEnemy(world, 'crawler', clamp(boss.x + ox, -3.6, 3.6), boss.z + oz, { hp: 5 });
+        }
+        boss.summonTimer = 4.2;
       }
 
       boss.lensTimer -= FIXED_DT;
@@ -544,9 +545,13 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
 
       boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
-        spawnEnemy(world, 'mitosis', -2.0, boss.z + 2.0);
-        spawnEnemy(world, 'mitosis', 2.0, boss.z + 2.0);
-        boss.summonTimer = 5.8;
+        spawnEnemy(world, 'mitosis', -2.1, boss.z + 2.0);
+        spawnEnemy(world, 'mitosis', 2.1, boss.z + 2.0);
+        spawnEnemy(world, 'crawler', -3.1, boss.z + 2.8, { hp: 5 });
+        spawnEnemy(world, 'crawler', -0.8, boss.z + 2.5, { hp: 5 });
+        spawnEnemy(world, 'crawler', 0.8, boss.z + 2.5, { hp: 5 });
+        spawnEnemy(world, 'crawler', 3.1, boss.z + 2.8, { hp: 5 });
+        boss.summonTimer = 4.8;
       }
 
       boss.lensTimer -= FIXED_DT;
@@ -584,9 +589,13 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
 
       boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
-        spawnEnemy(world, 'mitosis', -2.1, -17.5);
-        spawnEnemy(world, 'mitosis', 2.1, -17.5);
-        boss.summonTimer = 6.2;
+        spawnEnemy(world, 'mitosis', -2.2, -17.5);
+        spawnEnemy(world, 'mitosis', 2.2, -17.5);
+        spawnEnemy(world, 'crawler', -3.2, -16.6, { hp: 5 });
+        spawnEnemy(world, 'crawler', -0.9, -16.8, { hp: 5 });
+        spawnEnemy(world, 'crawler', 0.9, -16.8, { hp: 5 });
+        spawnEnemy(world, 'crawler', 3.2, -16.6, { hp: 5 });
+        boss.summonTimer = 5.0;
       }
     }
   } else if (boss.id === 'omega_zero') {
@@ -602,10 +611,10 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
 
       boss.summonTimer -= rageDt;
       if (boss.summonTimer <= 0) {
-        spawnEnemy(world, 'crawler', -1.8, -17.5);
-        spawnEnemy(world, 'crawler', 0.0, -17.5);
-        spawnEnemy(world, 'crawler', 1.8, -17.5);
-        boss.summonTimer = 6.0;
+        for (const [sx, sz] of [[-2.8, -17.2], [-1.7, -17.5], [-0.6, -17.8], [0.6, -17.8], [1.7, -17.5], [2.8, -17.2], [0, -16.6]] as const) {
+          spawnEnemy(world, 'crawler', sx, sz, { hp: 5 });
+        }
+        boss.summonTimer = 4.8;
       }
     } else if (boss.phase === 2) {
       boss.x = normalizeZero(2.9 * Math.sin(1.1 * t));
@@ -621,7 +630,11 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'dasher', -2.6, -21.5);
         spawnEnemy(world, 'dasher', 2.6, -21.5);
-        boss.summonTimer = 5.2;
+        spawnEnemy(world, 'crawler', -1.5, -18.2, { hp: 5 });
+        spawnEnemy(world, 'crawler', 0.0, -18.0, { hp: 5 });
+        spawnEnemy(world, 'crawler', 1.5, -18.2, { hp: 5 });
+        spawnEnemy(world, 'mitosis', 0.0, -19.2);
+        boss.summonTimer = 4.6;
       }
 
       boss.lensTimer -= FIXED_DT;

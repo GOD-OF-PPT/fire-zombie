@@ -34,8 +34,8 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 1,
         dpsMult: 1.0,
-        shotsPerSecond: 8.0,
-        projectileSpeed: 56.0,
+        shotsPerSecond: 12.5,
+        projectileSpeed: 58.0,
         maxRange: 64.0,
         radius: 0.14,
         basePierce: 0,
@@ -48,11 +48,11 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 2,
         dpsMult: 1.24,
-        shotsPerSecond: 8.8,
-        projectileSpeed: 58.0,
+        shotsPerSecond: 14.0,
+        projectileSpeed: 60.0,
         maxRange: 66.0,
         radius: 0.15,
-        basePierce: 0,
+        basePierce: 1,
         fanPellets: 0,
         fanSpreadRad: 0,
         splashRadius: 0,
@@ -62,11 +62,11 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 3,
         dpsMult: 1.52,
-        shotsPerSecond: 9.6,
-        projectileSpeed: 60.0,
+        shotsPerSecond: 15.5,
+        projectileSpeed: 62.0,
         maxRange: 68.0,
         radius: 0.16,
-        basePierce: 1,
+        basePierce: 2,
         fanPellets: 0,
         fanSpreadRad: 0,
         splashRadius: 0,
@@ -82,8 +82,8 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 1,
         dpsMult: 1.32,
-        shotsPerSecond: 6.0,
-        projectileSpeed: 50.0,
+        shotsPerSecond: 8.5,
+        projectileSpeed: 52.0,
         maxRange: 48.0,
         radius: 0.15,
         basePierce: 0,
@@ -96,11 +96,11 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 2,
         dpsMult: 1.60,
-        shotsPerSecond: 6.5,
-        projectileSpeed: 52.0,
+        shotsPerSecond: 9.5,
+        projectileSpeed: 54.0,
         maxRange: 50.0,
         radius: 0.16,
-        basePierce: 0,
+        basePierce: 1,
         fanPellets: 7,
         fanSpreadRad: 34 * DEG_TO_RAD,
         splashRadius: 0,
@@ -110,11 +110,11 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 3,
         dpsMult: 1.90,
-        shotsPerSecond: 7.0,
-        projectileSpeed: 54.0,
+        shotsPerSecond: 10.5,
+        projectileSpeed: 56.0,
         maxRange: 52.0,
         radius: 0.17,
-        basePierce: 0,
+        basePierce: 1,
         fanPellets: 9,
         fanSpreadRad: 36 * DEG_TO_RAD,
         splashRadius: 0,
@@ -130,8 +130,8 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 1,
         dpsMult: 1.20,
-        shotsPerSecond: 3.5,
-        projectileSpeed: 74.0,
+        shotsPerSecond: 5.5,
+        projectileSpeed: 76.0,
         maxRange: 78.0,
         radius: 0.18,
         basePierce: 3,
@@ -144,8 +144,8 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 2,
         dpsMult: 1.48,
-        shotsPerSecond: 3.8,
-        projectileSpeed: 78.0,
+        shotsPerSecond: 6.2,
+        projectileSpeed: 80.0,
         maxRange: 80.0,
         radius: 0.20,
         basePierce: 5,
@@ -158,8 +158,8 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 3,
         dpsMult: 1.80,
-        shotsPerSecond: 4.2,
-        projectileSpeed: 82.0,
+        shotsPerSecond: 7.0,
+        projectileSpeed: 84.0,
         maxRange: 82.0,
         radius: 0.22,
         basePierce: 8,
@@ -178,42 +178,42 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 1,
         dpsMult: 1.25,
-        shotsPerSecond: 2.8,
-        projectileSpeed: 44.0,
+        shotsPerSecond: 4.5,
+        projectileSpeed: 46.0,
         maxRange: 60.0,
         radius: 0.24,
         basePierce: 0,
         fanPellets: 0,
         fanSpreadRad: 0,
-        splashRadius: 3.0,
+        splashRadius: 3.2,
         splashDamageRatio: 0.75,
         cryoSlowDuration: 0,
       },
       {
         level: 2,
         dpsMult: 1.52,
-        shotsPerSecond: 3.1,
-        projectileSpeed: 45.0,
+        shotsPerSecond: 5.2,
+        projectileSpeed: 48.0,
         maxRange: 62.0,
         radius: 0.26,
         basePierce: 0,
         fanPellets: 0,
         fanSpreadRad: 0,
-        splashRadius: 3.8,
+        splashRadius: 4.0,
         splashDamageRatio: 0.75,
         cryoSlowDuration: 0,
       },
       {
         level: 3,
         dpsMult: 1.85,
-        shotsPerSecond: 3.4,
-        projectileSpeed: 46.0,
+        shotsPerSecond: 6.0,
+        projectileSpeed: 50.0,
         maxRange: 64.0,
         radius: 0.28,
         basePierce: 0,
         fanPellets: 0,
         fanSpreadRad: 0,
-        splashRadius: 4.5,
+        splashRadius: 4.6,
         splashDamageRatio: 0.75,
         cryoSlowDuration: 0,
       },
@@ -226,8 +226,8 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 1,
         dpsMult: 1.08,
-        shotsPerSecond: 8.0,
-        projectileSpeed: 56.0,
+        shotsPerSecond: 12.5,
+        projectileSpeed: 58.0,
         maxRange: 60.0,
         radius: 0.15,
         basePierce: 0,
@@ -240,8 +240,8 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 2,
         dpsMult: 1.34,
-        shotsPerSecond: 9.0,
-        projectileSpeed: 58.0,
+        shotsPerSecond: 14.0,
+        projectileSpeed: 60.0,
         maxRange: 62.0,
         radius: 0.16,
         basePierce: 1,
@@ -254,8 +254,8 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
       {
         level: 3,
         dpsMult: 1.62,
-        shotsPerSecond: 10.0,
-        projectileSpeed: 60.0,
+        shotsPerSecond: 15.5,
+        projectileSpeed: 62.0,
         maxRange: 64.0,
         radius: 0.17,
         basePierce: 2,
@@ -287,6 +287,11 @@ export function getWeaponLevelStats(weapon: WeaponId, level: 1 | 2 | 3): WeaponL
   return WEAPON_CONFIGS[weapon].levels[idx];
 }
 
+/**
+ * Dynamic Legion Volley Stream Count:
+ * Every gate that grows your squad immediately expands visible bullet streams across all 5 weapons,
+ * while total volley damage remains normalized to exact trueSquadDps / shotsPerSecond.
+ */
 export function getVolleyStreamCount(
   weapon: WeaponId,
   level: 1 | 2 | 3,
@@ -296,25 +301,49 @@ export function getVolleyStreamCount(
   const stats = getWeaponLevelStats(weapon, level);
 
   if (weapon === 'scatter') {
-    return stats.fanPellets;
+    const bonus =
+      squadCount >= 96
+        ? 10
+        : squadCount >= 49
+          ? 8
+          : squadCount >= 23
+            ? 6
+            : squadCount >= 10
+              ? 4
+              : squadCount >= 4
+                ? 2
+                : 0;
+    return stats.fanPellets + bonus;
   }
   if (weapon === 'rail') {
-    if (squadCount < 8) return 1;
-    if (squadCount < 30) return 2;
-    if (squadCount < 80) return 3;
-    return 4;
+    if (squadCount <= 1) return 1;
+    if (squadCount <= 4) return 2;
+    if (squadCount <= 10) return 3;
+    if (squadCount <= 22) return 4;
+    if (squadCount <= 45) return 5;
+    if (squadCount <= 85) return 6;
+    return 8;
   }
   if (weapon === 'plasma') {
-    if (squadCount < 15) return 1;
-    if (squadCount < 60) return 2;
-    return 3;
+    if (squadCount <= 1) return 1;
+    if (squadCount <= 5) return 2;
+    if (squadCount <= 14) return 3;
+    if (squadCount <= 32) return 4;
+    if (squadCount <= 65) return 5;
+    if (squadCount <= 110) return 6;
+    return 7;
   }
 
-  // pulse & cryo: 1..10 compact parallel streams within [-0.42, +0.42]
-  if (squadCount <= 2) return 1;
-  if (squadCount <= 9) return 2;
-  if (squadCount <= 24) return 4;
-  if (squadCount <= 59) return 6;
-  if (squadCount <= 99) return 8;
-  return 10;
+  // pulse & cryo: 1..18 wide staggered parallel streams matching squad formation growth
+  if (squadCount <= 1) return 1;
+  if (squadCount === 2) return 2;
+  if (squadCount === 3) return 3;
+  if (squadCount <= 5) return 4;
+  if (squadCount <= 8) return 6;
+  if (squadCount <= 14) return 8;
+  if (squadCount <= 24) return 10;
+  if (squadCount <= 42) return 12;
+  if (squadCount <= 75) return 14;
+  if (squadCount <= 130) return 16;
+  return 18;
 }

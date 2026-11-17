@@ -131,7 +131,7 @@ export class AudioEngine {
 
   // ---------------------------------------------------------------- SFX
   shoot(weapon: string): void {
-    if (!this.throttle('shoot', 0.075)) return;
+    if (!this.throttle('shoot', 0.048)) return;
     switch (weapon) {
       case 'scatter':
         this.noise(0.06, { vol: 0.055, freq: 3400, type: 'bandpass', q: 1.2 });
@@ -150,9 +150,18 @@ export class AudioEngine {
     }
   }
 
-  hit(): void {
-    if (!this.throttle('hit', 0.05)) return;
-    this.tone(330 + Math.random() * 80, 0.04, { type: 'square', vol: 0.03, slideTo: 180 });
+  hit(combo = 0): void {
+    if (!this.throttle('hit', 0.042)) return;
+    const climb = Math.min(180, combo * 4.5);
+    // Low-end physical body thump + crisp high transient crunch!
+    this.tone(148 + climb * 0.35, 0.052, { type: 'triangle', vol: 0.065, slideTo: 54 });
+    this.noise(0.032, { vol: 0.042, freq: 2800 + climb * 6, type: 'bandpass', q: 1.4 });
+  }
+
+  chainArc(): void {
+    if (!this.throttle('arc', 0.09)) return;
+    this.noise(0.09, { vol: 0.09, freq: 4200, slideTo: 1600, type: 'bandpass', q: 2.8 });
+    this.tone(1320 + Math.random() * 260, 0.085, { type: 'sawtooth', vol: 0.055, slideTo: 620 });
   }
 
   crit(): void {
@@ -179,14 +188,21 @@ export class AudioEngine {
     );
   }
 
-  kill(big: boolean): void {
-    if (!this.throttle(big ? 'killbig' : 'kill', big ? 0.06 : 0.035)) return;
+  kill(big: boolean, combo = 0): void {
+    if (!this.throttle(big ? 'killbig' : 'kill', big ? 0.055 : 0.03)) return;
+    const pitchMult = Math.pow(2, Math.min(14, combo * 0.35) / 12);
     if (big) {
-      this.noise(0.35, { vol: 0.28, freq: 900, slideTo: 120 });
-      this.tone(160, 0.3, { type: 'triangle', vol: 0.2, slideTo: 50 });
+      this.noise(0.35, { vol: 0.28, freq: 950, slideTo: 110 });
+      this.tone(175, 0.3, { type: 'triangle', vol: 0.22, slideTo: 48 });
+      this.tone(523.25 * pitchMult, 0.14, { type: 'triangle', vol: 0.09, slideTo: 784 * pitchMult });
     } else {
-      this.tone(660 + Math.random() * 200, 0.08, { type: 'triangle', vol: 0.09, slideTo: 1300 });
-      this.noise(0.07, { vol: 0.06, freq: 2600, type: 'highpass' });
+      this.tone(125, 0.065, { type: 'sine', vol: 0.085, slideTo: 52 });
+      this.tone((587 + Math.random() * 60) * pitchMult, 0.085, {
+        type: 'triangle',
+        vol: 0.095,
+        slideTo: 1174 * pitchMult,
+      });
+      this.noise(0.055, { vol: 0.065, freq: 3100, type: 'highpass' });
     }
   }
 

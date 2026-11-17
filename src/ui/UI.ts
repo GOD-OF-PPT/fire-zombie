@@ -1,6 +1,6 @@
 import type { EndlessUpgradeId, NonNullDefeatReason, RewardId, SectorId, SimSnapshot, WeaponId } from '../types/game';
 import { getActiveSynergies, getEndlessThreat, PROTOCOLS, PROTOCOL_SYNERGIES } from '../config/protocols';
-import { WEAPON_CONFIGS } from '../config/weapons';
+import { getVolleyStreamCount, WEAPON_CONFIGS } from '../config/weapons';
 import {
   ACHIEVEMENTS,
   BOSS_META,
@@ -99,6 +99,8 @@ export class UI {
   private weaponChip!: HTMLElement;
   private dpsChip!: HTMLElement;
   private bladesChip!: HTMLElement;
+  private stackRack!: HTMLElement;
+  private lastStackKey = '';
   private scoreEl!: HTMLElement;
   private feverBadge!: HTMLElement;
   private resoFill!: HTMLElement;
@@ -201,6 +203,7 @@ export class UI {
           <div class="chip weapon-chip" data-testid="weapon-chip"></div>
           <div class="chip dps-chip" data-testid="dps-chip">⚡ DPS 2</div>
           <div class="chip blades-chip" data-testid="blades-chip"></div>
+          <div class="stack-rack" data-testid="stack-rack"></div>
         </div>
         <div class="score-wrap">
           <div class="score" data-testid="score">0</div>
@@ -229,6 +232,7 @@ export class UI {
     this.weaponChip = this.hud.querySelector('.weapon-chip')!;
     this.dpsChip = this.hud.querySelector('.dps-chip')!;
     this.bladesChip = this.hud.querySelector('.blades-chip')!;
+    this.stackRack = this.hud.querySelector('.stack-rack')!;
     this.scoreEl = this.hud.querySelector('.score')!;
     this.feverBadge = this.hud.querySelector('.fever-badge')!;
     this.squadBadge = this.hud.querySelector('.squad-badge')!;
@@ -649,7 +653,9 @@ export class UI {
     this.progressWrap.classList.remove('hide');
     this.lastSquad = -1;
     this.lastWeaponKey = '';
+    this.lastStackKey = '';
     this.lastDps = -1;
+    this.stackRack.replaceChildren();
     this.lastScore = -1;
     this.setSpeed(1);
     this.updateFever(0, 1);
@@ -743,10 +749,53 @@ export class UI {
       this.weaponChip.classList.add('pop');
     }
 
-    const roundedDps = Math.round(snap.trueSquadDps);
-    if (roundedDps !== this.lastDps) {
-      this.lastDps = roundedDps;
-      this.dpsChip.textContent = `⚡ DPS ${roundedDps.toLocaleString('en-US')}`;
+    const rampageBoost =
+      (snap.rampageStacks ?? 0) >= 6
+        ? 1 + Math.min(0.36, Math.floor((snap.rampageStacks ?? 0) / 6) * 0.045)
+        : 1;
+    let auxMult = 1;
+    let auxStreamTotal = 0;
+    const pills: Content[] = [];
+    if (snap.arsenal && snap.stats.vaultsCracked > 0) {
+      for (const wId of ['pulse', 'scatter', 'rail', 'plasma', 'cryo'] as const) {
+        const lv = snap.arsenal[wId] ?? 0;
+        if (lv === 0) continue;
+        const m = REWARD_META[wId];
+        if (wId !== snap.weapon) {
+          auxMult += (0.28 + lv * 0.07) * (0.38 + lv * 0.1);
+          const fullS = getVolleyStreamCount(wId, lv, snap.squadCount);
+          auxStreamTotal += Math.min(6, Math.max(2, Math.ceil(fullS * 0.42)));
+        }
+        const isLead = wId === snap.weapon;
+        pills.push(
+          html`<span class="st-pill ${isLead ? 'lead' : ''}" style="--sc:${m.color}">${m.glyph}${m.short}${lv}</span>`,
+        );
+      }
+    }
+    if ((snap.overclockStacks ?? 0) > 0) {
+      pills.push(html`<span class="st-pill oc" style="--sc:#ff5ce0">✦超限+${snap.overclockStacks}</span>`);
+    }
+    if ((snap.rampageStacks ?? 0) >= 5) {
+      const pct = Math.round((rampageBoost - 1) * 100);
+      pills.push(
+        html`<span class="st-pill hot" style="--sc:#ff9a3c">🔥狂暴×${snap.rampageStacks}${pct > 0 ? ` +${pct}%速` : '·电弧'}</span>`,
+      );
+    }
+    if ((snap.gateStreak ?? 0) >= 2) {
+      pills.push(html`<span class="st-pill streak" style="--sc:#19f5a8">🚪连门×${snap.gateStreak}</span>`);
+    }
+    const stackKey = [snap.weapon, ...Object.values(snap.arsenal ?? {}), snap.overclockStacks, snap.rampageStacks, snap.gateStreak, snap.stats.vaultsCracked > 0].join('|');
+    if (stackKey !== this.lastStackKey) {
+      this.lastStackKey = stackKey;
+      render(this.stackRack, pills);
+    }
+
+    const effectiveDps = Math.round(snap.trueSquadDps * auxMult * rampageBoost);
+    const totalStreams = getVolleyStreamCount(snap.weapon, snap.weaponLevel, snap.squadCount) + auxStreamTotal;
+    const dpsKey = effectiveDps * 100 + totalStreams;
+    if (dpsKey !== this.lastDps) {
+      this.lastDps = dpsKey;
+      this.dpsChip.textContent = `⚡ ${totalStreams}弹道 · DPS ${effectiveDps.toLocaleString('en-US')}`;
     }
 
     if (snap.bladesCount > 0) {
@@ -765,10 +814,16 @@ export class UI {
     this.resoFill.style.width = `${(snap.resonance * 100).toFixed(1)}%`;
     this.resoWrap.classList.toggle('od', od);
     const ready = !od && snap.resonance >= 0.999;
-    if (ready !== this.resoReady) {
+    if (ready !== this.resoReady || od) {
       this.resoReady = ready;
       this.resoWrap.classList.toggle('ready', ready);
-      this.resoLabel.textContent = ready ? '点击 / 空格 超载' : '共鸣';
+      this.resoLabel.textContent = od
+        ? `⚡ 超载齐射 ${snap.overdriveTimer.toFixed(1)}s`
+        : ready
+          ? '点击 / 空格 超载'
+          : '共鸣';
+    } else if (!od && !ready && this.resoLabel.textContent !== '共鸣') {
+      this.resoLabel.textContent = '共鸣';
     }
     this.root.classList.toggle('overdrive', od);
 
@@ -867,15 +922,34 @@ export class UI {
     this.bannerTimer = null;
   }
 
-  rewardBanner(reward: RewardId, level: number): void {
+  rewardBanner(reward: RewardId, level: number, stackedCount = 1): void {
     const m = REWARD_META[reward];
-    const lvl = reward === 'blades' ? `×${level}` : `Lv${level}`;
+    const sub =
+      reward === 'blades'
+        ? `环绕飞刃 ×${level} · 额外扩编 +6`
+        : level > 3
+          ? `超限进化叠层 ×${level - 3} · 全军火力再跃升！`
+          : stackedCount >= 2
+            ? `已激活 ${stackedCount} 重武装同屏协同齐射 · 克制${m.counters}`
+            : `${m.desc} · 克制${m.counters}`;
+    const kicker =
+      reward === 'blades'
+        ? 'ORBITAL DEFENSE'
+        : level > 3
+          ? 'OVERCLOCK STACKED'
+          : stackedCount >= 2
+            ? `ARSENAL STACK ×${stackedCount}`
+            : 'WEAPON ONLINE';
+    const titleTxt =
+      reward === 'blades'
+        ? `${m.name} ×${level}`
+        : level > 3
+          ? `${m.name} MAX+${level - 3}`
+          : `${m.name} Lv.${level}`;
     this.showBanner(
-      html`<div class="b-kicker">${reward === 'blades' ? '护卫展开' : level > 1 ? '武器升级' : '获得武器'}</div>
-       <div class="b-title" style="color:${m.color}">${m.glyph} ${m.name} ${lvl}</div>
-       <div class="b-sub">${m.desc}</div>`,
+      html`<div class="b-kicker">${kicker}</div><div class="b-title" style="color:${m.color}">${titleTxt}</div><div class="b-sub">${sub}</div>`,
       'reward',
-      950,
+      1250,
     );
   }
 

@@ -1,4 +1,4 @@
-import type { RewardId, SimEvent } from '../types/game';
+import type { RewardId, SimEvent, WeaponId } from '../types/game';
 import {
   BASE_DRONE_DPS,
   BLADES_ANGULAR_SPEED,
@@ -121,11 +121,15 @@ export function damageVault(
       emittedLevel = world.bladesCount;
     } else {
       const prevLearned = world.learnedWeaponLevels[vault.rewardWeapon];
+      if (prevLearned >= 3) {
+        world.overclockStacks += 1;
+        world.masteryCount += 1; // Double mastery bonus on Lv.3+ Overclock stack!
+      }
       const nextLevel = Math.min(3, Math.max(1, prevLearned + 1)) as 1 | 2 | 3;
       world.learnedWeaponLevels[vault.rewardWeapon] = nextLevel;
       world.weapon = vault.rewardWeapon;
       world.weaponLevel = nextLevel;
-      emittedLevel = nextLevel;
+      emittedLevel = prevLearned >= 3 ? 3 + world.overclockStacks : nextLevel;
     }
 
     events.push({
@@ -165,7 +169,9 @@ function emitPlayerVolley(world: SimWorld, events: SimEvent[]): void {
   const damagePerProjectile = totalVolleyDamage / streamCount;
   const pierce = stats.basePierce + (overdriveActive ? OVERDRIVE_BONUS_PIERCE : 0) + synPierce;
   const powerScale = computeProjectilePowerScale(world.squadCount, level, false);
-  const muzzleZ = PLAYER_Z - 0.35;
+  const volleyIdx = world.volleyIndex;
+  world.volleyIndex = (volleyIdx + 1) & 0x3fffffff;
+  const squadSpan = clamp(world.formationRadius * 0.76, 0.28, 1.22);
 
   for (let i = 0; i < streamCount; i++) {
     const proj = world.projectilePool.acquire();
@@ -185,27 +191,40 @@ function emitPlayerVolley(world: SimWorld, events: SimEvent[]): void {
     proj.sweepStartFraction = 0;
     proj.active = true;
 
+    const frac = streamCount <= 1 ? 0 : i / (streamCount - 1) - 0.5;
+    const absNorm = Math.abs(frac) * 2;
     let spawnX = world.squadX;
     let vx = 0;
     let vz = -stats.projectileSpeed;
 
     if (weapon === 'scatter') {
-      const frac = streamCount <= 1 ? 0 : i / (streamCount - 1) - 0.5;
       const angle = frac * stats.fanSpreadRad;
       vx = Math.sin(angle) * stats.projectileSpeed;
       vz = -Math.cos(angle) * stats.projectileSpeed;
-      spawnX = clamp(world.squadX + frac * 0.28, -TRACK_HALF_WIDTH + 0.18, TRACK_HALF_WIDTH - 0.18);
+      const scatterSpan = streamCount <= 1 ? 0 : Math.min(0.85, Math.max(0.26, squadSpan * 0.72));
+      spawnX = clamp(world.squadX + frac * 2 * scatterSpan, -TRACK_HALF_WIDTH + 0.18, TRACK_HALF_WIDTH - 0.18);
     } else {
       const maxSpan =
-        weapon === 'rail'
-          ? Math.min(0.3, (streamCount - 1) * 0.1)
-          : weapon === 'plasma'
-            ? Math.min(0.32, (streamCount - 1) * 0.14)
-            : Math.min(0.42, (streamCount - 1) * 0.046);
-      const offset =
-        streamCount <= 1 ? 0 : (-1 + (2 * i) / (streamCount - 1)) * maxSpan;
+        streamCount <= 1
+          ? 0
+          : weapon === 'rail'
+            ? Math.min(1.08, Math.max(squadSpan * 0.88, (streamCount - 1) * 0.18))
+            : weapon === 'plasma'
+              ? Math.min(1.12, Math.max(squadSpan * 0.86, (streamCount - 1) * 0.20))
+              : Math.min(1.22, Math.max(squadSpan, Math.min(1.18, (streamCount - 1) * 0.14)));
+      const offset = frac * 2 * maxSpan;
       spawnX = clamp(world.squadX + offset, -TRACK_HALF_WIDTH + 0.18, TRACK_HALF_WIDTH - 0.18);
+      // Gentle inward focus on outer wing troopers so full-width volleys still hammer Siphons & Barrels!
+      const excess = Math.max(0, Math.abs(offset) - 0.62);
+      if (excess > 0) {
+        vx = -Math.sign(offset) * excess * 1.9;
+        vz = -Math.sqrt(Math.max(1, stats.projectileSpeed * stats.projectileSpeed - vx * vx));
+      }
     }
+
+    // Multi-rank chevron + 3-step alternating ripple in [PLAYER_Z - 0.76, PLAYER_Z - 0.30]
+    const rankWave = streamCount <= 1 ? 0 : ((i + volleyIdx) % 3) * 0.12;
+    const muzzleZ = PLAYER_Z - 0.76 + absNorm * 0.22 + rankWave;
 
     proj.prevX = normalizeZero(spawnX);
     proj.prevZ = muzzleZ;
@@ -229,6 +248,94 @@ function emitPlayerVolley(world: SimWorld, events: SimEvent[]): void {
  * Step 3a & 3b: Advances existing projectiles, emits ready player volleys,
  * and rotates Orbital Bit-Blades.
  */
+function emitAuxiliaryVolley(
+  world: SimWorld,
+  auxWeapon: WeaponId,
+  auxLevel: 1 | 2 | 3,
+  events: SimEvent[],
+): void {
+  if (world.squadCount <= 0) return;
+  const stats = getWeaponLevelStats(auxWeapon, auxLevel);
+  // Crisp recognizable secondary salvo streams (2..6 streams depending on weapon & squadCount)
+  const fullStreams = getVolleyStreamCount(auxWeapon, auxLevel, world.squadCount);
+  const streamCount =
+    auxWeapon === 'scatter'
+      ? Math.min(7, Math.max(3, Math.ceil(fullStreams * 0.45)))
+      : auxWeapon === 'plasma' || auxWeapon === 'rail'
+        ? Math.min(4, Math.max(2, Math.ceil(fullStreams * 0.5)))
+        : Math.min(6, Math.max(2, Math.ceil(fullStreams * 0.42)));
+
+  const overdriveActive = world.overdriveTimer > 0;
+  const masteryMult = 1 + MASTERY_DAMAGE_PER_VAULT * Math.max(0, world.masteryCount);
+  const synMult = hasSynergy(world.endless?.upgrades, 'singularity_matrix') ? 1.15 : 1.0;
+  const synPierce = hasSynergy(world.endless?.upgrades, 'singularity_matrix') ? 1 : 0;
+  const auxPowerRatio = 0.28 + auxLevel * 0.07 + Math.min(0.24, world.overclockStacks * 0.04);
+  const totalAuxDamage =
+    ((BASE_DRONE_DPS * world.squadCount * stats.dpsMult * masteryMult * world.mods.damageMult * synMult) /
+      stats.shotsPerSecond) *
+    auxPowerRatio;
+  const damagePerProjectile = totalAuxDamage / streamCount;
+  const pierce = stats.basePierce + (overdriveActive ? OVERDRIVE_BONUS_PIERCE : 0) + synPierce;
+  const powerScale = computeProjectilePowerScale(world.squadCount, auxLevel, false) * 0.92;
+  const wingSpan = clamp(world.formationRadius * 0.88, 0.42, 1.38);
+
+  for (let i = 0; i < streamCount; i++) {
+    const proj = world.projectilePool.acquire();
+    proj.id = allocEntityId(world);
+    proj.weapon = auxWeapon;
+    proj.radius = stats.radius;
+    proj.damage = damagePerProjectile;
+    proj.remainingPierce = pierce;
+    proj.amplified = false;
+    proj.powerScale = powerScale;
+    proj.hostile = false;
+    proj.hostileLoss = 0;
+    proj.maxRange = stats.maxRange;
+    proj.splashRadius = stats.splashRadius;
+    proj.splashDamageRatio = stats.splashDamageRatio;
+    proj.cryoSlowDuration = stats.cryoSlowDuration;
+    proj.sweepStartFraction = 0;
+    proj.active = true;
+
+    const frac = streamCount <= 1 ? 0 : i / (streamCount - 1) - 0.5;
+    let vx = 0;
+    let vz = -stats.projectileSpeed;
+    let spawnX = world.squadX;
+
+    if (auxWeapon === 'scatter') {
+      const angle = frac * stats.fanSpreadRad * 1.05;
+      vx = Math.sin(angle) * stats.projectileSpeed;
+      vz = -Math.cos(angle) * stats.projectileSpeed;
+      spawnX = clamp(world.squadX + frac * 1.4 * wingSpan, -TRACK_HALF_WIDTH + 0.18, TRACK_HALF_WIDTH - 0.18);
+    } else {
+      // Mount auxiliary salvos on outer wing positions so primary + secondary streams weave distinctly!
+      const offset = frac * 2 * wingSpan;
+      spawnX = clamp(world.squadX + offset, -TRACK_HALF_WIDTH + 0.18, TRACK_HALF_WIDTH - 0.18);
+      if (Math.abs(offset) > 0.55) {
+        vx = -Math.sign(offset) * (Math.abs(offset) - 0.55) * 1.75;
+        vz = -Math.sqrt(Math.max(1, stats.projectileSpeed * stats.projectileSpeed - vx * vx));
+      }
+    }
+
+    const muzzleZ = PLAYER_Z - 0.52 + Math.abs(frac) * 0.28;
+    proj.prevX = normalizeZero(spawnX);
+    proj.prevZ = muzzleZ;
+    proj.vx = vx;
+    proj.vz = vz;
+    proj.x = normalizeZero(proj.prevX + vx * FIXED_DT);
+    proj.z = proj.prevZ + vz * FIXED_DT;
+    proj.distanceTraveled = stats.projectileSpeed * FIXED_DT;
+    world.projectiles.push(proj);
+  }
+
+  events.push({
+    type: 'SHOOT',
+    weapon: auxWeapon,
+    amplified: false,
+    auxiliary: true,
+  });
+}
+
 export function stepProjectilesAndAutoFire(world: SimWorld, events: SimEvent[]): void {
   // 1. Advance existing projectiles (both friendly and hostile)
   for (let i = world.projectiles.length - 1; i >= 0; i--) {
@@ -258,16 +365,41 @@ export function stepProjectilesAndAutoFire(world: SimWorld, events: SimEvent[]):
     p.distanceTraveled += Math.hypot(p.vx, p.vz) * FIXED_DT;
   }
 
-  // 2. Autonomous firing cadence
+  // 2. Autonomous firing cadence + Rampage attack-speed stack + Multi-Arsenal Co-Firing Salvos!
   if (world.squadCount > 0) {
     const stats = getWeaponLevelStats(world.weapon, world.weaponLevel);
     const overdriveMult = world.overdriveTimer > 0 ? OVERDRIVE_FIRE_RATE_MULT : 1.0;
-    const interval = 1.0 / (stats.shotsPerSecond * overdriveMult);
+    const rampageRateMult =
+      world.rampageStacks >= 6
+        ? 1.0 + Math.min(0.36, Math.floor(world.rampageStacks / 6) * 0.045)
+        : 1.0;
+    const interval = 1.0 / (stats.shotsPerSecond * overdriveMult * rampageRateMult);
 
     world.fireCooldown -= FIXED_DT;
     while (world.fireCooldown <= 1e-9) {
       emitPlayerVolley(world, events);
       world.fireCooldown += interval;
+    }
+
+    // Stacked Secondary Arsenal Wing-Cannons: once at least 1 Vault is cracked, EVERY other unlocked weapon
+    // in learnedWeaponLevels co-fires layered auxiliary salvos simultaneously!
+    if (world.stats.vaultsCracked > 0) {
+      const ALL_W: readonly WeaponId[] = ['pulse', 'scatter', 'rail', 'plasma', 'cryo'];
+      for (let wIdx = 0; wIdx < ALL_W.length; wIdx++) {
+        const auxW = ALL_W[wIdx]!;
+        if (auxW === world.weapon) continue;
+        const auxLvl = world.learnedWeaponLevels[auxW];
+        if (auxLvl <= 0) continue;
+
+        const auxStats = getWeaponLevelStats(auxW, auxLvl as 1 | 2 | 3);
+        const auxCadence = auxStats.shotsPerSecond * (0.38 + auxLvl * 0.1) * overdriveMult * rampageRateMult;
+        const auxInterval = 1.0 / Math.max(0.5, auxCadence);
+        world.auxCooldowns[auxW] -= FIXED_DT;
+        while (world.auxCooldowns[auxW] <= 1e-9) {
+          emitAuxiliaryVolley(world, auxW, auxLvl as 1 | 2 | 3, events);
+          world.auxCooldowns[auxW] += auxInterval;
+        }
+      }
     }
   }
 

@@ -151,8 +151,11 @@ export interface BossSnapshot {
 }
 
 export type SimEvent =
-  | { type: 'SHOOT'; weapon: WeaponId; amplified: boolean }
-  | { type: 'ENEMY_HIT'; x: number; z: number; fatal: boolean; kind: EnemyKind }
+  | { type: 'SHOOT'; weapon: WeaponId; amplified: boolean; auxiliary?: boolean }
+  | { type: 'ENEMY_HIT'; x: number; z: number; fatal: boolean; kind: EnemyKind; damage?: number }
+  | { type: 'BOSS_HIT'; x: number; z: number; damage: number }
+  | { type: 'CHAIN_ARC'; fromX: number; fromZ: number; toX: number; toZ: number; damage: number }
+  | { type: 'GATE_STREAK'; x: number; z: number; streak: number; bonus: number }
   | { type: 'CRIT_HIT'; x: number; z: number; damage: number }
   | { type: 'GATE_HIT'; gateId: number; x: number; z: number; newValue: number; flippedPositive: boolean }
   | { type: 'GATE_PASS'; gateId: number; x: number; z: number; delta: number; polarity: GatePolarity }
@@ -201,6 +204,10 @@ export interface SimSnapshot {
   dronePositions: ReadonlyArray<{ x: number; z: number; tier: 1 | 2 | 3 }>;
   weapon: WeaponId;
   weaponLevel: 1 | 2 | 3;
+  arsenal: Readonly<Record<WeaponId, 0 | 1 | 2 | 3>>;
+  overclockStacks: number;     // Extra vault upgrades beyond Lv.3
+  rampageStacks: number;       // Live kill-streak attack-speed & lightning stacks
+  gateStreak: number;          // Consecutive positive gates crossed
   bladesCount: number;         // 0..4 Orbital Bit-Blades
   bladesAngle: number;
   masteryCount: number;

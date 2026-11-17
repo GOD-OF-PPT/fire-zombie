@@ -49,11 +49,16 @@ function spawnEncounter(world: SimWorld, enc: RunwayEncounter, scrollSpeed: numb
       break;
     }
     case 'enemies': {
+      const isSwarmWave = enc.units.length >= 6;
       for (let i = 0; i < enc.units.length; i++) {
         const u = enc.units[i];
         if (!u) continue;
         const z = baseZ - (u.dz ?? 0);
-        spawnEnemy(world, u.kind, u.x, z);
+        if (isSwarmWave && u.kind === 'crawler') {
+          spawnEnemy(world, u.kind, u.x, z, { hp: 5 });
+        } else {
+          spawnEnemy(world, u.kind, u.x, z);
+        }
       }
       break;
     }

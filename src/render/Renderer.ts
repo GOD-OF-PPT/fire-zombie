@@ -58,17 +58,17 @@ export const WEAPON_COLOR: Record<WeaponId, number> = {
 const TRACK_LEN = 150;
 const TRACK_CENTER_Z = -60;
 /** Max rendered squad actors so every chibi trooper & weapon stays distinct (never a mushy overlap blob) */
-const MAX_RENDER_SQUAD = 20;
-const SQUAD_POOL_SIZES: [number, number, number] = [20, 14, 5];
-const MAX_PROJ = 900;
-const MAX_SHADOWS = 320;
+const MAX_RENDER_SQUAD = 32;
+const SQUAD_POOL_SIZES: [number, number, number] = [32, 18, 6];
+const MAX_PROJ = 1800;
+const MAX_SHADOWS = 520;
 
 const ENEMY_POOL_SIZE: Record<EnemyKind, number> = {
-  crawler: 34,
-  dasher: 18,
-  bastion: 12,
-  mitosis: 18,
-  siphon: 12,
+  crawler: 96,
+  dasher: 36,
+  bastion: 24,
+  mitosis: 40,
+  siphon: 20,
 };
 
 const ENEMY_BAR_H: Record<EnemyKind, number> = {
@@ -180,6 +180,7 @@ interface SquadSlotState {
   alive: boolean;
   vx: number;
   tier: 1 | 2 | 3;
+  weaponShown: WeaponId;
   actor: AnimatedActor | null;
 }
 
@@ -189,6 +190,9 @@ interface ActiveEnemyEntry {
   x: number;
   z: number;
   scale: number;
+  recoilZ: number;
+  recoilTilt: number;
+  prevHit: number;
   seen: boolean;
 }
 
@@ -196,7 +200,13 @@ interface DyingEnemyEntry {
   kind: EnemyKind;
   actor: AnimatedActor;
   x: number;
+  y: number;
   z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  spinX: number;
+  spinZ: number;
   scale: number;
   age: number;
   duration: number;
@@ -320,6 +330,7 @@ export class Renderer {
   private telegraphs!: THREE.InstancedMesh;
   private tethers: THREE.Mesh[] = [];
   private projMesh!: THREE.InstancedMesh;
+  private projCoreMesh!: THREE.InstancedMesh;
   private orbMesh!: THREE.InstancedMesh;
   private orbMarks!: THREE.InstancedMesh;
   private gateViews = new Map<number, GateView>();
@@ -880,6 +891,7 @@ export class Renderer {
         alive: false,
         vx: 0,
         tier: 1,
+        weaponShown: 'pulse',
         actor: null,
       });
     }
@@ -958,12 +970,12 @@ export class Renderer {
     this.hpBg = new THREE.InstancedMesh(
       barGeo,
       new THREE.MeshBasicMaterial({ color: 0x060814, transparent: true, opacity: 0.78, depthWrite: false }),
-      64,
+      128,
     );
     this.hpFg = new THREE.InstancedMesh(
       fgGeo,
       new THREE.MeshBasicMaterial({ color: 0xff3b5c, toneMapped: false, depthWrite: false }),
-      64,
+      128,
     );
     this.hpBg.renderOrder = 5;
     this.hpFg.renderOrder = 6;
@@ -988,17 +1000,32 @@ export class Renderer {
   }
 
   private buildProjectiles(): void {
+    const boltGeo = buildBoltGeo();
     const mat = new THREE.MeshBasicMaterial({
       toneMapped: false,
       transparent: true,
+      opacity: 0.92,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    this.projMesh = new THREE.InstancedMesh(buildBoltGeo(), mat, MAX_PROJ);
+    this.projMesh = new THREE.InstancedMesh(boltGeo, mat, MAX_PROJ);
     this.projMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_PROJ * 3), 3);
     this.projMesh.count = 0;
     this.projMesh.frustumCulled = false;
-    this.scene.add(this.projMesh);
+
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      toneMapped: false,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.projCoreMesh = new THREE.InstancedMesh(boltGeo, coreMat, MAX_PROJ);
+    this.projCoreMesh.count = 0;
+    this.projCoreMesh.frustumCulled = false;
+    this.projCoreMesh.renderOrder = 3;
+    this.scene.add(this.projMesh, this.projCoreMesh);
 
     this.orbMesh = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(0.38, 1),
@@ -1336,8 +1363,8 @@ export class Renderer {
     // Smooth visual hero promotion across real run squad sizes (without touching sim math):
     // - 14+ deploys Golden Heavy Captains (capped at 5 so Cobalt-Cyan Troopers stay dominant)
     // - 55+ deploys towering Stan Assault Mechs on heroic rear-flanks
-    const n3 = Math.min(3, Math.max(u3, sc >= 175 ? 3 : sc >= 105 ? 2 : sc >= 55 ? 1 : 0));
-    const n2 = sc >= 85 ? 5 : sc >= 55 ? 4 : sc >= 34 ? 3 : sc >= 20 ? 2 : sc >= 14 ? 1 : 0;
+    const n3 = Math.min(3, Math.max(u3, sc >= 150 ? 3 : sc >= 90 ? 2 : sc >= 48 ? 1 : 0));
+    const n2 = sc >= 80 ? 7 : sc >= 50 ? 5 : sc >= 30 ? 4 : sc >= 18 ? 2 : sc >= 10 ? 1 : 0;
     const maxSlots = Math.max(1, MAX_RENDER_SQUAD - n3 * 2);
     const total = Math.min(maxSlots, Math.max(n3 + n2, totalVisible));
     const n1 = Math.max(0, total - n3 - n2);
@@ -1349,7 +1376,7 @@ export class Renderer {
     // 1. Assault Mechs lead from the formation's far edge: the camera sits behind the squad, so anything
     //    nearer the camera covers the troopers beyond it, while a vanguard mech only has its legs overlapped.
     const infCount = n2 + n1;
-    const spacing = infCount <= 8 ? 0.7 : 0.65;
+    const spacing = infCount <= 8 ? 0.62 : infCount <= 18 ? 0.54 : 0.48;
     const front = -spacing * Math.sqrt(Math.max(0, infCount - 1) + 0.35) * 0.8 + 0.25;
     const mechOffsets: Array<[number, number]> =
       n3 === 1
@@ -1404,22 +1431,13 @@ export class Renderer {
 
   private updateSquad(snap: SimSnapshot, dt: number, t: number): void {
     const lib = this.gltfLib;
-    const weaponChanged = snap.weapon !== this.currentWeapon;
-    if (weaponChanged) {
-      this.currentWeapon = snap.weapon;
-      if (lib) {
-        for (let tierIdx = 0; tierIdx < 2; tierIdx++) {
-          for (const actor of this.squadPools[tierIdx]!) {
-            actor.setWeapon(snap.weapon, lib.weapons);
-          }
-        }
-        for (const slot of this.squadSlots) {
-          if (slot.actor && slot.tier < 3) {
-            slot.actor.setWeapon(snap.weapon, lib.weapons);
-          }
-        }
+    const unlockedSecondary: WeaponId[] = [];
+    if (snap.arsenal && snap.stats.vaultsCracked > 0) {
+      for (const wId of ['pulse', 'scatter', 'rail', 'plasma', 'cryo'] as const) {
+        if (wId !== snap.weapon && (snap.arsenal[wId] ?? 0) > 0) unlockedSecondary.push(wId);
       }
     }
+    this.currentWeapon = snap.weapon;
 
     const targets = lib ? this.computeVisualSquadTargets(snap) : [];
     const follow = 1 - Math.exp(-Math.max(dt, 0.001) * 15);
@@ -1460,9 +1478,14 @@ export class Renderer {
             initialWeapon: this.currentWeapon,
           });
         if (!acquired.root.parent) this.scene.add(acquired.root);
-        if (target.tier < 3) acquired.setWeapon(this.currentWeapon, lib.weapons);
+        const desiredW =
+          unlockedSecondary.length > 0 && i >= 3 && i % 2 === 1
+            ? unlockedSecondary[(i >> 1) % unlockedSecondary.length]!
+            : snap.weapon;
+        if (target.tier < 3) acquired.setWeapon(desiredW, lib.weapons);
         acquired.root.visible = true;
         slot.actor = acquired;
+        slot.weaponShown = desiredW;
         slot.tier = target.tier;
         if (!slot.alive) {
           slot.alive = true;
@@ -1481,6 +1504,16 @@ export class Renderer {
 
       const actor = slot.actor;
       const isMech = slot.tier === 3;
+      if (!isMech && lib) {
+        const desiredW =
+          unlockedSecondary.length > 0 && i >= 3 && i % 2 === 1
+            ? unlockedSecondary[(i >> 1) % unlockedSecondary.length]!
+            : snap.weapon;
+        if (slot.weaponShown !== desiredW) {
+          actor.setWeapon(desiredW, lib.weapons);
+          slot.weaponShown = desiredW;
+        }
+      }
 
       if (isVictory) {
         // Turn toward the player & celebrate on Victory!
@@ -1535,7 +1568,8 @@ export class Renderer {
         d.scale.set(fs, fs, fs);
         d.updateMatrix();
         this.flashes.setMatrixAt(flashes, d.matrix);
-        this.tmpColor.setHex(wc).multiplyScalar(0.65 + fl * 0.95);
+        const slotWc = isMech ? wc : WEAPON_COLOR[slot.weaponShown];
+        this.tmpColor.setHex(slotWc).multiplyScalar(0.68 + fl * 0.98);
         this.flashes.setColorAt(flashes, this.tmpColor);
         flashes++;
       }
@@ -1618,6 +1652,9 @@ export class Renderer {
             x: e.x,
             z: e.z,
             scale: 1,
+            recoilZ: 0,
+            recoilTilt: 0,
+            prevHit: 0,
             seen: true,
           };
           this.activeEnemies.set(e.id, entry);
@@ -1685,22 +1722,33 @@ export class Renderer {
         }
         entry.actor.update(dt);
 
-        const yaw = THREE.MathUtils.clamp(Math.atan2(snap.squadX - e.x, PLAYER_Z - e.z), -0.65, 0.65);
-        const jitter = tele ? (Math.random() - 0.5) * 0.08 : 0;
-        entry.actor.root.position.set(e.x + jitter, 0, e.z);
-        entry.actor.root.rotation.set(0, yaw, 0);
+        // Physical bullet knockback impulse & spring recovery!
+        if (hit > entry.prevHit + 0.04 || hit > 0.92) {
+          const knock = e.kind === 'bastion' ? 0.11 : e.kind === 'mitosis' ? 0.18 : 0.26;
+          entry.recoilZ = Math.min(0.42, entry.recoilZ + knock);
+          entry.recoilTilt = Math.max(-0.34, entry.recoilTilt - (e.kind === 'bastion' ? 0.12 : 0.24));
+        }
+        entry.prevHit = hit;
+        const springDecay = Math.exp(-Math.max(dt, 0.001) * 18);
+        entry.recoilZ *= springDecay;
+        entry.recoilTilt *= springDecay;
 
-        // Snappy cartoon squash-and-stretch on bullet impact
-        const squashXZ = sc * (1 + hit * 0.16);
-        const squashY = sc * (1 - hit * 0.1);
+        const yaw = THREE.MathUtils.clamp(Math.atan2(snap.squadX - e.x, PLAYER_Z - e.z), -0.65, 0.65);
+        const jitter = tele ? (Math.random() - 0.5) * 0.08 : hit > 0.5 ? (Math.random() - 0.5) * 0.05 : 0;
+        entry.actor.root.position.set(e.x + jitter, entry.recoilZ * 0.22, e.z - entry.recoilZ);
+        entry.actor.root.rotation.set(entry.recoilTilt, yaw, 0);
+
+        // Meaty cartoon squash-and-stretch + bright white rim punch on impact
+        const squashXZ = sc * (1 + hit * 0.26);
+        const squashY = sc * Math.max(0.72, 1 - hit * 0.18);
         entry.actor.root.scale.set(squashXZ, squashY, squashXZ);
 
-        const hitFlash = hit > 0.6 ? (0.5 + 0.5 * Math.sin(t * 44 + e.id)) * 0.3 : hit * 0.28;
+        const hitFlash = hit > 0.55 ? 0.52 + 0.34 * Math.sin(t * 52 + e.id) : hit * 0.55;
         entry.actor.setVisuals(hitFlash, 1, 1, 1, slowed ? 0.78 : 0);
 
         this.pushShadow(e.x, e.z, e.radius * (e.kind === 'siphon' ? 0.75 : 1.08));
 
-        if (e.maxHp >= 40 && e.hp < e.maxHp && bars < 64) {
+        if (e.maxHp >= 40 && e.hp < e.maxHp && bars < 128) {
           const w = Math.max(0.95, e.radius * 2);
           const y = ENEMY_BAR_H[e.kind] * sc + 0.15;
           d.position.set(e.x, y, e.z);
@@ -1744,45 +1792,64 @@ export class Renderer {
       }
     }
 
-    // Transition killed monsters into a brief juicy skeletal Death animation
+    // Blast killed monsters backward into an airborne ragdoll somersault!
     for (const [id, entry] of this.activeEnemies) {
       if (!entry.seen) {
         this.activeEnemies.delete(id);
-        if (entry.z < PLAYER_Z - 0.35 && this.dyingEnemies.length < 24) {
-          entry.actor.play('Death', { loop: false, fade: 0.05, timeScale: 1.35 });
-          entry.actor.setVisuals(0.65, 1, 1, 1);
+        if (entry.z < PLAYER_Z - 0.35 && this.dyingEnemies.length < 64) {
+          entry.actor.play('Death', { loop: false, fade: 0.04, timeScale: 1.5 });
+          entry.actor.setVisuals(0.88, 1, 1, 1);
+          const heavy = entry.kind === 'bastion';
           this.dyingEnemies.push({
             kind: entry.kind,
             actor: entry.actor,
             x: entry.x,
+            y: 0.14,
             z: entry.z,
+            vx: (Math.random() - 0.5) * (heavy ? 2.6 : 5.2),
+            vy: (heavy ? 3.8 : 5.6) + Math.random() * 2.4,
+            vz: -((heavy ? 6.2 : 9.8) + Math.random() * 4.5),
+            spinX: -((heavy ? 4.2 : 8.5) + Math.random() * 5.0),
+            spinZ: (Math.random() - 0.5) * 6.0,
             scale: entry.scale,
             age: 0,
-            duration: 0.46,
+            duration: 0.52,
           });
         } else {
+          entry.actor.root.rotation.set(0, 0, 0);
           entry.actor.root.visible = false;
           this.enemyPools[entry.kind].push(entry.actor);
         }
       }
     }
 
-    // Advance skeletal Death tumble animations
+    // Advance airborne knockback launch & ground bounce tumble
     for (let i = this.dyingEnemies.length - 1; i >= 0; i--) {
       const dm = this.dyingEnemies[i]!;
       dm.age += dt;
       if (dm.age >= dm.duration) {
+        dm.actor.root.rotation.set(0, 0, 0);
         dm.actor.root.visible = false;
         this.enemyPools[dm.kind].push(dm.actor);
         this.dyingEnemies.splice(i, 1);
         continue;
       }
-      dm.z -= dt * 2.2;
+      dm.vy -= 22.0 * dt;
+      dm.x = THREE.MathUtils.clamp(dm.x + dm.vx * dt, -TRACK_HALF_WIDTH + 0.3, TRACK_HALF_WIDTH - 0.3);
+      dm.y += dm.vy * dt;
+      if (dm.y < 0) {
+        dm.y = 0;
+        dm.vy = Math.abs(dm.vy) * 0.35;
+        dm.vx *= 0.7;
+        dm.vz *= 0.72;
+      }
+      dm.z += dm.vz * dt;
       const p = dm.age / dm.duration;
-      const shrink = p > 0.65 ? Math.max(0.05, 1 - (p - 0.65) / 0.35) : 1;
-      dm.actor.root.position.set(dm.x, 0, dm.z);
+      const shrink = p > 0.62 ? Math.max(0.05, 1 - (p - 0.62) / 0.38) : 1.06;
+      dm.actor.root.position.set(dm.x, dm.y, dm.z);
+      dm.actor.root.rotation.set(dm.spinX * dm.age, 0, dm.spinZ * dm.age);
       dm.actor.root.scale.setScalar(dm.scale * shrink);
-      dm.actor.setVisuals(Math.max(0, (1 - p * 3) * 0.6), 1, 1, 1);
+      dm.actor.setVisuals(Math.max(0, (1 - p * 2.4) * 0.85), 1, 1, 1);
       dm.actor.update(dt);
     }
 
@@ -1815,33 +1882,43 @@ export class Renderer {
         continue;
       }
       if (n >= MAX_PROJ) continue;
-      const ps = p.powerScale;
-      let sx = 0.11;
-      let sz = 0.85;
+      const ps = 0.88 + Math.min(0.45, (p.powerScale - 1) * 0.42);
+      let sx = 0.145;
+      let sz = 1.32;
       switch (p.weapon) {
-        case 'scatter': sx = 0.14; sz = 0.58; break;
-        case 'rail': sx = 0.16; sz = 2.4; break;
-        case 'plasma': sx = 0.44; sz = 0.44; break;
-        case 'cryo': sx = 0.13; sz = 1.02; break;
+        case 'scatter': sx = 0.155; sz = 0.92; break;
+        case 'rail': sx = 0.19; sz = 2.95; break;
+        case 'plasma': sx = 0.46; sz = 0.56; break;
+        case 'cryo': sx = 0.155; sz = 1.48; break;
         default: break;
       }
-      d.position.set(p.x, 0.65, p.z);
-      d.rotation.set(p.weapon === 'plasma' ? this.time * 8 : 0, Math.atan2(p.vx, p.vz), 0);
-      const amp = p.amplified ? 1.3 : 1;
-      d.scale.set(sx * ps * amp, sx * ps * amp, sz * (0.8 + ps * 0.2) * amp);
+      const yaw = Math.atan2(p.vx, p.vz);
+      const amp = p.amplified ? 1.28 : 1;
+      const ox = sx * ps * amp;
+      const oz = sz * (0.85 + ps * 0.18) * amp;
+      d.position.set(p.x, 0.66, p.z);
+      d.rotation.set(p.weapon === 'plasma' ? this.time * 8 : 0, yaw, 0);
+      d.scale.set(ox, ox * 0.85, oz);
       d.updateMatrix();
       this.projMesh.setMatrixAt(n, d.matrix);
-      // Slight >1 HDR boost so UnrealBloomPass gives projectiles a clean neon glow
+
+      // Blazing pure-white inner needle core so every stream pops with razor-sharp contrast
+      d.scale.set(ox * 0.46, ox * 0.46, oz * 0.78);
+      d.updateMatrix();
+      this.projCoreMesh.setMatrixAt(n, d.matrix);
+
       const boltHex = p.amplified ? 0xffe27a : WEAPON_COLOR[p.weapon];
-      this.tmpColor.setHex(boltHex).multiplyScalar(1.36);
+      this.tmpColor.setHex(boltHex).multiplyScalar(1.42);
       this.projMesh.setColorAt(n, this.tmpColor);
-      if ((p.amplified || p.weapon === 'plasma' || p.weapon === 'rail') && Math.random() < 0.14) {
-        this.effects.burst(p.x, 0.65, p.z + 0.3, boltHex, 1, { speed: 1.4, size: p.weapon === 'plasma' ? 0.26 : 0.18, life: 0.16, gravity: 0 });
+      if ((p.amplified || p.weapon === 'plasma' || p.weapon === 'rail') && Math.random() < 0.16) {
+        this.effects.burst(p.x, 0.66, p.z + 0.3, boltHex, 1, { speed: 1.4, size: p.weapon === 'plasma' ? 0.26 : 0.18, life: 0.15, gravity: 0 });
       }
       n++;
     }
     this.projMesh.count = n;
+    this.projCoreMesh.count = n;
     this.projMesh.instanceMatrix.needsUpdate = true;
+    this.projCoreMesh.instanceMatrix.needsUpdate = true;
     if (this.projMesh.instanceColor) this.projMesh.instanceColor.needsUpdate = true;
     this.orbMesh.count = orbs;
     this.orbMarks.count = orbs;

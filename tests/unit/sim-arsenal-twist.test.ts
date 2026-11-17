@@ -8,7 +8,7 @@ import {
   PLAYER_Z,
   PRISM_LENS_DAMAGE_MULT,
 } from '../../src/config/constants';
-import { CRYO_BRITTLE_DAMAGE_MULT, CRYO_SLOW_MOVE_SCALE } from '../../src/config/weapons';
+import { CRYO_BRITTLE_DAMAGE_MULT, CRYO_SLOW_MOVE_SCALE, getVolleyStreamCount } from '../../src/config/weapons';
 import { spawnEnemy } from '../../src/sim/enemies';
 import { spawnGateRow } from '../../src/sim/gates';
 import { computeTrueSquadDps } from '../../src/sim/math';
@@ -131,21 +131,24 @@ describe('Overclock Vaults, 5 Tactical Weapons, Orbital Bit-Blades & Signature T
   });
 
   it('verifies distinct mechanics of pulse, scatter fan, rail pierce, plasma AoE splash, cryo exact 150-tick slow + 1.25x brittle, and Orbital Bit-Blades', () => {
-    // 1. Scatter Lv.1/2/3 emits 5 / 7 / 9 angled fan pellets
-    for (const [lvl, expectedPellets] of [
+    // 1. Scatter Lv.1/2/3 emits base 5 / 7 / 9 pellets at squad=1 and scales up with squadCount
+    for (const [lvl, basePellets] of [
       [1, 5],
       [2, 7],
       [3, 9],
     ] as const) {
+      expect(getVolleyStreamCount('scatter', lvl, 1)).toBe(basePellets);
       const w = createCleanArsenalWorld();
       w.squadCount = 20;
       w.weapon = 'scatter';
       w.weaponLevel = lvl;
       w.fireCooldown = 0;
+      const scaledPellets = getVolleyStreamCount('scatter', lvl, 20);
+      expect(scaledPellets).toBeGreaterThan(basePellets);
       stepWorldFixed(w, { dragDeltaX: 0, keyAxisX: 0 });
-      expect(w.projectiles.length).toBe(expectedPellets);
+      expect(w.projectiles.length).toBe(scaledPellets);
       expect(w.projectiles[0]!.vx).toBeLessThan(0);
-      expect(w.projectiles[expectedPellets - 1]!.vx).toBeGreaterThan(0);
+      expect(w.projectiles[scaledPellets - 1]!.vx).toBeGreaterThan(0);
     }
 
     // 2. Rail pierces through frontal Firewall Bastion into Vault AND mutable Gate behind it

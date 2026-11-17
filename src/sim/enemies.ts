@@ -131,13 +131,62 @@ export function damageEnemy(
     z: enemy.z,
     fatal,
     kind: enemy.kind,
+    damage: Math.max(1, Math.round(effectiveDamage)),
   });
 
   if (fatal) {
+    const killedX = enemy.x;
+    const killedZ = enemy.z;
+    const killedId = enemy.id;
     enemy.hp = 0;
     enemy.consumed = true;
     enemy.active = false;
     world.stats.kills += 1;
+
+    // Stack live Rampage Frenzy (+attack speed & Chain-Lightning overdrive procs!)
+    world.rampageTimer = 2.6;
+    world.rampageStacks = Math.min(60, world.rampageStacks + 1);
+
+    const arcStride = world.rampageStacks >= 24 ? 3 : 5;
+    if (world.rampageStacks >= 5 && world.rampageStacks % arcStride === 0) {
+      const arcDmg = (12 + world.squadCount * 0.28) * world.mods.damageMult;
+      let jumps = 0;
+      const snapshotLen = world.enemies.length;
+      for (let k = 0; k < snapshotLen && jumps < 3; k++) {
+        const other = world.enemies[k];
+        if (!other || !other.active || other.consumed || other.bypassed || other.hp <= 0 || other.id === killedId) {
+          continue;
+        }
+        if (Math.hypot(other.x - killedX, other.z - killedZ) <= 5.2) {
+          jumps += 1;
+          events.push({
+            type: 'CHAIN_ARC',
+            fromX: killedX,
+            fromZ: killedZ,
+            toX: other.x,
+            toZ: other.z,
+            damage: Math.max(1, Math.round(arcDmg)),
+          });
+          // Apply non-recursive shock damage to avoid infinite arc cascades on the same tick
+          other.hp = Math.max(0, other.hp - arcDmg);
+          other.hitPulse = 1.0;
+          if (other.hp <= 0) {
+            other.hp = 0;
+            other.consumed = true;
+            other.active = false;
+            world.stats.kills += 1;
+            events.push({
+              type: 'ENEMY_HIT',
+              x: other.x,
+              z: other.z,
+              fatal: true,
+              kind: other.kind,
+              damage: Math.max(1, Math.round(arcDmg)),
+            });
+          }
+        }
+      }
+    }
 
     // Corruptor Siphon on-kill +6 gate injection
     if (enemy.kind === 'siphon' && enemy.linkedGateId !== null) {

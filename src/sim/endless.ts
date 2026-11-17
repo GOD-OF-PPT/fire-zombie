@@ -63,11 +63,14 @@ export function chooseEndlessUpgrade(world: SimWorld, id: EndlessUpgradeId): boo
     case 'recruits': world.squadCount = clampSquadCount(world.squadCount + 40); break;
     case 'resonance': world.mods.resonanceMult *= 1.3; break;
     case 'weapon':
+      world.stats.vaultsCracked = Math.max(1, world.stats.vaultsCracked);
       if (world.weaponLevel < 3) {
         world.weaponLevel = (world.weaponLevel + 1) as 2 | 3;
         world.learnedWeaponLevels[world.weapon] = world.weaponLevel;
+      } else {
+        world.overclockStacks += 1;
+        world.masteryCount += 3;
       }
-      else world.masteryCount += 3;
       break;
     case 'blades':
       if (world.bladesCount >= BLADES_MAX_COUNT) world.mods.damageMult *= 1.12;

@@ -3,6 +3,7 @@ import type { EndlessUpgradeId, NonNullDefeatReason, SectorId, SimEvent, SimSnap
 import { getActiveSynergies, getEndlessThreat, PROTOCOLS } from '../config/protocols';
 import { PLAYER_Z } from '../config/constants';
 import { getSectorScript } from '../config/sectors';
+import { getVolleyStreamCount } from '../config/weapons';
 import { Renderer, WEAPON_COLOR } from '../render/Renderer';
 import { UI, type ResultData } from '../ui/UI';
 import { InputController } from '../input/InputController';
@@ -86,6 +87,11 @@ export class Game {
   private maxCombo = 0;
   private bossLoss = 0;
   private comboClock = 0;
+  private critFloatClock = 0;
+  private dmgBatchTimer = 0;
+  private dmgBatchSum = 0;
+  private dmgBatchX = 0;
+  private dmgBatchZ = 0;
   private bossWarned = false;
   private hazardSeen = new Set<number>();
   private hintsThisRun = new Set<string>();
@@ -464,6 +470,17 @@ export class Game {
   }
 
   private liveChecks(snap: SimSnapshot, dt: number): void {
+    if (this.critFloatClock > 0) this.critFloatClock = Math.max(0, this.critFloatClock - dt);
+    if (this.dmgBatchTimer > 0) {
+      this.dmgBatchTimer -= dt;
+      if (this.dmgBatchTimer <= 0 && this.dmgBatchSum > 0) {
+        const dmg = Math.round(this.dmgBatchSum);
+        const p = this.worldToScreen(this.dmgBatchX + (Math.random() - 0.5) * 0.55, 1.45, this.dmgBatchZ);
+        const sc = Math.min(1.42, 0.78 + Math.log10(Math.max(1, dmg)) * 0.22);
+        this.ui.floatText(p.x, p.y, `-${dmg}`, dmg >= 120 ? 'chain' : 'dmg', sc);
+        this.dmgBatchSum = 0;
+      }
+    }
     if (this.comboClock > 0) {
       this.comboClock -= dt;
       if (this.comboClock <= 0) {
@@ -525,14 +542,46 @@ export class Game {
       switch (ev.type) {
         case 'SHOOT':
           this.renderer.flashMuzzle();
-          if (live) a.shoot(ev.weapon);
+          if (live && !ev.auxiliary) a.shoot(ev.weapon);
           break;
+        case 'CHAIN_ARC': {
+          fx.arc(ev.fromX, ev.fromZ, ev.toX, ev.toZ, 0x62f4ff);
+          fx.impact(ev.toX, 0.85, ev.toZ, 0xffe66d, true);
+          if (live) {
+            a.chainArc();
+            this.addScore(18);
+          }
+          break;
+        }
+        case 'GATE_STREAK': {
+          fx.ring(snap.squadX, PLAYER_Z, 0xffd84a, 4.4, 0.48);
+          if (live) {
+            const p = this.worldToScreen(snap.squadX, 2.35, PLAYER_Z - 1.1);
+            this.ui.floatText(p.x, p.y - 18, `连门 ×${ev.streak} · 额外 +${ev.bonus}!`, 'gold', 1.02);
+          }
+          break;
+        }
+        case 'BOSS_HIT': {
+          fx.impact(ev.x, 1.35, ev.z, WEAPON_COLOR[snap.weapon], false);
+          if (live) {
+            a.hit(this.combo);
+            this.dmgBatchSum += ev.damage;
+            this.dmgBatchX = ev.x;
+            this.dmgBatchZ = ev.z;
+            if (this.dmgBatchTimer <= 0) this.dmgBatchTimer = 0.16;
+          }
+          break;
+        }
         case 'CRIT_HIT': {
-          fx.burst(ev.x, 1.0, ev.z, 0xffe66d, 10, { speed: 7, size: 0.34, life: 0.32, up: 0.9 });
+          fx.burst(ev.x, 1.0, ev.z, 0xffe66d, 8, { speed: 6.5, size: 0.32, life: 0.28, up: 0.85 });
           if (live) {
             a.crit();
-            const p = this.worldToScreen(ev.x, 1.8, ev.z);
-            this.ui.floatText(p.x, p.y, `暴击 ${ev.damage}`, 'crit', 0.75);
+            if (this.critFloatClock <= 0) {
+              this.critFloatClock = 0.42;
+              const p = this.worldToScreen(ev.x + (Math.random() - 0.5) * 0.5, 1.75, ev.z);
+              const label = ev.damage >= 4 ? `暴击 ${ev.damage}!` : '暴击!';
+              this.ui.floatText(p.x, p.y, label, 'crit', 0.78);
+            }
           }
           break;
         }
@@ -560,31 +609,43 @@ export class Game {
           const meta = ENEMY_META[ev.kind];
           if (ev.fatal) {
             const big = ev.kind === 'bastion' || ev.kind === 'mitosis' || ev.kind === 'siphon';
-            fx.burst(ev.x, 0.7, ev.z, meta.color, big ? 46 : 16, { speed: big ? 9 : 6, size: big ? 0.5 : 0.35, life: 0.55 });
-            fx.burst(ev.x, 0.7, ev.z, 0xffffff, big ? 12 : 4, { speed: 4, size: 0.3, life: 0.25 });
-            if (big) {
-              fx.ring(ev.x, ev.z, meta.color, 2.6, 0.35);
-              this.renderer.shake(0.12);
-            }
+            fx.burst(ev.x, 0.75, ev.z, meta.color, big ? 52 : 22, { speed: big ? 10 : 7.5, size: big ? 0.52 : 0.38, life: 0.52 });
+            fx.burst(ev.x, 0.75, ev.z, 0xffffff, big ? 14 : 6, { speed: 5.5, size: 0.32, life: 0.24 });
+            fx.ring(ev.x, ev.z, meta.color, big ? 2.8 : 1.35, big ? 0.36 : 0.22);
+            this.renderer.shake(big ? 0.16 : 0.045);
             if (live) {
-              a.kill(big);
+              a.kill(big, this.combo);
               this.save.bestiaryKills[ev.kind] = (this.save.bestiaryKills[ev.kind] ?? 0) + 1;
               this.combo += 1;
               if (this.combo > this.maxCombo) this.maxCombo = this.combo;
-              this.comboClock = 1.65;
+              this.comboClock = 2.2;
               const feverMult = computeFeverMult(this.combo);
-              a.setFever(this.combo >= 15);
+              a.setFever(this.combo >= 12);
               this.ui.updateFever(this.combo, feverMult);
               this.addScore(meta.score);
-              if (this.combo >= 5 && (this.combo % 5 === 0 || this.combo > 20)) this.ui.combo(this.combo);
+              if (ev.damage) {
+                this.dmgBatchSum += ev.damage;
+                this.dmgBatchX = ev.x;
+                this.dmgBatchZ = ev.z;
+                if (this.dmgBatchTimer <= 0) this.dmgBatchTimer = 0.16;
+              }
+              if (this.combo >= 5 && (this.combo % 5 === 0 || this.combo > 18)) this.ui.combo(this.combo);
               if (ev.kind === 'siphon') {
                 const p = this.worldToScreen(ev.x, 1.5, ev.z);
                 this.ui.floatText(p.x, p.y, '门数值 +6', 'gold', 1);
               }
             }
           } else {
-            fx.burst(ev.x, 0.7, ev.z, meta.color, 2, { speed: 3, size: 0.22, life: 0.18, gravity: 0 });
-            if (live) a.hit();
+            fx.impact(ev.x, 0.75, ev.z, WEAPON_COLOR[snap.weapon], ev.kind === 'bastion');
+            if (live) {
+              a.hit(this.combo);
+              if (ev.damage) {
+                this.dmgBatchSum += ev.damage;
+                this.dmgBatchX = ev.x;
+                this.dmgBatchZ = ev.z;
+                if (this.dmgBatchTimer <= 0) this.dmgBatchTimer = 0.16;
+              }
+            }
           }
           break;
         }
@@ -607,10 +668,16 @@ export class Game {
         case 'GATE_PASS': {
           const p = this.worldToScreen(snap.squadX, 1.6, PLAYER_Z - 1);
           if (ev.delta > 0) {
-            fx.burst(snap.squadX, 0.8, PLAYER_Z, 0x19f5a8, 50, { speed: 8, size: 0.45, life: 0.6, up: 1 });
-            fx.ring(snap.squadX, PLAYER_Z, 0x19f5a8, 3.5, 0.45);
+            fx.burst(snap.squadX, 0.8, PLAYER_Z, 0x19f5a8, 56, { speed: 8.5, size: 0.45, life: 0.6, up: 1 });
+            fx.ring(snap.squadX, PLAYER_Z, 0x19f5a8, 3.8, 0.45);
             if (live) {
               this.ui.floatText(p.x + 78, p.y - 6, `+${ev.delta}`, 'gain', 1.1);
+              const prevCount = Math.max(1, snap.squadCount - ev.delta);
+              const prevStreams = getVolleyStreamCount(snap.weapon, snap.weaponLevel, prevCount);
+              const nextStreams = getVolleyStreamCount(snap.weapon, snap.weaponLevel, snap.squadCount);
+              if (nextStreams > prevStreams) {
+                this.ui.floatText(p.x, p.y - 34, `弹幕 ×${nextStreams}！`, 'gold', 0.95);
+              }
               a.gatePass(true, ev.delta);
               this.addScore(ev.delta * SCORE.gateGainPerUnit);
               this.ui.doFlash('rgba(25,245,168,0.5)', 0.18);
@@ -633,7 +700,10 @@ export class Game {
           fx.burst(snap.squadX, 0.8, PLAYER_Z, meta.color, 40, { speed: 5, size: 0.45, life: 0.7, up: 1.6, gravity: -2 });
           this.renderer.shake(0.18);
           if (live) {
-            this.ui.rewardBanner(ev.reward, ev.newWeaponLevel);
+            const activeWeapons = snap.arsenal
+              ? Object.values(snap.arsenal).filter((v) => v > 0).length
+              : 1;
+            this.ui.rewardBanner(ev.reward, ev.newWeaponLevel, activeWeapons);
             a.powerUp();
             this.ui.doFlash(meta.color, 0.22);
             this.addScore(SCORE.vault);

@@ -12,6 +12,7 @@ import { allocEntityId, type SimGate, type SimGateRow, type SimWorld } from './e
 import {
   applyGateOperation,
   clamp,
+  clampSquadCount,
   computeGatePolarity,
   formatGateLabel,
   normalizeZero,
@@ -389,7 +390,33 @@ export function resolveGateRowCrossings(world: SimWorld, events: SimEvent[]): bo
         });
 
         if (chosenGate.polarity === 'positive' && actualDelta > 0) {
-          addResonance(world, RESONANCE_GAIN_POSITIVE_GATE, events);
+          world.gateStreak += 1;
+          addResonance(
+            world,
+            RESONANCE_GAIN_POSITIVE_GATE + Math.min(4, Math.max(0, world.gateStreak - 1)) * 0.04,
+            events,
+          );
+          if (world.gateStreak >= 2) {
+            const streakBonus = Math.min(6, world.gateStreak - 1);
+            const beforeBonus = world.squadCount;
+            const boosted = clampSquadCount(beforeBonus + streakBonus);
+            const added = boosted - beforeBonus;
+            world.squadCount = boosted;
+            if (boosted > world.stats.peakSquad) {
+              world.stats.peakSquad = boosted;
+            }
+            if (added > 0) {
+              events.push({
+                type: 'GATE_STREAK',
+                x: chosenGate.x,
+                z: PLAYER_Z,
+                streak: world.gateStreak,
+                bonus: added,
+              });
+            }
+          }
+        } else if (chosenGate.polarity === 'negative' || actualDelta < 0) {
+          world.gateStreak = 0;
         }
 
         if (actualDelta < 0) {

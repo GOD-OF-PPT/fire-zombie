@@ -111,7 +111,13 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
     plasma: 0,
     cryo: 0,
   };
+  world.auxCooldowns = { pulse: 0.18, scatter: 0.24, rail: 0.3, plasma: 0.36, cryo: 0.22 };
+  world.overclockStacks = 0;
+  world.rampageStacks = 0;
+  world.rampageTimer = 0;
+  world.gateStreak = 0;
   world.fireCooldown = 0;
+  world.volleyIndex = 0;
 
   world.bladesCount = 0;
   world.bladesAngle = 0;
@@ -177,7 +183,13 @@ export function createSimWorld(): SimWorld {
       plasma: 0,
       cryo: 0,
     },
+    auxCooldowns: { pulse: 0.18, scatter: 0.24, rail: 0.3, plasma: 0.36, cryo: 0.22 },
+    overclockStacks: 0,
+    rampageStacks: 0,
+    rampageTimer: 0,
+    gateStreak: 0,
     fireCooldown: 0,
+    volleyIndex: 0,
 
     bladesCount: 0,
     bladesAngle: 0,
@@ -408,6 +420,15 @@ function decayTimersAndPulses(world: SimWorld): void {
   }
   if (world.aegisTimer > 0) {
     world.aegisTimer = snapTimerZero(world.aegisTimer - FIXED_DT);
+  }
+  if (world.rampageTimer > 0) {
+    const nextRamp = world.rampageTimer - FIXED_DT;
+    if (nextRamp <= 1e-9) {
+      world.rampageTimer = 0;
+      world.rampageStacks = 0;
+    } else {
+      world.rampageTimer = nextRamp;
+    }
   }
   if (world.aegisCooldown > 0) {
     world.aegisCooldown = snapTimerZero(world.aegisCooldown - FIXED_DT);
@@ -718,6 +739,10 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
     })),
     weapon: world.weapon,
     weaponLevel: world.weaponLevel,
+    arsenal: { ...world.learnedWeaponLevels },
+    overclockStacks: world.overclockStacks,
+    rampageStacks: world.rampageStacks,
+    gateStreak: world.gateStreak,
     bladesCount: world.bladesCount,
     bladesAngle: world.bladesAngle,
     masteryCount: world.masteryCount,

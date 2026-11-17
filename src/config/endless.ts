@@ -51,15 +51,22 @@ function scaleEncounter(enc: RunwayEncounter, wave: number): RunwayEncounter {
     case 'vault':
       return { ...enc, crossDist, hp: Math.round(enc.hp * (1 + (wave - 1) * 0.12)) };
     case 'enemies': {
-      // Later loops add a restrained number of reinforcements instead of only inflating HP.
+      // Escalating horde waves fill the runway with satisfying crawler swarms alongside elites
       const units = [...enc.units];
-      const extras = Math.min(3, Math.floor((wave - 1) / 2));
+      const extras = Math.min(10, Math.floor((wave - 1) * 2.5));
       for (let i = 0; i < extras; i++) {
         const src = enc.units[(i * 2 + wave) % enc.units.length]!;
-        units.push({ ...src, x: -src.x * 0.8, dz: (src.dz ?? 0) + 7 + i * 1.5 });
+        const kind = src.kind === 'bastion' || src.kind === 'dasher' ? 'crawler' : src.kind;
+        units.push({
+          kind,
+          x: Math.max(-3.4, Math.min(3.4, -src.x * 0.82 + ((i % 3) - 1) * 0.6)),
+          dz: (src.dz ?? 0) + 5.5 + i * 0.9,
+        });
       }
       if ((wave - 1) % 3 === 2) {
-        for (const x of [-2.7, 0, 2.7]) units.push({ kind: 'crawler', x, dz: 10 });
+        for (const [idx, x] of [-3.0, -1.8, -0.6, 0.6, 1.8, 3.0].entries()) {
+          units.push({ kind: 'crawler', x, dz: 9.5 + (idx % 2) * 1.1 });
+        }
       }
       return { ...enc, crossDist, units };
     }

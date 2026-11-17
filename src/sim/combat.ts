@@ -431,7 +431,7 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
             proj.hitIds.add(cand.targetId);
             const isCrit = rollDeterministicCrit(world);
             const dmg = proj.damage * getWeaponCounterMult(proj.weapon, enemy.kind) * (isCrit ? 1.75 : 1.0);
-            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.round(dmg) });
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(dmg)) });
             damageEnemy(world, enemy, dmg, proj.cryoSlowDuration, events);
             solidHitApplied = true;
           }
@@ -463,8 +463,10 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
             proj.hitIds.add(cand.targetId);
             const isCrit = rollDeterministicCrit(world);
             const bossMult = (isCrit ? 1.75 : 1.0) * (hasSynergy(world.endless?.upgrades, 'hyper_annihilation') ? 1.2 : 1.0);
-            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.round(proj.damage * bossMult) });
-            damageBossPylon(world, pylon, proj.damage * bossMult, events);
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(proj.damage * bossMult)) });
+            const pDmg = proj.damage * bossMult;
+            events.push({ type: 'BOSS_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(pDmg)) });
+            damageBossPylon(world, pylon, pDmg, events);
             solidHitApplied = true;
           }
         } else if (cand.kind === 'boss_core') {
@@ -473,8 +475,12 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
             proj.hitIds.add(cand.targetId);
             const isCrit = rollDeterministicCrit(world);
             const bossMult = (isCrit ? 1.75 : 1.0) * (hasSynergy(world.endless?.upgrades, 'hyper_annihilation') ? 1.2 : 1.0);
-            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.round(proj.damage * bossMult) });
-            damageBossCore(world, false, proj.damage * bossMult, events);
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(proj.damage * bossMult)) });
+            const cDmg = proj.damage * bossMult;
+            if (!boss.shielded) {
+              events.push({ type: 'BOSS_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(cDmg)) });
+            }
+            damageBossCore(world, false, cDmg, events);
             solidHitApplied = true;
           }
         } else if (cand.kind === 'boss_secondary') {
@@ -483,8 +489,12 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
             proj.hitIds.add(cand.targetId);
             const isCrit = rollDeterministicCrit(world);
             const bossMult = (isCrit ? 1.75 : 1.0) * (hasSynergy(world.endless?.upgrades, 'hyper_annihilation') ? 1.2 : 1.0);
-            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.round(proj.damage * bossMult) });
-            damageBossCore(world, true, proj.damage * bossMult, events);
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(proj.damage * bossMult)) });
+            const sDmg = proj.damage * bossMult;
+            if (!boss.secondaryCore.shielded) {
+              events.push({ type: 'BOSS_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(sDmg * 1.5)) });
+            }
+            damageBossCore(world, true, sDmg, events);
             solidHitApplied = true;
           }
         }
