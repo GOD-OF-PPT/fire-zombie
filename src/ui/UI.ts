@@ -1,9 +1,19 @@
-import type { EndlessUpgradeId, NonNullDefeatReason, RewardId, SectorId, SimSnapshot, WeaponId } from '../types/game';
+import type {
+  EndlessUpgradeId,
+  MutatorId,
+  NonNullDefeatReason,
+  RewardId,
+  SectorId,
+  SimSnapshot,
+  WeaponId,
+} from '../types/game';
 import { getActiveSynergies, getEndlessThreat, PROTOCOLS, PROTOCOL_SYNERGIES } from '../config/protocols';
+import { FUSIONS, MUTATORS } from '../config/blitz';
 import { getVolleyStreamCount, WEAPON_CONFIGS } from '../config/weapons';
 import {
   ACHIEVEMENTS,
   BOSS_META,
+  computeMutatorBonusPct,
   CORE_GLYPH,
   DEFEAT_META,
   ENEMY_META,
@@ -16,6 +26,8 @@ import {
   SECTOR_CHALLENGES,
   SECTOR_META,
   UPGRADES,
+  type BuildArchetypeSummary,
+  type DamageBreakdownRow,
   type UpgradeId,
 } from '../app/meta';
 import type { SaveData } from '../app/save';
@@ -25,6 +37,8 @@ export interface UICallbacks {
   onStart(sector: SectorId): void;
   onEndless(): void;
   onLeaderboard(): void;
+  onBlitz(): void;
+  onToggleMutator(id: MutatorId): void;
   onProtocol(id: EndlessUpgradeId): void;
   onPause(): void;
   onResume(): void;
@@ -41,6 +55,7 @@ export interface UICallbacks {
 export interface ResultData {
   victory: boolean;
   sector: SectorId;
+  blitz?: boolean;
   stars: number;
   score: number;
   best: number;
@@ -51,6 +66,8 @@ export interface ResultData {
   progress: number;
   bossHpFrac: number | null;
   maxCombo: number;
+  archetype?: BuildArchetypeSummary;
+  damageBreakdown?: DamageBreakdownRow[];
   endless?: {
     wave: number;
     bosses: number;
@@ -69,7 +86,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLEl
   return e;
 }
 
-const FLOAT_POOL = 34;
+const FLOAT_POOL = 36;
 
 export class UI {
   readonly root: HTMLElement;
@@ -147,21 +164,30 @@ export class UI {
     render(this.title, html`
       <div class="title-top">
         <button class="icon-btn mute-btn" data-testid="mute-btn-title" aria-label="静音">🔊</button>
-        <div class="title-ver">NEON PROTOCOL · V2</div>
+        <div class="title-ver">NEON PROTOCOL · V5 参赛版</div>
+        <button class="icon-btn" data-testid="leaderboard-btn" aria-label="无尽排行榜" title="无尽排行榜">🏆</button>
         <button class="icon-btn help-btn" data-testid="help-btn" aria-label="玩法">?</button>
       </div>
       <div class="logo">
         <div class="logo-prism"><span></span><span></span><span></span></div>
         <h1>${GAME_TITLE_CN}</h1>
         <div class="logo-en">${GAME_TITLE_EN}</div>
-        <div class="tagline">拖动蜂群 · 射击金门 · 相位护盾 · 击溃首领</div>
+        <div class="tagline">双武超限聚变 · 跳台折射机关 · 首领破甲反击</div>
       </div>
       <div class="sector-list" data-testid="sector-list"></div>
-      <div class="endless-actions"><button class="endless-card locked" data-testid="endless-btn">
-        <span class="endless-icon">∞</span>
-        <span class="endless-body"><b>无尽协议</b><small>无限阶段 · 双协议羁绊 · 首领轮回</small></span>
-        <span class="endless-go">🔒</span>
-      </button><button class="ranking-shortcut" data-testid="leaderboard-btn" aria-label="无尽排行榜">🏆<span>排行</span></button></div>
+      <div class="special-modes">
+        <button class="blitz-card" data-testid="blitz-btn">
+          <span class="blitz-icon">🏆</span>
+          <span class="blitz-body"><b>锦标赛闪击</b><small>90s 极速高潮 · 超武聚变</small></span>
+          <span class="blitz-go">▶</span>
+        </button>
+        <button class="endless-card" data-testid="endless-btn">
+          <span class="endless-icon">∞</span>
+          <span class="endless-body"><b>无尽协议</b><small>无限阶段 · 双协议羁绊</small></span>
+          <span class="endless-go">▶</span>
+        </button>
+      </div>
+      <div class="mutator-bar" data-testid="mutator-bar"></div>
       <div class="title-row">
         <div class="core-count" data-testid="core-count"><i>${CORE_GLYPH}</i><b>0</b></div>
         <button class="mid-btn codex-btn" data-testid="codex-btn">图鉴勋章 <small class="medal-count">0/12</small></button>
@@ -171,6 +197,7 @@ export class UI {
       <div class="title-foot">拖动 / A D 移动 · 空格 超载 · E 相位脉冲 · X 倍速 · P 暂停</div>`);
     this.root.appendChild(this.title);
     this.title.querySelector('.start-btn')!.addEventListener('click', () => this.cb.onStart(this.selected));
+    this.title.querySelector('[data-testid=blitz-btn]')!.addEventListener('click', () => this.cb.onBlitz());
     this.title.querySelector('[data-testid=endless-btn]')!.addEventListener('click', () => this.cb.onEndless());
     this.title.querySelector('[data-testid=leaderboard-btn]')!.addEventListener('click', () => this.cb.onLeaderboard());
     this.title.querySelector('.help-btn')!.addEventListener('click', () => this.showHelp(true));
@@ -296,15 +323,14 @@ export class UI {
     this.helpEl.dataset.testid = 'help-screen';
     render(this.helpEl, html`
       <div class="panel help-panel">
-        <h2>作战手册</h2>
+        <h2>参赛决胜手册</h2>
         <ul class="help-list">
-          <li><i class="hi move">⇆</i><div><b>左右拖动 / A D</b> 移动蜂群，武器全自动射击；<b>X 键</b> 或右上角可切换 <b>2× 倍速</b></div></li>
-          <li><i class="hi pos">+</i><div><b>绿门</b>扩编蜂群；<b class="neg">红门</b>减员——人数归零即信号丢失</div></li>
-          <li><i class="hi gold">▣</i><div><b>金框门</b>可射击充能：把 -5 打成 +6 触发「负转正」！带锁 ÷ 门破锁即翻转为 ×2</div></li>
-          <li><i class="hi vault">⬢</i><div><b>能量舱 & 克制</b>：5 种枪械各有天敌克制（高达 ×1.8 伤害），详情见主页「图鉴勋章」</div></li>
-          <li><i class="hi reso">🛡</i><div><b>相位脉冲 [E / Shift]</b>：震退并冰缓近身怪群、清除首领弹幕，开启减伤力场罩！</div></li>
-          <li><i class="hi reso">⚡</i><div><b>共鸣超载 [空格]</b>：共鸣满槽后手动释放 6 秒 V 翼超载（射速 ×1.5 + 穿透 +1）</div></li>
-          <li><i class="hi barrel">🔥</i><div><b>炽热连杀 & 双协议羁绊</b>：连续击杀提升得分倍率（最高 ×2.5）；无尽模式凑齐特定协议组合激活强力共鸣羁绊！</div></li>
+          <li><i class="hi move">⇆</i><div><b>左右拖动 / A D</b> 移动蜂群，全武装自动齐射；<b>X 键</b> 切换 <b>2× 倍速</b></div></li>
+          <li><i class="hi vault">🌌</i><div><b>双武超限聚变</b>：迫击+冰冻=<b>极寒黑洞炮</b>；散弹+轨炮=<b>折射电网</b>；环轨刃+脉冲Lv2=<b>浮游剑阵</b></div></li>
+          <li><i class="hi pos">▲</i><div><b>跑道立体机关</b>：踩<b>磁浮跳台</b>飞越致命 ÷ 门并震地清场；射<b>45°折射镜</b>斜角爆桶；闯<b>死斗契约</b>赢悬赏大奖</div></li>
+          <li><i class="hi boss">⚡</i><div><b>首领破甲 & 棱球反击</b>：击碎首领<b>左右肩部件</b>触发 4 秒 <b>2.0× 破防</b>；集火将负值<b>湮灭棱球</b>打正即可反击轰核！</div></li>
+          <li><i class="hi gold">🏆</i><div><b>锦标赛闪击 & 突变词缀</b>：90 秒浓缩全部高潮机制；勾选「镜像双子 / 玻璃大炮 / 连锁狂欢」赢取最高 +75% 得分与晶核加成！</div></li>
+          <li><i class="hi reso">🛡</i><div><b>相位脉冲 [E] & 共鸣超载 [空格]</b>：主动震碎弹幕开盾减伤 + 满共鸣开启 V 翼超载倾泻火力</div></li>
         </ul>
         <button class="big-btn" data-testid="help-close">明白了</button>
       </div>`);
@@ -336,7 +362,7 @@ export class UI {
       <div class="panel codex-panel">
         <h2>战术档案 · 勋章</h2>
         <div class="codex-tabs">
-          <button class="codex-tab on" data-tab="arsenal">武装克制</button>
+          <button class="codex-tab on" data-tab="arsenal">超武武装</button>
           <button class="codex-tab" data-tab="bestiary">异种首领</button>
           <button class="codex-tab" data-tab="medals">荣耀勋章</button>
         </div>
@@ -368,8 +394,19 @@ export class UI {
     this.lastSave = save;
     const body = this.codexEl.querySelector('.codex-body')!;
     if (this.codexTab === 'arsenal') {
+      const fusionCards = Object.values(FUSIONS)
+        .map(
+          (f) => html`<div class="cx-card" style="--cc:${f.color}">
+            <div class="cx-icon">${f.glyph}</div>
+            <div class="cx-main">
+              <div class="cx-title"><b>${f.name}</b><span>双武超限聚变</span></div>
+              <div class="cx-desc">${f.desc}</div>
+              <div class="cx-meta"><em>合成配方：${f.recipeText}</em></div>
+            </div>
+          </div>`,
+        );
       const weaponIds: RewardId[] = ['pulse', 'scatter', 'rail', 'plasma', 'cryo', 'blades'];
-      render(body, weaponIds
+      const weaponCards = weaponIds
         .map((id) => {
           const m = REWARD_META[id];
           const statLine =
@@ -389,7 +426,8 @@ export class UI {
               <div class="cx-meta"><em>克制：${m.counters}</em><small>${statLine}</small></div>
             </div>
           </div>`;
-        }));
+        });
+      render(body, html`<div class="cx-sec">⚡ 双武超限聚变（局内自动合成）</div>${fusionCards}<div class="cx-sec">基础同屏协同武装</div>${weaponCards}`);
     } else if (this.codexTab === 'bestiary') {
       const enemyCards = (Object.keys(ENEMY_META) as Array<keyof typeof ENEMY_META>)
         .map((k) => {
@@ -417,7 +455,7 @@ export class UI {
             </div>
           </div>`;
         });
-      render(body, html`<div class="cx-sec">首领档案</div>${bossCards}<div class="cx-sec">感染体档案</div>${enemyCards}`);
+      render(body, html`<div class="cx-sec">首领档案（部位破坏 + 棱球反击）</div>${bossCards}<div class="cx-sec">感染体档案</div>${enemyCards}`);
     } else {
       const unlockedSet = new Set(save.achievements ?? []);
       render(body, ACHIEVEMENTS.map((a) => {
@@ -433,7 +471,6 @@ export class UI {
     }
   }
 
-  /** Re-renders workshop rows + title currency & medal badges from save data. */
   renderWorkshop(save: SaveData, boughtId?: UpgradeId | 'apex'): void {
     this.lastSave = save;
     const coresTxt = save.cores.toLocaleString('en-US');
@@ -484,7 +521,6 @@ export class UI {
       list.appendChild(row);
     }
 
-    // Infinite Apex Overclock Core row
     const apexCan = apexUnlocked && save.cores >= apexCost;
     const apexRow = el('div', `ws-row apex-row${boughtId === 'apex' ? ' bought' : ''}${apexUnlocked ? '' : ' locked'}`);
     apexRow.style.setProperty('--uc', '#ffd84a');
@@ -523,7 +559,9 @@ export class UI {
     this.selected = Math.min(save.unlocked, this.selected) as SectorId;
     if (this.selected < 1) this.selected = 1;
     this.renderSectorList(save);
+    this.renderBlitz(save);
     this.renderEndless(save);
+    this.renderMutators(save);
     this.hideBanner();
   }
 
@@ -554,17 +592,41 @@ export class UI {
     }
   }
 
+  private renderBlitz(save: SaveData): void {
+    const btn = this.title.querySelector<HTMLButtonElement>('[data-testid=blitz-btn]')!;
+    const sub = btn.querySelector('small')!;
+    if (save.blitz && save.blitz.bestScore > 0) {
+      const sec = save.blitz.bestTime > 0 ? ` · ${Math.round(save.blitz.bestTime)}s` : '';
+      sub.textContent = `最佳 ${save.blitz.bestScore.toLocaleString('en-US')}${sec}`;
+    } else {
+      sub.textContent = '90s 极速高潮 · 超武全开';
+    }
+  }
+
   private renderEndless(save: SaveData): void {
     const button = this.title.querySelector<HTMLButtonElement>('[data-testid=endless-btn]')!;
-    const locked = false;
-    button.classList.toggle('locked', locked);
-    button.disabled = locked;
-    button.querySelector('small')!.textContent = locked
-      ? '通关零号奇点解锁'
-      : save.endless.bestWave > 0
-        ? `最佳 阶段 ${save.endless.bestWave} · ${save.endless.bestScore.toLocaleString('en-US')} 分 · ${Math.round(save.endless.bestTime / 60)} 分钟`
-        : '无限阶段 · 双协议羁绊 · 首领轮回';
-    button.querySelector('.endless-go')!.textContent = locked ? '🔒' : '出击 ▶';
+    button.classList.remove('locked');
+    button.disabled = false;
+    button.querySelector('small')!.textContent =
+      save.endless.bestWave > 0
+        ? `阶段 ${save.endless.bestWave} · ${save.endless.bestScore.toLocaleString('en-US')} 分`
+        : '无限阶段 · 双协议羁绊';
+    button.querySelector('.endless-go')!.textContent = '▶';
+  }
+
+  renderMutators(save: SaveData): void {
+    this.lastSave = save;
+    const bar = this.title.querySelector('.mutator-bar')!;
+    const active = new Set(save.mutators ?? []);
+    const totalPct = computeMutatorBonusPct(save.mutators);
+    render(bar, [html`<span class="mut-lbl">突变词缀${totalPct > 0 ? html` <em>+${totalPct}%</em>` : ''}</span>`,
+      MUTATORS.map((m) => {
+        const on = active.has(m.id);
+        return html`<button class="mut-chip${on ? ' on' : ''}" style="--mc:${m.color}" data-mut="${m.id}" data-testid="mutator-${m.id}" title="${m.desc}">${m.glyph} ${m.name} <small>+${m.bonusPct}%</small></button>`;
+      })]);
+    bar.querySelectorAll<HTMLButtonElement>('[data-mut]').forEach((btn) => {
+      btn.addEventListener('click', () => this.cb.onToggleMutator(btn.dataset.mut as MutatorId));
+    });
   }
 
   hideTitle(): void {
@@ -645,9 +707,10 @@ export class UI {
     this.helpEl.classList.toggle('show', v);
   }
 
-  showHud(sector: SectorId, endless = false): void {
+  showHud(sector: SectorId, endless = false, blitz = false): void {
     this.hud.classList.add('show');
     this.hud.classList.toggle('endless', endless);
+    this.hud.classList.toggle('blitz', blitz);
     this.hud.dataset.sector = String(sector);
     this.bossBar.classList.remove('show');
     this.progressWrap.classList.remove('hide');
@@ -655,7 +718,7 @@ export class UI {
     this.lastWeaponKey = '';
     this.lastStackKey = '';
     this.lastDps = -1;
-    this.stackRack.replaceChildren();
+    render(this.stackRack, '');
     this.lastScore = -1;
     this.setSpeed(1);
     this.updateFever(0, 1);
@@ -684,12 +747,17 @@ export class UI {
         <div><span>蜂群</span><b>${snap.squadCount}</b></div>
         <div><span>武器</span><b style="color:${w.color}">${w.name} Lv${snap.weaponLevel}</b></div>
         <div><span>实时DPS</span><b>${Math.round(snap.trueSquadDps)}</b></div>
-        <div><span>${snap.endless ? '无尽阶段' : '进度'}</span><b>${snap.endless ? `${snap.endless.wave} · ${Math.round(snap.endless.distance)}m` : `${Math.round(snap.runwayProgress * 100)}%`}</b></div>`);
+        <div><span>${snap.endless ? '无尽阶段' : snap.blitzActive ? '闪击推进' : '进度'}</span><b>${snap.endless ? `${snap.endless.wave} · ${Math.round(snap.endless.distance)}m` : `${Math.round(snap.runwayProgress * 100)}%`}</b></div>`);
       const synEl = this.pauseEl.querySelector('.pause-synergies')!;
       const syns = getActiveSynergies(snap.endless?.upgrades);
-      render(synEl, syns.length
-        ? syns.map((s) => html`<span style="--sc:${s.color}">${s.glyph} ${s.name}：${s.effectText}</span>`)
-        : '');
+      const fusBadges = (snap.activeFusions ?? []).map((fId) => {
+        const f = FUSIONS[fId];
+        return html`<span style="--sc:${f.color}">${f.glyph} 超武「${f.name}」：${f.desc}</span>`;
+      });
+      render(synEl, [
+        ...fusBadges,
+        ...syns.map((s) => html`<span style="--sc:${s.color}">${s.glyph} ${s.name}：${s.effectText}</span>`),
+      ]);
     }
   }
 
@@ -756,6 +824,15 @@ export class UI {
     let auxMult = 1;
     let auxStreamTotal = 0;
     const pills: Content[] = [];
+
+    for (const fId of snap.activeFusions ?? []) {
+      const f = FUSIONS[fId];
+      pills.push(html`<span class="st-pill fusion" style="--sc:${f.color}">${f.glyph}${f.short}</span>`);
+    }
+    for (const mId of snap.mutators ?? []) {
+      const m = MUTATORS.find((x) => x.id === mId);
+      if (m) pills.push(html`<span class="st-pill" style="--sc:${m.color}">${m.glyph}${m.name}</span>`);
+    }
     if (snap.arsenal && snap.stats.vaultsCracked > 0) {
       for (const wId of ['pulse', 'scatter', 'rail', 'plasma', 'cryo'] as const) {
         const lv = snap.arsenal[wId] ?? 0;
@@ -784,14 +861,16 @@ export class UI {
     if ((snap.gateStreak ?? 0) >= 2) {
       pills.push(html`<span class="st-pill streak" style="--sc:#19f5a8">🚪连门×${snap.gateStreak}</span>`);
     }
-    const stackKey = [snap.weapon, ...Object.values(snap.arsenal ?? {}), snap.overclockStacks, snap.rampageStacks, snap.gateStreak, snap.stats.vaultsCracked > 0].join('|');
+    const stackKey = [snap.weapon, ...Object.values(snap.arsenal ?? {}), snap.overclockStacks, snap.rampageStacks, snap.gateStreak, snap.stats.vaultsCracked > 0, ...(snap.activeFusions ?? []), ...(snap.mutators ?? [])].join('|');
     if (stackKey !== this.lastStackKey) {
       this.lastStackKey = stackKey;
       render(this.stackRack, pills);
     }
 
-    const effectiveDps = Math.round(snap.trueSquadDps * auxMult * rampageBoost);
-    const totalStreams = getVolleyStreamCount(snap.weapon, snap.weaponLevel, snap.squadCount) + auxStreamTotal;
+    const twinMult = snap.mirrorTwinActive ? 1.55 : 1;
+    const effectiveDps = Math.round(snap.trueSquadDps * auxMult * rampageBoost * twinMult);
+    const baseStreams = getVolleyStreamCount(snap.weapon, snap.weaponLevel, snap.squadCount) + auxStreamTotal;
+    const totalStreams = snap.mirrorTwinActive ? Math.round(baseStreams * 1.65) : baseStreams;
     const dpsKey = effectiveDps * 100 + totalStreams;
     if (dpsKey !== this.lastDps) {
       this.lastDps = dpsKey;
@@ -800,7 +879,8 @@ export class UI {
 
     if (snap.bladesCount > 0) {
       this.bladesChip.classList.add('show');
-      render(this.bladesChip, html`<span class="g">✦</span>环轨刃 ×${snap.bladesCount}`);
+      const isSeeker = (snap.activeFusions ?? []).includes('seeker_sword_array');
+      render(this.bladesChip, html`<span class="g">${isSeeker ? '⚔' : '✦'}</span>${isSeeker ? '浮游剑阵' : '环轨刃'} ×${snap.bladesCount}`);
     } else {
       this.bladesChip.classList.remove('show');
     }
@@ -809,7 +889,6 @@ export class UI {
       this.scoreEl.textContent = score.toLocaleString('en-US');
     }
 
-    // Resonance Overdrive bar
     const od = snap.overdriveTimer > 0;
     this.resoFill.style.width = `${(snap.resonance * 100).toFixed(1)}%`;
     this.resoWrap.classList.toggle('od', od);
@@ -827,7 +906,6 @@ export class UI {
     }
     this.root.classList.toggle('overdrive', od);
 
-    // Phase Aegis button state
     const aegisTimer = snap.aegisTimer ?? 0;
     const aegisCd = snap.aegisCooldown ?? 0;
     const aegisMax = Math.max(1, snap.aegisMaxCooldown ?? 14);
@@ -849,13 +927,20 @@ export class UI {
       this.progressWrap.classList.add('hide');
       const meta = BOSS_META[b.id];
       const enraged = (b.enrage ?? 1) > 1;
-      this.bossName.textContent = `${meta.name}《${meta.title}》${enraged ? ' · 狂暴' : ''}`;
+      const brk = b.breakTimer ?? 0;
+      const alivePods = (b.parts ?? []).filter((pt) => !pt.destroyed).length;
+      const podTag = (b.parts?.length ?? 0) > 0 ? ` · 肩甲${alivePods}/${b.parts!.length}` : '';
+      this.bossName.textContent =
+        brk > 0
+          ? `⚡ 破防 2.0× (${brk.toFixed(1)}s) · ${meta.title}`
+          : `${meta.name}《${meta.title}》${podTag}${enraged ? ' · 狂暴' : ''}`;
       this.bossBar.classList.toggle('enraged', enraged);
+      this.bossBar.classList.toggle('broken', brk > 0);
       render(this.bossPhase, Array.from({ length: b.maxPhases }, (_, i) => html`<i class="${i < b.phase ? 'on' : ''}"></i>`));
       this.bossFill.style.width = `${Math.max(0, (b.hp / b.maxHp) * 100).toFixed(2)}%`;
       this.bossBar.classList.toggle('shielded', b.shielded && !b.secondaryCore);
     } else if (!b) {
-      this.bossBar.classList.remove('show');
+      this.bossBar.classList.remove('show', 'broken');
       this.progressWrap.classList.remove('hide');
     }
   }
@@ -1003,17 +1088,39 @@ export class UI {
     const mm = Math.floor(r.stats.time / 60);
     const ss = Math.floor(r.stats.time % 60).toString().padStart(2, '0');
     const reason = r.reason ? DEFEAT_META[r.reason] : null;
-    const finale = r.victory && r.sector === 3;
+    const finale = r.victory && r.sector === 3 && !r.blitz;
     const isEndless = r.endless !== undefined;
+    const isBlitz = r.blitz === true;
     const medalsHtml =
       r.unlockedMedals && r.unlockedMedals.length
         ? html`<div class="r-medals">${r.unlockedMedals
             .map((m) => html`<span style="--mc:${m.color}">${m.glyph} 勋章「${m.name}」+${CORE_GLYPH}${m.reward}</span>`)}</div>`
         : '';
+    const archHtml = r.archetype
+      ? html`<div class="r-arch" data-testid="result-archetype" style="--ac:${r.archetype.color}">
+          <span class="ra-glyph">${r.archetype.glyph}</span>
+          <div class="ra-body"><b>${r.archetype.title}</b><small>${r.archetype.tags}</small></div>
+        </div>`
+      : '';
+    const dmgHtml =
+      r.damageBreakdown && r.damageBreakdown.length > 0
+        ? html`<div class="r-dmg" data-testid="damage-breakdown">
+            <div class="rd-head"><span>伤害构成战报</span><span>输出占比</span></div>
+            ${r.damageBreakdown
+              .map(
+                (row) => html`<div class="rd-row">
+                  <span class="rd-lbl" style="color:${row.color}">${row.glyph} ${row.label}</span>
+                  <div class="rd-bar"><i style="width:${row.pct}%;background:${row.color}"></i></div>
+                  <b class="rd-val">${row.damage.toLocaleString('en-US')} <small>${row.pct}%</small></b>
+                </div>`,
+              )}
+          </div>`
+        : '';
+
     render(this.resultEl, html`
       <div class="panel result-panel ${r.victory ? 'win' : 'lose'}">
-        <div class="r-kicker">${isEndless ? 'ENDLESS PROTOCOL · 无尽协议' : meta.subtitle}</div>
-        <h2 class="r-title">${isEndless ? '无尽信号中断' : r.victory ? (finale ? '奇点终结 · 全线通关' : '区域突破') : '蜂群信号丢失'}</h2>
+        <div class="r-kicker">${isBlitz ? 'TOURNAMENT BLITZ · 锦标赛闪击' : isEndless ? 'ENDLESS PROTOCOL · 无尽协议' : meta.subtitle}</div>
+        <h2 class="r-title">${isEndless ? '无尽信号中断' : isBlitz ? (r.victory ? '🏆 闪击锦标夺冠' : '闪击挑战中断') : r.victory ? (finale ? '奇点终结 · 全线通关' : '区域突破') : '蜂群信号丢失'}</h2>
         ${r.victory ? html`<div class="stars">${[0, 1, 2].map((i) => html`<span class="star" data-i="${i}">★</span>`)}</div>` : html`
           <div class="defeat-box" data-testid="defeat-reason">
             <div class="d-title">${reason?.title ?? ''}</div>
@@ -1021,6 +1128,8 @@ export class UI {
             ${r.bossHpFrac !== null ? html`<div class="d-prog boss"><div style="width:${Math.round(r.bossHpFrac * 100)}%"></div><span>首领剩余血量 ${Math.max(1, Math.round(r.bossHpFrac * 100))}%${r.bossHpFrac < 0.35 ? ' · 差一点！' : ''}</span></div>` : html`<div class="d-prog"><div style="width:${Math.round(r.progress * 100)}%"></div><span>推进 ${Math.round(r.progress * 100)}%</span></div>`}
           </div>`}
         <div class="r-score"><span>得分</span><b data-testid="result-score">0</b>${r.newBest ? html`<em>新纪录!</em>` : html`<small>最佳 ${r.best.toLocaleString('en-US')}</small>`}</div>
+        ${archHtml}
+        ${dmgHtml}
         <div class="r-stats">
           ${r.endless ? html`
             <div class="r-endless-wave"><span>抵达阶段${r.endless.newWaveBest ? ' · 新纪录' : ''}</span><b data-testid="result-wave">${r.endless.wave}</b></div>
@@ -1041,17 +1150,17 @@ export class UI {
             <div><span>用时</span><b>${mm}:${ss}</b></div>`}
         </div>
         ${medalsHtml}
-        <div class="r-ch" data-testid="result-challenges">${r.challenges.map((c) => html`<div class="${c.done ? 'ok' : ''}${c.isNew ? ' new' : ''}"><i>${c.done ? '✓' : '○'}</i>${c.text}<b>${c.isNew ? `+${c.reward}` : c.done ? '已完成' : `${CORE_GLYPH}${c.reward}`}</b></div>`)}</div>
+        ${r.challenges.length ? html`<div class="r-ch" data-testid="result-challenges">${r.challenges.map((c) => html`<div class="${c.done ? 'ok' : ''}${c.isNew ? ' new' : ''}"><i>${c.done ? '✓' : '○'}</i>${c.text}<b>${c.isNew ? `+${c.reward}` : c.done ? '已完成' : `${CORE_GLYPH}${c.reward}`}</b></div>`)}</div>` : html`<div class="r-ch" data-testid="result-challenges"></div>`}
         <div class="r-cores" data-testid="result-cores">
           <div class="rc-main"><i>${CORE_GLYPH}</i> +<b>${r.cores.total}</b> 晶核 <small>（共 ${r.cores.balance.toLocaleString('en-US')}）</small></div>
           <div class="rc-lines">${r.cores.lines.filter(([k]) => !k.startsWith('挑战·') && !k.startsWith('勋章·')).map(([k, v]) => html`<span>${k} +${v}</span>`)}${r.challenges.some((c) => c.isNew) ? html`<span>挑战奖励（见上）</span>` : ''}</div>
           ${r.cores.affordable ? html`<div class="rc-tip">可在主页「强化工坊」升级蜂群！</div>` : ''}
         </div>
-        ${r.victory ? html`<div class="r-goal">★★ 剩余 ≥ ${meta.starSquad[0]}　★★★ 剩余 ≥ ${meta.starSquad[1]}</div>` : ''}
+        ${r.victory && !isEndless ? html`<div class="r-goal">★★ 剩余 ≥ ${isBlitz ? 85 : meta.starSquad[0]}　★★★ 剩余 ≥ ${isBlitz ? 180 : meta.starSquad[1]}</div>` : ''}
         ${isEndless ? html`<div class="result-ranking" data-testid="result-ranking"></div>` : ''}
         <div class="r-btns">
           ${r.hasNext ? html`<button class="big-btn" data-testid="next-btn">下一关 ▶</button>` : ''}
-          <button class="${r.hasNext ? 'mid-btn' : 'big-btn'}" data-testid="retry-btn">${isEndless ? '再战无尽' : r.victory ? (r.sector === 4 ? '新布局再战' : '再战一次') : '重新挑战'}</button>
+          <button class="${r.hasNext ? 'mid-btn' : 'big-btn'}" data-testid="retry-btn">${isBlitz ? '再战闪击' : isEndless ? '再战无尽' : r.victory ? (r.sector === 4 ? '新布局再战' : '再战一次') : '重新挑战'}</button>
           <button class="mid-btn ghost" data-testid="result-home-btn">返回主页</button>
         </div>
       </div>`);

@@ -31,6 +31,7 @@ import {
   type SimWorld,
 } from './entities';
 import { clamp, clampSquadCount, computeProjectilePowerScale, normalizeZero } from './math';
+import { hasMutator, syncActiveFusions } from './competition';
 import { addResonance } from './resonance';
 
 export function spawnVault(
@@ -139,6 +140,7 @@ export function damageVault(
       reward: vault.rewardWeapon,
       newWeaponLevel: emittedLevel,
     });
+    syncActiveFusions(world, events);
     addResonance(world, RESONANCE_GAIN_VAULT_BREAK, events);
   } else {
     events.push({
@@ -163,8 +165,11 @@ function emitPlayerVolley(world: SimWorld, events: SimEvent[]): void {
   // Total volley damage is normalized against base shotsPerSecond so Overdrive's 1.5x fire rate yields exact 1.5x DPS
   const synMult = hasSynergy(world.endless?.upgrades, 'singularity_matrix') ? 1.15 : 1.0;
   const synPierce = hasSynergy(world.endless?.upgrades, 'singularity_matrix') ? 1 : 0;
+  const glassMult = hasMutator(world, 'glass_cannon') ? 2.4 : 1.0;
+  const twinActive = hasMutator(world, 'mirror_twin') && Math.abs(world.squadX) > 0.45;
+  const wingMult = twinActive ? 0.58 : 1.0; // Twin wings fire 0.58x each = 1.16x total symmetrical firepower!
   const totalVolleyDamage =
-    (BASE_DRONE_DPS * world.squadCount * stats.dpsMult * masteryMult * world.mods.damageMult * synMult) /
+    (BASE_DRONE_DPS * world.squadCount * stats.dpsMult * masteryMult * world.mods.damageMult * synMult * glassMult * wingMult) /
     stats.shotsPerSecond;
   const damagePerProjectile = totalVolleyDamage / streamCount;
   const pierce = stats.basePierce + (overdriveActive ? OVERDRIVE_BONUS_PIERCE : 0) + synPierce;
@@ -235,6 +240,34 @@ function emitPlayerVolley(world: SimWorld, events: SimEvent[]): void {
     proj.distanceTraveled = stats.projectileSpeed * FIXED_DT;
 
     world.projectiles.push(proj);
+
+    if (twinActive) {
+      const twin = world.projectilePool.acquire();
+      twin.id = allocEntityId(world);
+      twin.weapon = weapon;
+      twin.radius = stats.radius;
+      twin.damage = damagePerProjectile;
+      twin.remainingPierce = pierce;
+      twin.amplified = false;
+      twin.powerScale = powerScale * 0.92;
+      twin.hostile = false;
+      twin.hostileLoss = 0;
+      twin.maxRange = stats.maxRange;
+      twin.splashRadius = stats.splashRadius;
+      twin.splashDamageRatio = stats.splashDamageRatio;
+      twin.cryoSlowDuration = stats.cryoSlowDuration;
+      twin.sweepStartFraction = 0;
+      twin.active = true;
+      const twinSpawnX = clamp(-spawnX, -TRACK_HALF_WIDTH + 0.18, TRACK_HALF_WIDTH - 0.18);
+      twin.prevX = normalizeZero(twinSpawnX);
+      twin.prevZ = muzzleZ;
+      twin.vx = -vx;
+      twin.vz = vz;
+      twin.x = normalizeZero(twin.prevX + twin.vx * FIXED_DT);
+      twin.z = twin.prevZ + twin.vz * FIXED_DT;
+      twin.distanceTraveled = stats.projectileSpeed * FIXED_DT;
+      world.projectiles.push(twin);
+    }
   }
 
   events.push({

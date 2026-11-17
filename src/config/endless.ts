@@ -72,6 +72,9 @@ function scaleEncounter(enc: RunwayEncounter, wave: number): RunwayEncounter {
     }
     case 'barrels':
     case 'lens':
+    case 'jump_pad':
+    case 'reflector':
+    case 'contract_lane':
       return { ...enc, crossDist };
   }
 }

@@ -7,6 +7,7 @@ import { spawnEnemy } from './enemies';
 import type { SimWorld } from './entities';
 import { spawnGateRow } from './gates';
 import { clamp } from './math';
+import { hasMutator, spawnContractLane, spawnJumpPad, spawnReflector } from './competition';
 import { spawnPrismLens, spawnVault } from './weapons';
 
 function spawnEncounter(world: SimWorld, enc: RunwayEncounter, scrollSpeed: number): void {
@@ -60,6 +61,10 @@ function spawnEncounter(world: SimWorld, enc: RunwayEncounter, scrollSpeed: numb
           spawnEnemy(world, u.kind, u.x, z);
         }
       }
+      if (isSwarmWave && hasMutator(world, 'barrel_carnival')) {
+        spawnBarrel(world, -1.9, baseZ - 1.5, scrollSpeed);
+        spawnBarrel(world, 1.9, baseZ - 4.2, scrollSpeed);
+      }
       break;
     }
     case 'barrels': {
@@ -80,6 +85,18 @@ function spawnEncounter(world: SimWorld, enc: RunwayEncounter, scrollSpeed: numb
         enc.driftAmp ?? 0,
         enc.driftFreq ?? 0,
       );
+      break;
+    }
+    case 'jump_pad': {
+      spawnJumpPad(world, enc.x, baseZ, scrollSpeed);
+      break;
+    }
+    case 'reflector': {
+      spawnReflector(world, enc.x, baseZ, scrollSpeed, enc.lean);
+      break;
+    }
+    case 'contract_lane': {
+      spawnContractLane(world, baseZ, enc.length, scrollSpeed, enc.bountySide, enc.bountyHp);
       break;
     }
   }
@@ -111,6 +128,12 @@ function mirrorEncounter(enc: RunwayEncounter): RunwayEncounter {
       return { ...enc, x: -enc.x };
     case 'lens':
       return { ...enc, x: -enc.x };
+    case 'jump_pad':
+      return { ...enc, x: -enc.x };
+    case 'reflector':
+      return { ...enc, x: -enc.x, lean: (enc.lean === 1 ? -1 : 1) as 1 | -1 };
+    case 'contract_lane':
+      return { ...enc, bountySide: enc.bountySide === 'left' ? 'right' : 'left' };
     case 'enemies':
       return { ...enc, units: enc.units.map((u) => ({ ...u, x: -u.x })) };
     case 'barrels':

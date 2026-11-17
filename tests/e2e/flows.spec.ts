@@ -231,7 +231,7 @@ test('endless is immediately available, drafts an upgrade, saves records, and re
   await page.getByTestId('home-btn').click();
   await expect(page.getByTestId('title-screen')).toBeVisible();
   await expect(page.getByTestId('endless-btn')).toBeEnabled();
-  await expect(page.getByTestId('endless-btn')).toContainText(`最佳 阶段 ${finalWave}`);
+  await expect(page.getByTestId('endless-btn')).toContainText(`阶段 ${finalWave}`);
 });
 
 test('defeat shows a reason, retry fully resets the run', async ({ page }) => {

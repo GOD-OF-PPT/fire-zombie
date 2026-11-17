@@ -26,7 +26,18 @@ import {
   TRACK_HALF_WIDTH,
 } from '../config/constants';
 import { SECTORS, getSectorScript } from '../config/sectors';
+import { generateBlitzScript } from '../config/blitz';
 import { generateEndlessStage } from '../config/endless';
+import {
+  applyContractWallClamp,
+  hasMutator,
+  resolveDoomOrbImpacts,
+  resolveJumpPadCrossings,
+  stepCompetitionEntitiesMotion,
+  stepJumpArc,
+  stepSingularities,
+  syncActiveFusions,
+} from './competition';
 import { stepChainExplosions } from './barrels';
 import {
   applyBarrelBlastToBoss,
@@ -84,6 +95,12 @@ function releaseAllActivePools(world: SimWorld): void {
   world.barrelPool.releaseAll(world.barrels);
   world.lensPool.releaseAll(world.lenses);
   world.projectilePool.releaseAll(world.projectiles);
+  world.singularities.length = 0;
+  world.jumpPads.length = 0;
+  world.reflectors.length = 0;
+  world.contractWalls.length = 0;
+  world.doomOrbs.length = 0;
+  world.seekerBlades.length = 0;
   world.boss = null;
 }
 
@@ -100,6 +117,20 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
 
   world.prevSquadX = 0;
   world.squadX = 0;
+  world.squadAirY = 0;
+  world.jumpTimer = 0;
+  world.ricochetsThisTick = 0;
+  world.activeFusions = [];
+  world.damageBySource = {
+    pulse: 0,
+    scatter: 0,
+    rail: 0,
+    plasma: 0,
+    cryo: 0,
+    fusions: 0,
+    deflect: 0,
+    explosives: 0,
+  };
   world.squadCount = startSquad;
 
   world.weapon = 'pulse';
@@ -215,6 +246,27 @@ export function createSimWorld(): SimWorld {
       peakSquad: 1,
     },
 
+    squadAirY: 0,
+    jumpTimer: 0,
+    ricochetsThisTick: 0,
+    activeFusions: [],
+    seekerBlades: [],
+    damageBySource: {
+      pulse: 0,
+      scatter: 0,
+      rail: 0,
+      plasma: 0,
+      cryo: 0,
+      fusions: 0,
+      deflect: 0,
+      explosives: 0,
+    },
+    singularities: [],
+    jumpPads: [],
+    reflectors: [],
+    contractWalls: [],
+    doomOrbs: [],
+
     gateRows: [],
     gates: [],
     vaults: [],
@@ -261,18 +313,31 @@ export function resetSimWorldForSector(
       aegisDurationSec: mods.aegisDurationSec,
       autoAegisCharges: mods.autoAegisCharges,
       critChance: mods.critChance,
+      blitz: mods.blitz === true,
+      mutators: mods.mutators ? [...mods.mutators] : undefined,
     };
   }
   const endless = world.mods.endless === true;
+  const blitz = world.mods.blitz === true && !endless;
   world.endless = endless ? { wave: 1, bossesDefeated: 0, completedDistance: 0, upgrades: {}, offers: [] } : null;
   const sectorCfg = endless
     ? generateEndlessStage(world.mods.layoutSeed ?? 1, 1)
-    : getSectorScript(sector, world.mods.layoutSeed ?? 0);
+    : blitz
+      ? generateBlitzScript(world.mods.layoutSeed || 1)
+      : getSectorScript(sector, world.mods.layoutSeed ?? 0);
   world.script = sectorCfg;
-  world.mirrorFlags = endless
-    ? []
-    : computeMirrorFlags(sectorCfg.encounters, world.mods.layoutSeed ?? 0, sector);
+  world.mirrorFlags =
+    endless || blitz
+      ? []
+      : computeMirrorFlags(sectorCfg.encounters, world.mods.layoutSeed ?? 0, sector);
   clearCoreRunFields(world, sectorCfg.startSquad + world.mods.bonusSquad);
+  if (blitz) {
+    world.weapon = 'pulse';
+    world.weaponLevel = 2;
+    world.learnedWeaponLevels.pulse = 2;
+    world.stats.vaultsCracked = 1;
+    syncActiveFusions(world);
+  }
   world.phase = 'PLAYING';
   world.currentScrollSpeed = sectorCfg.scrollSpeed;
   spawnReadyRunwayEncounters(world);
@@ -495,6 +560,7 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
   const rawSquadX =
     world.squadX + input.dragDeltaX + input.keyAxisX * KEYBOARD_MOVE_SPEED * FIXED_DT;
   world.squadX = clampSquadX(rawSquadX, world.formationRadius);
+  applyContractWallClamp(world);
   if (input.overdrive === true) {
     tryStartManualOverdrive(world, events);
   }
@@ -505,12 +571,15 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
   // Step 2: Track & Spawner
   stepTrackAndSpawner(world, events);
 
-  // Step 3: Projectiles, Auto-Fire & Orbital Bit-Blades
+  // Step 3: Projectiles, Auto-Fire, Orbital/Seeker Blades & Fusion Singularities
   stepProjectilesAndAutoFire(world, events);
   stepOrbitalBlades(world, events);
+  stepSingularities(world, events);
 
-  // Step 4: World Entities Z & Enemy / Boss AI
+  // Step 4: World Entities Z, Set-Pieces, Jump Arc & Enemy / Boss AI
   stepWorldEntitiesMotion(world, events);
+  stepCompetitionEntitiesMotion(world, events);
+  stepJumpArc(world, events);
 
   // Step 5: Swept Projectile Collisions (Lenses, Enemies, Shootable Gates, Vaults, Barrels, Boss)
   resolveFriendlyProjectileCollisions(world, events);
@@ -525,7 +594,8 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
     return events;
   }
 
-  // Step 8: Swept Squad Gate Crossings
+  // Step 8: Swept Jump Pads & Squad Gate Crossings
+  resolveJumpPadCrossings(world, events);
   if (resolveGateRowCrossings(world, events)) {
     cullExpiredEntities(world);
     reconcileFormationAndDps(world);
@@ -538,7 +608,7 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
     reconcileFormationAndDps(world);
     return events;
   }
-  if (resolveBossAttacks(world, events)) {
+  if (resolveBossAttacks(world, events) || resolveDoomOrbImpacts(world, events)) {
     cullExpiredEntities(world);
     reconcileFormationAndDps(world);
     return events;
@@ -619,6 +689,7 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       telegraphTimer: e.telegraphTimer,
       linkedGateId: e.linkedGateId,
       hitPulse: e.hitPulse,
+      ...(e.isBountyElite ? { isBountyElite: true } : {}),
     });
   }
 
@@ -708,6 +779,18 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
         : null,
       shielded: b.shielded,
       pylons,
+      parts: b.parts.map((pt) => ({
+        id: pt.id,
+        slot: pt.slot,
+        label: pt.label,
+        x: pt.x,
+        z: pt.z,
+        hp: pt.hp,
+        maxHp: pt.maxHp,
+        hitPulse: pt.hitPulse,
+        destroyed: pt.destroyed,
+      })),
+      breakTimer: b.breakTimer,
       hazardZones,
       hitPulse: b.hitPulse,
       introProgress: b.introProgress,
@@ -760,6 +843,49 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       maxChain: world.stats.maxChain,
       peakSquad: world.stats.peakSquad,
     },
+    squadAirY: world.squadAirY,
+    mirrorTwinActive: hasMutator(world, 'mirror_twin'),
+    blitzActive: world.mods.blitz === true && !world.endless,
+    activeFusions: [...world.activeFusions],
+    mutators: world.mods.mutators ? [...world.mods.mutators] : [],
+    seekerPositions: world.seekerBlades.map((sb) => ({ x: sb.x, z: sb.z, hunting: sb.hunting })),
+    damageBySource: { ...world.damageBySource },
+    singularities: world.singularities.map((s) => ({
+      id: s.id,
+      x: s.x,
+      z: s.z,
+      radius: s.radius,
+      timer: s.timer,
+    })),
+    jumpPads: world.jumpPads.map((p) => ({
+      id: p.id,
+      x: p.x,
+      z: p.z,
+      triggered: p.triggered,
+    })),
+    reflectors: world.reflectors.map((r) => ({
+      id: r.id,
+      x: r.x,
+      z: r.z,
+      lean: r.lean,
+      pulse: r.pulse,
+    })),
+    contractWalls: world.contractWalls.map((w) => ({
+      id: w.id,
+      zFront: w.zFront,
+      zBack: w.zBack,
+      bountySide: w.bountySide,
+    })),
+    doomOrbs: world.doomOrbs.map((o) => ({
+      id: o.id,
+      x: o.x,
+      z: o.z,
+      radius: o.radius,
+      value: o.value,
+      chargeRatio: o.chargeRatio,
+      reflected: o.reflected,
+      hitPulse: o.hitPulse,
+    })),
     gates,
     vaults,
     enemies,

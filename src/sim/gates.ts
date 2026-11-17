@@ -17,6 +17,7 @@ import {
   formatGateLabel,
   normalizeZero,
 } from './math';
+import { hasMutator } from './competition';
 import { addResonance } from './resonance';
 
 export interface GateRowSpawnOptions {
@@ -369,11 +370,21 @@ export function resolveGateRowCrossings(world: SimWorld, events: SimEvent[]): bo
         }
       }
 
+      if (chosenGate && world.squadAirY > 0.6 && chosenGate.polarity === 'negative') {
+        // Soaring airborne over negative/division gate via Mag-Lev Jump Pad!
+        chosenGate.dimmed = true;
+        chosenGate = null;
+      }
+
       if (chosenGate) {
+        const effValue =
+          hasMutator(world, 'glass_cannon') && chosenGate.polarity === 'negative' && chosenGate.op === 'sub'
+            ? chosenGate.value * 2
+            : chosenGate.value;
         const { after, actualDelta } = applyGateOperation(
           world.squadCount,
           chosenGate.op,
-          chosenGate.value,
+          effValue,
         );
         world.squadCount = after;
         if (after > world.stats.peakSquad) {

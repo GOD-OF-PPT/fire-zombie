@@ -6,7 +6,12 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type {
   BarrelSnapshot,
   BossSnapshot,
+  ContractWallSnapshot,
+  DoomOrbSnapshot,
   EnemyKind,
+  JumpPadSnapshot,
+  ReflectorSnapshot,
+  SingularitySnapshot,
   GateSnapshot,
   PrismLensSnapshot,
   RewardId,
@@ -31,7 +36,9 @@ import {
   makeSkyTexture,
   makeStripeTexture,
   paintGatePlate,
+  paintDoomOrbPlate,
   paintLensPlate,
+  paintSetPiecePlate,
   paintVaultPlate,
 } from './textures';
 import { makeCharacterMaterial } from './models/rig';
@@ -158,6 +165,53 @@ interface LensView {
   id: number;
   group: THREE.Group;
   paneMat: THREE.MeshBasicMaterial;
+  seen: boolean;
+}
+
+interface SingularityView {
+  id: number;
+  group: THREE.Group;
+  ringOuter: THREE.Mesh;
+  ringInner: THREE.Mesh;
+  cage: THREE.Mesh;
+  seen: boolean;
+}
+
+interface JumpPadView {
+  id: number;
+  group: THREE.Group;
+  stripMat: THREE.MeshBasicMaterial;
+  seen: boolean;
+}
+
+interface ReflectorView {
+  id: number;
+  group: THREE.Group;
+  paneMat: THREE.MeshBasicMaterial;
+  seen: boolean;
+}
+
+interface ContractWallView {
+  id: number;
+  group: THREE.Group;
+  beam: THREE.Mesh;
+  beamMat: THREE.MeshBasicMaterial;
+  postBack: THREE.Mesh;
+  postFront: THREE.Mesh;
+  sign: THREE.Mesh;
+  seen: boolean;
+}
+
+interface DoomOrbView {
+  id: number;
+  group: THREE.Group;
+  coreMat: THREE.MeshStandardMaterial;
+  cage: THREE.Mesh;
+  cageMat: THREE.MeshBasicMaterial;
+  haloMat: THREE.MeshBasicMaterial;
+  ctx: CanvasRenderingContext2D;
+  tex: THREE.CanvasTexture;
+  key: string;
   seen: boolean;
 }
 
@@ -341,6 +395,23 @@ export class Renderer {
   private barrelPool: BarrelView[] = [];
   private lensViews = new Map<number, LensView>();
   private lensPool: LensView[] = [];
+  private singularityViews = new Map<number, SingularityView>();
+  private singularityPool: SingularityView[] = [];
+  private jumpPadViews = new Map<number, JumpPadView>();
+  private jumpPadPool: JumpPadView[] = [];
+  private reflectorViews = new Map<number, ReflectorView>();
+  private reflectorPool: ReflectorView[] = [];
+  private contractViews = new Map<number, ContractWallView>();
+  private contractPool: ContractWallView[] = [];
+  private doomOrbViews = new Map<number, DoomOrbView>();
+  private doomOrbPool: DoomOrbView[] = [];
+  private bossShoulderPods: [THREE.Group, THREE.Group] | null = null;
+  private mirrorTroopers!: THREE.InstancedMesh;
+  private mirrorGlow!: THREE.Mesh;
+  private mirrorRing!: THREE.Mesh;
+  private jumpTex!: THREE.CanvasTexture;
+  private reflectorTex!: THREE.CanvasTexture;
+  private bountyTex!: THREE.CanvasTexture;
   private hazardViews: HazardView[] = [];
 
   // shared props
@@ -384,6 +455,21 @@ export class Renderer {
     paintLensPlate(lensC.ctx, 384, 112);
     lensC.tex.needsUpdate = true;
     this.lensTex = lensC.tex;
+
+    const jumpC = makeCanvasTexture(384, 108);
+    paintSetPiecePlate(jumpC.ctx, 384, 108, 'jump');
+    jumpC.tex.needsUpdate = true;
+    this.jumpTex = jumpC.tex;
+
+    const refC = makeCanvasTexture(384, 108);
+    paintSetPiecePlate(refC.ctx, 384, 108, 'reflector');
+    refC.tex.needsUpdate = true;
+    this.reflectorTex = refC.tex;
+
+    const btyC = makeCanvasTexture(384, 108);
+    paintSetPiecePlate(btyC.ctx, 384, 108, 'bounty');
+    btyC.tex.needsUpdate = true;
+    this.bountyTex = btyC.tex;
 
     this.buildLights();
     this.buildEnvironment();
@@ -947,10 +1033,48 @@ export class Renderer {
     this.shadows.renderOrder = 1;
     this.scene.add(this.shadows);
 
-    this.blades = new THREE.InstancedMesh(buildBladeGeo(), this.propMat, 4);
+    this.blades = new THREE.InstancedMesh(buildBladeGeo(), this.propMat, 8);
     this.blades.count = 0;
     this.blades.frustumCulled = false;
     this.scene.add(this.blades);
+
+    // Holographic Mirror-Twin Platoon (zero extra skinning cost, crisp neon prism troopers!)
+    const holoGeo = new GeoBuilder()
+      .add(cyl(0.18, 0.25, 0.56, 6), 0x62f4ff, 1.4, { p: [0, 0.42, 0] })
+      .add(sph(0.21, 8, 6), 0xd8faff, 1.8, { p: [0, 0.86, 0] })
+      .add(box(0.12, 0.12, 0.52), 0xc29bff, 1.8, { p: [0.18, 0.54, -0.24] })
+      .build();
+    this.mirrorTroopers = new THREE.InstancedMesh(holoGeo, additive(0x78f0ff, 0.58), MAX_RENDER_SQUAD);
+    this.mirrorTroopers.count = 0;
+    this.mirrorTroopers.frustumCulled = false;
+    this.mirrorGlow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), additive(0xc29bff, 0.28, this.glowTex));
+    this.mirrorGlow.position.y = 0.03;
+    this.mirrorGlow.visible = false;
+    this.mirrorRing = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), additive(0x62f4ff, 0.48, this.hexTex));
+    this.mirrorRing.position.y = 0.038;
+    this.mirrorRing.visible = false;
+    this.scene.add(this.mirrorTroopers, this.mirrorGlow, this.mirrorRing);
+
+    // Sculpted Boss Destructible Shoulder Pods (Left Heavy Cannon & Right Spawner Hive)
+    const leftPodGeo = new GeoBuilder()
+      .add(box(1.05, 0.92, 1.25), 0x3b1830, 0.35)
+      .add(cyl(0.18, 0.2, 1.35, 8), 0xff4b5c, 1.6, { p: [-0.24, -0.05, 0.72], r: [Math.PI / 2, 0, 0] })
+      .add(cyl(0.18, 0.2, 1.35, 8), 0xff4b5c, 1.6, { p: [0.24, -0.05, 0.72], r: [Math.PI / 2, 0, 0] })
+      .add(oct(0.36), 0xffcf40, 2.0, { p: [0, 0.48, 0] })
+      .build();
+    const rightPodGeo = new GeoBuilder()
+      .add(cyl(0.68, 0.52, 1.15, 6), 0x2c1544, 0.35)
+      .add(oct(0.46), 0xc29bff, 1.9, { p: [0, 0.52, 0.15] })
+      .add(tor(0.64, 0.07, 5, 16), 0x3ef3ff, 2.0, { r: [Math.PI / 2, 0, 0] })
+      .build();
+    const podL = new THREE.Group();
+    podL.add(new THREE.Mesh(leftPodGeo, this.propMat));
+    podL.visible = false;
+    const podR = new THREE.Group();
+    podR.add(new THREE.Mesh(rightPodGeo, this.propMat));
+    podR.visible = false;
+    this.scene.add(podL, podR);
+    this.bossShoulderPods = [podL, podR];
 
     this.flashMat = additive(0xffffff, 0.95, this.glowTex);
     this.flashes = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), this.flashMat, MAX_RENDER_SQUAD);
@@ -1223,6 +1347,23 @@ export class Renderer {
     this.barrelViews.clear();
     for (const v of this.lensViews.values()) this.releaseLens(v);
     this.lensViews.clear();
+    for (const v of this.singularityViews.values()) { v.group.visible = false; this.singularityPool.push(v); }
+    this.singularityViews.clear();
+    for (const v of this.jumpPadViews.values()) { v.group.visible = false; this.jumpPadPool.push(v); }
+    this.jumpPadViews.clear();
+    for (const v of this.reflectorViews.values()) { v.group.visible = false; this.reflectorPool.push(v); }
+    this.reflectorViews.clear();
+    for (const v of this.contractViews.values()) { v.group.visible = false; this.contractPool.push(v); }
+    this.contractViews.clear();
+    for (const v of this.doomOrbViews.values()) { v.group.visible = false; v.key = ''; this.doomOrbPool.push(v); }
+    this.doomOrbViews.clear();
+    if (this.bossShoulderPods) {
+      this.bossShoulderPods[0].visible = false;
+      this.bossShoulderPods[1].visible = false;
+    }
+    this.mirrorTroopers.count = 0;
+    this.mirrorGlow.visible = false;
+    this.mirrorRing.visible = false;
   }
 
   beginBoss(): void {
@@ -1290,6 +1431,7 @@ export class Renderer {
     this.updateVaults(snap, t);
     this.updateBarrels(snap, t);
     this.updateLenses(snap, t);
+    this.updateCompetitionProps(snap, t);
     this.updateBoss(snap, dt, t);
     this.shadows.count = this.shadowCount;
     this.shadows.instanceMatrix.needsUpdate = true;
@@ -1532,10 +1674,11 @@ export class Renderer {
 
       actor.update(dt);
 
+      const airY = snap.squadAirY ?? 0;
       const fl = this.muzzleFlash * (0.55 + 0.45 * Math.sin(i * 7.3 + t * 37));
       const recoilZ = fl * 0.06;
       const sc = slot.s * (overdrive ? 1.08 : 1);
-      actor.root.position.set(slot.x, 0, slot.z + recoilZ);
+      actor.root.position.set(slot.x, airY, slot.z + recoilZ);
       const yaw = THREE.MathUtils.clamp(-slot.vx * 0.028, -0.35, 0.35);
       const bank = THREE.MathUtils.clamp(-slot.vx * 0.014, -0.1, 0.1);
       actor.root.rotation.set(0, yaw, bank);
@@ -1555,12 +1698,16 @@ export class Renderer {
         actor.setVisuals(spawnFlash, 1, 1, 1);
       }
 
-      const shadowR = isMech ? 0.68 : slot.tier === 2 ? 0.44 : 0.36;
+      const shadowScale = Math.max(0.42, 1 - airY * 0.14);
+      const shadowR = (isMech ? 0.68 : slot.tier === 2 ? 0.44 : 0.36) * shadowScale;
       this.pushShadow(slot.x, slot.z, shadowR * slot.s);
+      if (airY > 0.35 && Math.random() < dt * 14) {
+        this.effects.burst(slot.x, airY + 0.12, slot.z + 0.2, 0x3ef3ff, 1, { speed: 2.0, size: 0.2, life: 0.18, up: -0.6, gravity: 4 });
+      }
 
       if (fl > 0.08 && !isVictory && !isIdleReady && flashes < MAX_RENDER_SQUAD) {
         const mx = slot.x + (isMech ? 0 : 0.16);
-        const my = isMech ? 1.45 : slot.tier === 2 ? 0.92 : 0.76;
+        const my = (isMech ? 1.45 : slot.tier === 2 ? 0.92 : 0.76) + airY;
         const mz = slot.z - (isMech ? 0.95 : 0.72);
         d.position.set(mx, my, mz);
         d.quaternion.copy(camQuat);
@@ -1596,10 +1743,11 @@ export class Renderer {
     this.squadRingMat.color.setHex(overdrive ? 0xffe46b : aegisActive ? 0x62f4ff : wc);
     this.squadRingMat.opacity = 0.38 + (overdrive ? 0.28 : 0);
 
+    const squadAir = snap.squadAirY ?? 0;
     if (aegisActive && snap.squadCount > 0) {
       this.aegisGroup.visible = true;
       const domeR = snap.formationRadius + 1.35;
-      this.aegisGroup.position.set(snap.squadX, 0.15, PLAYER_Z);
+      this.aegisGroup.position.set(snap.squadX, 0.15 + squadAir, PLAYER_Z);
       this.aegisGroup.scale.set(domeR, Math.max(1.85, domeR * 0.92), domeR);
       this.aegisWire.rotation.y = t * 1.8;
       this.aegisWire.rotation.z = Math.sin(t * 2.5) * 0.2;
@@ -1610,21 +1758,71 @@ export class Renderer {
       this.aegisGroup.visible = false;
     }
 
-    const nb = snap.bladesCount;
-    this.blades.count = nb;
-    for (let i = 0; i < nb; i++) {
-      const a = snap.bladesAngle + (i / nb) * Math.PI * 2;
-      d.position.set(
-        snap.squadX + Math.cos(a) * BLADES_ORBIT_RADIUS,
-        0.65,
-        PLAYER_Z + Math.sin(a) * BLADES_ORBIT_RADIUS * 0.85,
-      );
-      d.rotation.set(0.25, -a * 3 + t * 14, 0);
-      d.scale.set(1.55, 1.55, 1.55);
-      d.updateMatrix();
-      this.blades.setMatrixAt(i, d.matrix);
+    // Mirror-Twin Holographic Platoon rendering
+    if (snap.mirrorTwinActive && snap.squadCount > 0 && Math.abs(snap.squadX) > 0.32) {
+      const twinX = -snap.squadX;
+      this.mirrorGlow.visible = true;
+      this.mirrorGlow.position.set(twinX, 0.03, PLAYER_Z - 0.05);
+      this.mirrorGlow.scale.set(gs * 0.88, gs * 0.88, 1);
+      this.mirrorRing.visible = true;
+      this.mirrorRing.position.set(twinX, 0.038, PLAYER_Z);
+      this.mirrorRing.scale.set(ringScale * 0.88, ringScale * 0.88, 1);
+      this.mirrorRing.rotation.z = -t * 1.1;
+      const mCount = Math.min(18, targets.length);
+      this.mirrorTroopers.count = mCount;
+      for (let i = 0; i < mCount; i++) {
+        const tg = targets[i]!;
+        const mx = THREE.MathUtils.clamp(-tg.x, -TRACK_HALF_WIDTH + 0.55, TRACK_HALF_WIDTH - 0.55);
+        const bob = Math.abs(Math.sin(t * 11 + i * 0.9)) * 0.09;
+        d.position.set(mx, squadAir + bob, tg.z);
+        d.rotation.set(0, Math.PI, Math.sin(t * 6 + i) * 0.06);
+        const ms = tg.tier === 3 ? 1.45 : tg.tier === 2 ? 1.12 : 0.96;
+        d.scale.setScalar(ms);
+        d.updateMatrix();
+        this.mirrorTroopers.setMatrixAt(i, d.matrix);
+      }
+      this.mirrorTroopers.instanceMatrix.needsUpdate = true;
+    } else {
+      this.mirrorTroopers.count = 0;
+      this.mirrorGlow.visible = false;
+      this.mirrorRing.visible = false;
     }
-    this.blades.instanceMatrix.needsUpdate = true;
+
+    // Seeker Sword-Array autonomous hunting drones OR standard Orbital Blades
+    const seekers = snap.seekerPositions ?? [];
+    if (seekers.length > 0) {
+      const scnt = Math.min(8, seekers.length);
+      this.blades.count = scnt;
+      for (let i = 0; i < scnt; i++) {
+        const sp = seekers[i]!;
+        d.position.set(sp.x, 0.88 + (sp.hunting ? 0.18 * Math.sin(t * 12 + i) : squadAir), sp.z);
+        d.rotation.set(0.32, t * 24 + i * 1.5, 0.15 * Math.sin(t * 10 + i));
+        const bScale = sp.hunting ? 1.92 : 1.62;
+        d.scale.set(bScale, bScale, bScale);
+        d.updateMatrix();
+        this.blades.setMatrixAt(i, d.matrix);
+        if (sp.hunting && Math.random() < dt * 22) {
+          this.effects.burst(sp.x, 0.88, sp.z + 0.25, 0x3ef3ff, 1, { speed: 2.2, size: 0.22, life: 0.18, gravity: 0 });
+        }
+      }
+      this.blades.instanceMatrix.needsUpdate = true;
+    } else {
+      const nb = Math.min(8, snap.bladesCount);
+      this.blades.count = nb;
+      for (let i = 0; i < nb; i++) {
+        const a = snap.bladesAngle + (i / nb) * Math.PI * 2;
+        d.position.set(
+          snap.squadX + Math.cos(a) * BLADES_ORBIT_RADIUS,
+          0.65 + squadAir,
+          PLAYER_Z + Math.sin(a) * BLADES_ORBIT_RADIUS * 0.85,
+        );
+        d.rotation.set(0.25, -a * 3 + t * 14, 0);
+        d.scale.set(1.55, 1.55, 1.55);
+        d.updateMatrix();
+        this.blades.setMatrixAt(i, d.matrix);
+      }
+      this.blades.instanceMatrix.needsUpdate = true;
+    }
   }
 
   private updateEnemies(snap: SimSnapshot, dt: number, t: number): void {
@@ -1744,11 +1942,18 @@ export class Renderer {
         entry.actor.root.scale.set(squashXZ, squashY, squashXZ);
 
         const hitFlash = hit > 0.55 ? 0.52 + 0.34 * Math.sin(t * 52 + e.id) : hit * 0.55;
-        entry.actor.setVisuals(hitFlash, 1, 1, 1, slowed ? 0.78 : 0);
+        if (e.isBountyElite) {
+          entry.actor.setVisuals(hitFlash + 0.16 + 0.08 * Math.sin(t * 9), 1.36, 1.15, 0.52, slowed ? 0.5 : 0);
+          if (Math.random() < dt * 12) {
+            this.effects.burst(e.x, 1.4, e.z, 0xffd84a, 1, { speed: 2.5, size: 0.24, life: 0.25, up: 1.0 });
+          }
+        } else {
+          entry.actor.setVisuals(hitFlash, 1, 1, 1, slowed ? 0.78 : 0);
+        }
 
         this.pushShadow(e.x, e.z, e.radius * (e.kind === 'siphon' ? 0.75 : 1.08));
 
-        if (e.maxHp >= 40 && e.hp < e.maxHp && bars < 128) {
+        if (((e.maxHp >= 40 && e.hp < e.maxHp) || e.isBountyElite) && bars < 128) {
           const w = Math.max(0.95, e.radius * 2);
           const y = ENEMY_BAR_H[e.kind] * sc + 0.15;
           d.position.set(e.x, y, e.z);
@@ -2339,6 +2544,312 @@ export class Renderer {
     v.paneMat.opacity = 0.2 + s.pulse * 0.45 + Math.sin(t * 5) * 0.05;
   }
 
+  // ---------------------------------------------------------------- V5 competition set-pieces & superweapons
+  private acquireSingularity(): SingularityView {
+    const pooled = this.singularityPool.pop();
+    if (pooled) {
+      pooled.group.visible = true;
+      return pooled;
+    }
+    const group = new THREE.Group();
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.68, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0x070114 }),
+    );
+    core.position.y = 0.55;
+    const cage = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.84, 1),
+      new THREE.MeshBasicMaterial({
+        color: 0xb98cff,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.78,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    cage.position.y = 0.55;
+    const ringOuter = new THREE.Mesh(
+      new THREE.RingGeometry(0.45, 1.0, 48).rotateX(-Math.PI / 2),
+      additive(0xb98cff, 0.52),
+    );
+    ringOuter.position.y = 0.08;
+    const ringInner = new THREE.Mesh(
+      new THREE.RingGeometry(0.22, 0.68, 40).rotateX(-Math.PI / 2),
+      additive(0x3ef3ff, 0.62),
+    );
+    ringInner.position.y = 0.12;
+    group.add(ringOuter, ringInner, core, cage);
+    this.scene.add(group);
+    return { id: -1, group, ringOuter, ringInner, cage, seen: false };
+  }
+
+  private acquireJumpPad(): JumpPadView {
+    const pooled = this.jumpPadPool.pop();
+    if (pooled) {
+      pooled.group.visible = true;
+      return pooled;
+    }
+    const group = new THREE.Group();
+    const baseGeo = new GeoBuilder()
+      .add(box(3.3, 0.24, 2.3), 0x163258, 0.25, { p: [0, 0.12, 0], r: [0.16, 0, 0] })
+      .add(box(3.0, 0.08, 0.36), 0x3ef3ff, 1.9, { p: [0, 0.28, 0.55], r: [0.16, 0, 0] })
+      .add(box(2.5, 0.08, 0.36), 0xffd84a, 2.0, { p: [0, 0.38, -0.05], r: [0.16, 0, 0] })
+      .add(box(2.0, 0.08, 0.36), 0x19f5a8, 2.0, { p: [0, 0.48, -0.65], r: [0.16, 0, 0] })
+      .build();
+    const mesh = new THREE.Mesh(baseGeo, this.propMat);
+    const stripMat = additive(0x3ef3ff, 0.48, this.glowTex);
+    const glow = new THREE.Mesh(new THREE.PlaneGeometry(4.2, 3.4).rotateX(-Math.PI / 2), stripMat);
+    glow.position.y = 0.05;
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.9, 0.82),
+      new THREE.MeshBasicMaterial({ color: 0xf4f8ff, map: this.jumpTex, transparent: true, depthWrite: false }),
+    );
+    sign.position.set(0, 2.05, 0);
+    sign.rotation.x = -0.3;
+    sign.renderOrder = 4;
+    group.add(glow, mesh, sign);
+    this.scene.add(group);
+    return { id: -1, group, stripMat, seen: false };
+  }
+
+  private acquireReflector(): ReflectorView {
+    const pooled = this.reflectorPool.pop();
+    if (pooled) {
+      pooled.group.visible = true;
+      return pooled;
+    }
+    const group = new THREE.Group();
+    const mirrorPivot = new THREE.Group();
+    mirrorPivot.name = 'pivot';
+    const frameMat = std(0x7dff6b, 0.8, { metalness: 0.75 });
+    const postGeo = new THREE.BoxGeometry(0.22, 2.35, 0.22).translate(0, 1.18, 0);
+    const l = new THREE.Mesh(postGeo, frameMat);
+    const r = new THREE.Mesh(postGeo, frameMat);
+    l.position.x = -1.75;
+    r.position.x = 1.75;
+    const paneMat = additive(0x7dff6b, 0.38);
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(3.5, 2.15).translate(0, 1.15, 0), paneMat);
+    mirrorPivot.add(l, r, pane);
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.8, 0.8),
+      new THREE.MeshBasicMaterial({ color: 0xf4f8ff, map: this.reflectorTex, transparent: true, depthWrite: false }),
+    );
+    sign.position.set(0, 2.85, 0);
+    sign.rotation.x = -0.3;
+    sign.renderOrder = 4;
+    group.add(mirrorPivot, sign);
+    this.scene.add(group);
+    return { id: -1, group, paneMat, seen: false };
+  }
+
+  private acquireContractWall(): ContractWallView {
+    const pooled = this.contractPool.pop();
+    if (pooled) {
+      pooled.group.visible = true;
+      return pooled;
+    }
+    const group = new THREE.Group();
+    const pylonGeo = new GeoBuilder()
+      .add(cyl(0.26, 0.34, 2.1, 8), 0x26142e, 0.3, { p: [0, 1.05, 0] })
+      .add(sph(0.26, 8, 6), 0xffc531, 2.1, { p: [0, 2.2, 0] })
+      .build();
+    const postBack = new THREE.Mesh(pylonGeo, this.propMat);
+    const postFront = new THREE.Mesh(pylonGeo, this.propMat);
+    const beamMat = additive(0xff476e, 0.42);
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.65, 1), beamMat);
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.1, 0.88),
+      new THREE.MeshBasicMaterial({ color: 0xf4f8ff, map: this.bountyTex, transparent: true, depthWrite: false }),
+    );
+    sign.rotation.x = -0.3;
+    sign.renderOrder = 4;
+    group.add(postBack, postFront, beam, sign);
+    this.scene.add(group);
+    return { id: -1, group, beam, beamMat, postBack, postFront, sign, seen: false };
+  }
+
+  private acquireDoomOrb(): DoomOrbView {
+    const pooled = this.doomOrbPool.pop();
+    if (pooled) {
+      pooled.group.visible = true;
+      return pooled;
+    }
+    const group = new THREE.Group();
+    const coreMat = std(0xff2a55, 0.85, { roughness: 0.2, metalness: 0.3 });
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.82, 2), coreMat);
+    core.position.y = 1.18;
+    const cageMat = new THREE.MeshBasicMaterial({
+      color: 0xffcf40,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.75,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const cage = new THREE.Mesh(new THREE.IcosahedronGeometry(1.06, 1), cageMat);
+    cage.position.y = 1.18;
+    const haloMat = additive(0xff2a55, 0.65, this.glowTex);
+    const halo = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2).rotateX(-Math.PI / 2), haloMat);
+    halo.position.y = 0.05;
+    const { ctx, tex } = makeCanvasTexture(384, 176);
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.75, 1.26),
+      new THREE.MeshBasicMaterial({ color: 0xf4f8ff, map: tex, transparent: true, depthWrite: false }),
+    );
+    plate.position.set(0, 2.75, 0);
+    plate.rotation.x = -0.28;
+    plate.renderOrder = 5;
+    group.add(halo, core, cage, plate);
+    this.scene.add(group);
+    return { id: -1, group, coreMat, cage, cageMat, haloMat, ctx, tex, key: '', seen: false };
+  }
+
+  private updateCompetitionProps(snap: SimSnapshot, t: number): void {
+    // 1. 3D Cryo-Nova Singularity Vortices
+    for (const v of this.singularityViews.values()) v.seen = false;
+    for (const s of snap.singularities ?? []) {
+      let v = this.singularityViews.get(s.id);
+      if (!v) {
+        v = this.acquireSingularity();
+        v.id = s.id;
+        this.singularityViews.set(s.id, v);
+      }
+      v.seen = true;
+      v.group.position.set(s.x, 0, s.z);
+      const pulse = 0.92 + 0.1 * Math.sin(t * 14 + s.id);
+      v.ringOuter.scale.set(s.radius * pulse, s.radius * pulse, 1);
+      v.ringOuter.rotation.z = t * 3.5;
+      v.ringInner.scale.set(s.radius * 0.78, s.radius * 0.78, 1);
+      v.ringInner.rotation.z = -t * 5.8;
+      v.cage.rotation.set(t * 2.8, t * 4.1, 0);
+      if (Math.random() < 0.35) {
+        const ang = Math.random() * Math.PI * 2;
+        const rx = s.x + Math.cos(ang) * s.radius * 0.75;
+        const rz = s.z + Math.sin(ang) * s.radius * 0.75;
+        this.effects.burst(rx, 0.35, rz, 0xb98cff, 1, { speed: 2.6, size: 0.26, life: 0.24, up: 0.6 });
+      }
+    }
+    for (const [id, v] of this.singularityViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.singularityPool.push(v);
+        this.singularityViews.delete(id);
+      }
+    }
+
+    // 2. Mag-Lev Jump Pads
+    for (const v of this.jumpPadViews.values()) v.seen = false;
+    for (const jp of snap.jumpPads ?? []) {
+      if (jp.triggered) continue;
+      let v = this.jumpPadViews.get(jp.id);
+      if (!v) {
+        v = this.acquireJumpPad();
+        v.id = jp.id;
+        this.jumpPadViews.set(jp.id, v);
+      }
+      v.seen = true;
+      v.group.position.set(jp.x, 0, jp.z);
+      v.stripMat.opacity = 0.38 + 0.18 * Math.sin(t * 9 + jp.id);
+    }
+    for (const [id, v] of this.jumpPadViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.jumpPadPool.push(v);
+        this.jumpPadViews.delete(id);
+      }
+    }
+
+    // 3. 45° Angled Reflector Mirrors
+    for (const v of this.reflectorViews.values()) v.seen = false;
+    for (const rf of snap.reflectors ?? []) {
+      let v = this.reflectorViews.get(rf.id);
+      if (!v) {
+        v = this.acquireReflector();
+        v.id = rf.id;
+        this.reflectorViews.set(rf.id, v);
+      }
+      v.seen = true;
+      v.group.position.set(rf.x, 0, rf.z);
+      const pivot = v.group.getObjectByName('pivot')!;
+      pivot.rotation.y = rf.lean * 0.64;
+      v.paneMat.opacity = 0.28 + rf.pulse * 0.48 + 0.06 * Math.sin(t * 7);
+    }
+    for (const [id, v] of this.reflectorViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.reflectorPool.push(v);
+        this.reflectorViews.delete(id);
+      }
+    }
+
+    // 4. Dual-Lane Deathmatch Contract Laser Barriers
+    for (const v of this.contractViews.values()) v.seen = false;
+    for (const cw of snap.contractWalls ?? []) {
+      let v = this.contractViews.get(cw.id);
+      if (!v) {
+        v = this.acquireContractWall();
+        v.id = cw.id;
+        this.contractViews.set(cw.id, v);
+      }
+      v.seen = true;
+      const len = Math.max(1, cw.zFront - cw.zBack);
+      const midZ = (cw.zFront + cw.zBack) * 0.5;
+      v.group.position.set(0, 0, 0);
+      v.postFront.position.set(0, 0, cw.zFront);
+      v.postBack.position.set(0, 0, cw.zBack);
+      v.beam.position.set(0, 0.95, midZ);
+      v.beam.scale.set(1, 1, len);
+      v.beamMat.opacity = 0.34 + 0.12 * Math.sin(t * 14);
+      v.sign.position.set(cw.bountySide === 'left' ? -2.35 : 2.35, 2.75, Math.min(cw.zFront - 1.5, PLAYER_Z - 6));
+    }
+    for (const [id, v] of this.contractViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.contractPool.push(v);
+        this.contractViews.delete(id);
+      }
+    }
+
+    // 5. Boss Deflectable Numbered Doom-Orbs
+    for (const v of this.doomOrbViews.values()) v.seen = false;
+    for (const orb of snap.doomOrbs ?? []) {
+      let v = this.doomOrbViews.get(orb.id);
+      if (!v) {
+        v = this.acquireDoomOrb();
+        v.id = orb.id;
+        this.doomOrbViews.set(orb.id, v);
+      }
+      v.seen = true;
+      v.group.position.set(orb.x, 0, orb.z);
+      const key = `${orb.value}|${Math.round(orb.chargeRatio * 12)}|${orb.reflected ? 1 : 0}`;
+      if (key !== v.key) {
+        v.key = key;
+        paintDoomOrbPlate(v.ctx, 384, 176, orb.value, orb.chargeRatio, orb.reflected);
+        v.tex.needsUpdate = true;
+      }
+      const hex = orb.reflected ? 0x19f5a8 : 0xff2a55;
+      v.coreMat.color.setHex(hex);
+      v.coreMat.emissive.setHex(hex);
+      v.coreMat.emissiveIntensity = 0.75 + orb.hitPulse * 0.9;
+      v.cageMat.color.setHex(orb.reflected ? 0xffd84a : 0xff85a2);
+      v.haloMat.color.setHex(hex);
+      v.cage.rotation.set(t * 3.2, -t * 4.5, 0);
+      const sc = 1 + orb.hitPulse * 0.16 + 0.06 * Math.sin(t * 12);
+      v.cage.scale.setScalar(sc);
+    }
+    for (const [id, v] of this.doomOrbViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        v.key = '';
+        this.doomOrbPool.push(v);
+        this.doomOrbViews.delete(id);
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- boss
   private updateBoss(snap: SimSnapshot, dt: number, t: number): void {
     const b = snap.boss;
@@ -2352,6 +2863,10 @@ export class Renderer {
     }
     for (const h of this.hazardViews) h.group.visible = false;
     if (!b) {
+      if (this.bossShoulderPods) {
+        this.bossShoulderPods[0].visible = false;
+        this.bossShoulderPods[1].visible = false;
+      }
       this.bossBlend = Math.max(0, this.bossBlend - dt);
       return;
     }
@@ -2414,11 +2929,31 @@ export class Renderer {
         }
       }
 
-      const heatTintR = 1 + (b.phase - 1) * 0.08;
+      const breakActive = (b.breakTimer ?? 0) > 0;
+      const heatTintR = breakActive ? 0.85 : 1 + (b.phase - 1) * 0.08;
       const bossHitFlash =
         b.hitPulse > 0.55 ? (0.45 + 0.55 * Math.sin(t * 42)) * 0.16 : b.hitPulse * 0.14;
-      const flashVal = bossHitFlash + (dying ? Math.random() * 0.35 : 0);
-      view.primary.setVisuals(flashVal, heatTintR, 1, 1);
+      const breakFlicker = breakActive ? 0.22 + 0.16 * Math.sin(t * 36) : 0;
+      const flashVal = bossHitFlash + breakFlicker + (dying ? Math.random() * 0.35 : 0);
+      view.primary.setVisuals(flashVal, heatTintR, breakActive ? 1.18 : 1, breakActive ? 1.32 : 1);
+
+      // Render Destructible Shoulder Weapon Pods (Left Cannon & Right Hive)
+      if (this.bossShoulderPods) {
+        const parts = b.parts ?? [];
+        for (let pi = 0; pi < 2; pi++) {
+          const pod = this.bossShoulderPods[pi]!;
+          const pt = parts[pi];
+          if (pt && !pt.destroyed && show && !dying) {
+            pod.visible = true;
+            pod.position.set(pt.x, rise + 2.15 * scale + Math.sin(t * 3.5 + pi * 2) * 0.12, pt.z);
+            pod.rotation.set(0, Math.sin(t * 2 + pi) * 0.15, (pi === 0 ? -0.12 : 0.12));
+            const pScale = scale * (1 + pt.hitPulse * 0.18);
+            pod.scale.setScalar(pScale);
+          } else {
+            pod.visible = false;
+          }
+        }
+      }
       view.primary.update(dt);
       this.pushShadow(b.x, b.z, 2.35 * scale);
 

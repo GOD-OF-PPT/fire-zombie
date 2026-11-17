@@ -8,14 +8,26 @@ import { intersectSweptSegmentAABB } from './ccd';
 import { damageEnemy } from './enemies';
 import type { SimProjectile, SimWorld } from './entities';
 import { applyProjectileHitToGate } from './gates';
+import {
+  bounceProjectileAtReflector,
+  damageBossPart,
+  hasFusion,
+  hitDoomOrbWithDamage,
+  recordDamage,
+  spawnOrRefreshSingularity,
+  triggerRicochetWeb,
+} from './competition';
 import { damageVault, refractProjectileAtLens } from './weapons';
 
 type CandidateTargetKind =
   | 'lens'
+  | 'reflector'
+  | 'doom_orb'
   | 'enemy'
   | 'gate'
   | 'vault'
   | 'barrel'
+  | 'boss_part'
   | 'boss_pylon'
   | 'boss_core'
   | 'boss_secondary';
@@ -46,6 +58,9 @@ function applyPlasmaSplash(
   if (splashR <= 0 || splashDamage <= 0) {
     return;
   }
+  if (proj.weapon === 'plasma' && hasFusion(world, 'cryo_singularity')) {
+    spawnOrRefreshSingularity(world, hitX, hitZ, events);
+  }
 
   const enemyCount = world.enemies.length;
   for (let i = 0; i < enemyCount; i++) {
@@ -61,7 +76,9 @@ function applyPlasmaSplash(
       continue;
     }
     if (Math.hypot(enemy.x - hitX, enemy.z - hitZ) <= splashR + enemy.radius) {
-      damageEnemy(world, enemy, splashDamage * getWeaponCounterMult(proj.weapon, enemy.kind), proj.cryoSlowDuration, events);
+      const sDmg = splashDamage * getWeaponCounterMult(proj.weapon, enemy.kind);
+      recordDamage(world, proj.weapon, Math.min(enemy.hp, sDmg));
+      damageEnemy(world, enemy, sDmg, proj.cryoSlowDuration, events);
     }
   }
 
@@ -150,6 +167,64 @@ function gatherCandidatesForProjectile(
           hitZ: hit.hitZ,
         });
       }
+    }
+  }
+
+  // 1b. 45° Angled Holographic Reflector Mirrors
+  for (let i = 0; i < world.reflectors.length; i++) {
+    const ref = world.reflectors[i];
+    if (!ref || !ref.active || proj.hitIds.has(ref.id)) continue;
+    const hit = intersectSweptSegmentAABB(
+      proj.prevX,
+      proj.prevZ,
+      proj.x,
+      proj.z,
+      proj.radius,
+      interpStart(ref.prevX, ref.x, startFrac),
+      interpStart(ref.prevZ, ref.z, startFrac),
+      ref.x,
+      ref.z,
+      ref.halfWidth,
+      ref.halfDepth,
+    );
+    if (hit !== null) {
+      candidates.push({
+        kind: 'reflector',
+        targetId: ref.id,
+        index: i,
+        tEnter: hit.tEnter,
+        hitX: hit.hitX,
+        hitZ: hit.hitZ,
+      });
+    }
+  }
+
+  // 1c. Polarity-Flip Deflectable Doom-Orbs
+  for (let i = 0; i < world.doomOrbs.length; i++) {
+    const orb = world.doomOrbs[i];
+    if (!orb || !orb.active || orb.reflected || proj.hitIds.has(orb.id)) continue;
+    const hit = intersectSweptSegmentAABB(
+      proj.prevX,
+      proj.prevZ,
+      proj.x,
+      proj.z,
+      proj.radius,
+      interpStart(orb.prevX, orb.x, startFrac),
+      interpStart(orb.prevZ, orb.z, startFrac),
+      orb.x,
+      orb.z,
+      orb.radius,
+      orb.radius,
+    );
+    if (hit !== null) {
+      candidates.push({
+        kind: 'doom_orb',
+        targetId: orb.id,
+        index: i,
+        tEnter: hit.tEnter,
+        hitX: hit.hitX,
+        hitZ: hit.hitZ,
+      });
     }
   }
 
@@ -297,9 +372,38 @@ function gatherCandidatesForProjectile(
     }
   }
 
-  // 6. Boss Shield Pylons & Core(s)
+  // 6. Boss Destructible Shoulder Parts, Shield Pylons & Core(s)
   const boss = world.boss;
   if (boss && boss.active && boss.hp > 0) {
+    if (boss.introProgress >= 1) {
+      for (let i = 0; i < boss.parts.length; i++) {
+        const pt = boss.parts[i];
+        if (!pt || pt.destroyed || pt.hp <= 0 || proj.hitIds.has(pt.id)) continue;
+        const hit = intersectSweptSegmentAABB(
+          proj.prevX,
+          proj.prevZ,
+          proj.x,
+          proj.z,
+          proj.radius,
+          interpStart(pt.prevX, pt.x, startFrac),
+          interpStart(pt.prevZ, pt.z, startFrac),
+          pt.x,
+          pt.z,
+          pt.halfWidth,
+          pt.halfDepth,
+        );
+        if (hit !== null) {
+          candidates.push({
+            kind: 'boss_part',
+            targetId: pt.id,
+            index: i,
+            tEnter: hit.tEnter,
+            hitX: hit.hitX,
+            hitZ: hit.hitZ,
+          });
+        }
+      }
+    }
     for (let i = 0; i < boss.pylons.length; i++) {
       const pylon = boss.pylons[i];
       if (!pylon || pylon.destroyed || pylon.hp <= 0 || proj.hitIds.has(pylon.id)) {
@@ -392,6 +496,7 @@ function gatherCandidatesForProjectile(
  * ordered strictly by earliest tEnter in [0, 1].
  */
 export function resolveFriendlyProjectileCollisions(world: SimWorld, events: SimEvent[]): void {
+  world.ricochetsThisTick = 0;
   const candidates: SweepCandidate[] = [];
 
   for (let pIdx = 0; pIdx < world.projectiles.length; pIdx++) {
@@ -423,16 +528,50 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
           break;
         }
 
+        if (cand.kind === 'reflector') {
+          const ref = world.reflectors[cand.index];
+          if (!ref || !ref.active) continue;
+          bounceProjectileAtReflector(proj, ref, cand.hitX, cand.hitZ, events);
+          refractedThisPass = true;
+          break;
+        }
+
         let solidHitApplied = false;
 
-        if (cand.kind === 'enemy') {
+        if (cand.kind === 'doom_orb') {
+          const orb = world.doomOrbs[cand.index];
+          if (orb && orb.active && !orb.reflected) {
+            proj.hitIds.add(cand.targetId);
+            hitDoomOrbWithDamage(world, orb, proj.damage, events);
+            solidHitApplied = true;
+          }
+        } else if (cand.kind === 'boss_part') {
+          const boss = world.boss;
+          const pt = boss?.parts[cand.index];
+          if (boss && boss.active && boss.hp > 0 && pt && !pt.destroyed && pt.hp > 0) {
+            proj.hitIds.add(cand.targetId);
+            const isCrit = rollDeterministicCrit(world);
+            const pDmg = proj.damage * (isCrit ? 1.75 : 1.0);
+            if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(pDmg)) });
+            recordDamage(world, proj.weapon, Math.min(pt.hp, pDmg));
+            damageBossPart(world, pt, pDmg, events);
+            solidHitApplied = true;
+          }
+        } else if (cand.kind === 'enemy') {
           const enemy = world.enemies[cand.index];
           if (enemy && enemy.active && !enemy.consumed && !enemy.bypassed && enemy.hp > 0) {
             proj.hitIds.add(cand.targetId);
             const isCrit = rollDeterministicCrit(world);
             const dmg = proj.damage * getWeaponCounterMult(proj.weapon, enemy.kind) * (isCrit ? 1.75 : 1.0);
             if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(dmg)) });
+            recordDamage(world, proj.weapon, Math.min(enemy.hp, dmg));
             damageEnemy(world, enemy, dmg, proj.cryoSlowDuration, events);
+            if (
+              (proj.weapon === 'scatter' || proj.weapon === 'rail') &&
+              hasFusion(world, 'prism_ricochet_web')
+            ) {
+              triggerRicochetWeb(world, enemy, dmg, events);
+            }
             solidHitApplied = true;
           }
         } else if (cand.kind === 'gate') {
@@ -465,6 +604,7 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
             const bossMult = (isCrit ? 1.75 : 1.0) * (hasSynergy(world.endless?.upgrades, 'hyper_annihilation') ? 1.2 : 1.0);
             if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(proj.damage * bossMult)) });
             const pDmg = proj.damage * bossMult;
+            recordDamage(world, proj.weapon, Math.min(pylon.hp, pDmg));
             events.push({ type: 'BOSS_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(pDmg)) });
             damageBossPylon(world, pylon, pDmg, events);
             solidHitApplied = true;
@@ -478,6 +618,7 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
             if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(proj.damage * bossMult)) });
             const cDmg = proj.damage * bossMult;
             if (!boss.shielded) {
+              recordDamage(world, proj.weapon, cDmg);
               events.push({ type: 'BOSS_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(cDmg)) });
             }
             damageBossCore(world, false, cDmg, events);
@@ -492,6 +633,7 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
             if (isCrit) events.push({ type: 'CRIT_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(proj.damage * bossMult)) });
             const sDmg = proj.damage * bossMult;
             if (!boss.secondaryCore.shielded) {
+              recordDamage(world, proj.weapon, sDmg * 1.5);
               events.push({ type: 'BOSS_HIT', x: cand.hitX, z: cand.hitZ, damage: Math.max(1, Math.round(sDmg * 1.5)) });
             }
             damageBossCore(world, true, sDmg, events);

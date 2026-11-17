@@ -14,6 +14,9 @@ export type DefeatReason =
 export type NonNullDefeatReason = Exclude<DefeatReason, null>;
 export type RewardId = WeaponId | 'blades';
 export type BossId = 'warden_01' | 'hydra_02' | 'omega_zero';
+export type FusionId = 'cryo_singularity' | 'prism_ricochet_web' | 'seeker_sword_array';
+export type MutatorId = 'mirror_twin' | 'glass_cannon' | 'barrel_carnival';
+export type DamageSourceKey = WeaponId | 'fusions' | 'deflect' | 'explosives';
 
 export interface InputSample {
   /** Relative horizontal delta in world units since previous step (from touch/mouse drag) */
@@ -78,6 +81,7 @@ export interface EnemySnapshot {
   telegraphTimer: number; // >0 while Vector Dasher locks red floor laser before dashing
   linkedGateId: number | null; // For Corruptor Siphon tether beam
   hitPulse: number;
+  isBountyElite?: boolean;
 }
 
 export interface BarrelSnapshot {
@@ -131,6 +135,59 @@ export interface BossPylonSnapshot {
   destroyed: boolean;
 }
 
+export interface BossPartSnapshot {
+  id: number;
+  slot: 'left' | 'right';
+  label: string;
+  x: number;
+  z: number;
+  hp: number;
+  maxHp: number;
+  hitPulse: number;
+  destroyed: boolean;
+}
+
+export interface DoomOrbSnapshot {
+  id: number;
+  x: number;
+  z: number;
+  radius: number;
+  value: number;
+  chargeRatio: number;
+  reflected: boolean;
+  hitPulse: number;
+}
+
+export interface SingularitySnapshot {
+  id: number;
+  x: number;
+  z: number;
+  radius: number;
+  timer: number;
+}
+
+export interface JumpPadSnapshot {
+  id: number;
+  x: number;
+  z: number;
+  triggered: boolean;
+}
+
+export interface ReflectorSnapshot {
+  id: number;
+  x: number;
+  z: number;
+  lean: 1 | -1;
+  pulse: number;
+}
+
+export interface ContractWallSnapshot {
+  id: number;
+  zFront: number;
+  zBack: number;
+  bountySide: 'left' | 'right';
+}
+
 export interface BossSnapshot {
   active: boolean;
   id: 'warden_01' | 'hydra_02' | 'omega_zero';
@@ -144,6 +201,8 @@ export interface BossSnapshot {
   secondaryCore?: { x: number; z: number; shielded: boolean } | null; // For Hydra-02 split
   shielded: boolean;
   pylons: readonly BossPylonSnapshot[];
+  parts?: readonly BossPartSnapshot[];
+  breakTimer?: number;
   hazardZones: readonly BossHazardZone[];
   hitPulse: number;
   introProgress: number; // [0, 1] Boss arrival transition
@@ -154,8 +213,18 @@ export type SimEvent =
   | { type: 'SHOOT'; weapon: WeaponId; amplified: boolean; auxiliary?: boolean }
   | { type: 'ENEMY_HIT'; x: number; z: number; fatal: boolean; kind: EnemyKind; damage?: number }
   | { type: 'BOSS_HIT'; x: number; z: number; damage: number }
-  | { type: 'CHAIN_ARC'; fromX: number; fromZ: number; toX: number; toZ: number; damage: number }
+  | { type: 'CHAIN_ARC'; fromX: number; fromZ: number; toX: number; toZ: number; damage: number; webColor?: number }
   | { type: 'GATE_STREAK'; x: number; z: number; streak: number; bonus: number }
+  | { type: 'FUSION_UNLOCK'; fusionId: FusionId }
+  | { type: 'SINGULARITY_SPAWN'; x: number; z: number; radius: number }
+  | { type: 'JUMP_LAUNCH'; x: number; z: number }
+  | { type: 'JUMP_SLAM'; x: number; z: number; hits: number }
+  | { type: 'REFLECTOR_BOUNCE'; x: number; z: number }
+  | { type: 'BOUNTY_JACKPOT'; x: number; z: number; squadGain: number; weapon: WeaponId; newLevel: number }
+  | { type: 'BOSS_PART_BREAK'; slot: 'left' | 'right'; label: string; x: number; z: number }
+  | { type: 'DOOM_ORB_SPAWN'; x: number; z: number; value: number }
+  | { type: 'DOOM_ORB_REFLECT'; x: number; z: number }
+  | { type: 'DOOM_ORB_SLAM'; x: number; z: number; damage: number }
   | { type: 'CRIT_HIT'; x: number; z: number; damage: number }
   | { type: 'GATE_HIT'; gateId: number; x: number; z: number; newValue: number; flippedPositive: boolean }
   | { type: 'GATE_PASS'; gateId: number; x: number; z: number; delta: number; polarity: GatePolarity }
@@ -225,6 +294,18 @@ export interface SimSnapshot {
     maxChain: number;
     peakSquad: number;
   };
+  squadAirY: number;
+  mirrorTwinActive: boolean;
+  blitzActive: boolean;
+  activeFusions: readonly FusionId[];
+  mutators: readonly MutatorId[];
+  seekerPositions: ReadonlyArray<{ x: number; z: number; hunting: boolean }>;
+  damageBySource: Readonly<Record<DamageSourceKey, number>>;
+  singularities: readonly SingularitySnapshot[];
+  jumpPads: readonly JumpPadSnapshot[];
+  reflectors: readonly ReflectorSnapshot[];
+  contractWalls: readonly ContractWallSnapshot[];
+  doomOrbs: readonly DoomOrbSnapshot[];
   gates: readonly GateSnapshot[];
   vaults: readonly VaultSnapshot[];
   enemies: readonly EnemySnapshot[];
@@ -268,6 +349,10 @@ export interface RunModifiers {
   autoAegisCharges?: number;
   /** Critical strike probability in [0, 0.75] (default 0). */
   critChance?: number;
+  /** 90-second Competition Showcase ("锦标赛闪击模式"). */
+  blitz?: boolean;
+  /** Active competition mutators (mirror_twin, glass_cannon, barrel_carnival). */
+  mutators?: readonly MutatorId[];
 }
 
 export interface SimulationController {

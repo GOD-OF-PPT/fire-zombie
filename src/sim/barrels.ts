@@ -17,6 +17,7 @@ import { allocEntityId, type SimBarrel, type SimWorld } from './entities';
 import { damageEnemy } from './enemies';
 import { applyFlatDeltaToGate, applyProjectileHitToGate } from './gates';
 import { clamp, normalizeZero } from './math';
+import { hasMutator, recordDamage } from './competition';
 import { addResonance } from './resonance';
 import { damageVault } from './weapons';
 
@@ -44,7 +45,7 @@ export function spawnBarrel(
   barrel.z = z;
   barrel.vz = vz;
   barrel.radius = BARREL_RADIUS;
-  barrel.blastRadius = BARREL_BLAST_RADIUS;
+  barrel.blastRadius = hasMutator(world, 'barrel_carnival') ? BARREL_BLAST_RADIUS * 1.35 : BARREL_BLAST_RADIUS;
   barrel.hp = BARREL_MAX_HP;
   barrel.displayHp = BARREL_MAX_HP;
   barrel.detonated = false;
@@ -95,6 +96,7 @@ export function detonateBarrel(
       continue;
     }
     if (Math.hypot(enemy.x - bx, enemy.z - bz) <= blastR + enemy.radius) {
+      recordDamage(world, 'explosives', Math.min(enemy.hp, BARREL_BLAST_DAMAGE));
       if (damageEnemy(world, enemy, BARREL_BLAST_DAMAGE, 0, events)) {
         killsInBlast += 1;
       }
@@ -137,7 +139,7 @@ export function detonateBarrel(
     if (!other || !other.active || other.detonated) {
       continue;
     }
-    if (Math.hypot(other.x - bx, other.z - bz) <= BARREL_CHAIN_TRIGGER_RADIUS) {
+    if (Math.hypot(other.x - bx, other.z - bz) <= (hasMutator(world, 'barrel_carnival') ? BARREL_CHAIN_TRIGGER_RADIUS * 1.35 : BARREL_CHAIN_TRIGGER_RADIUS)) {
       if (other.chainTimer === null) {
         other.chainTimer = BARREL_CHAIN_DELAY_SEC;
         other.chainScheduledAt = world.simTime;

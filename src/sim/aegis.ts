@@ -99,7 +99,9 @@ export function mitigateLossWithAegis(
 export function getEffectiveCritChance(world: SimWorld): number {
   const base = world.mods.critChance ?? 0;
   const syn = hasSynergy(world.endless?.upgrades, 'hyper_annihilation') ? 0.18 : 0;
-  return Math.min(0.75, Math.max(0, base + syn));
+  const gc = world.mods.mutators?.includes('glass_cannon') ? 0.25 : 0;
+  const air = world.squadAirY > 0.6 ? 0.45 : 0;
+  return Math.min(0.9, Math.max(0, base + syn + gc + air));
 }
 
 export function rollDeterministicCrit(world: SimWorld): boolean {

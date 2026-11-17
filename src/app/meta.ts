@@ -1,4 +1,15 @@
-import type { BossId, EnemyKind, NonNullDefeatReason, RewardId, RunModifiers, SectorId } from '../types/game';
+import type {
+  BossId,
+  DamageSourceKey,
+  EnemyKind,
+  MutatorId,
+  NonNullDefeatReason,
+  RewardId,
+  RunModifiers,
+  SectorId,
+  SimSnapshot,
+} from '../types/game';
+import { FUSIONS, MUTATORS } from '../config/blitz';
 
 export const GAME_TITLE_CN = '棱镜蜂群';
 export const GAME_TITLE_EN = 'PRISM SWARM';
@@ -82,11 +93,11 @@ export const ENEMY_META: Record<EnemyKind, EnemyMeta> = {
 export const DEFEAT_META: Record<NonNullDefeatReason, { title: string; tip: string }> = {
   NEGATIVE_GATE: {
     title: '穿过减员门，小队归零',
-    tip: '金色边框的门可以被射击：提前对准它，把负数一点点打成正数。',
+    tip: '金色边框的门可以被射击：提前对准它，把负数一点点打成正数，或利用磁浮跳台跃空跨过！',
   },
   DIVISION_GATE: {
     title: '除法门把小队削减为零',
-    tip: '带锁的金框 ÷ 门被打破后会翻转成 ×2；人少时千万别碰 ÷ 门。',
+    tip: '带锁的金框 ÷ 门被打破后会翻转成 ×2；也可踩磁浮跳台直接飞跃致命 ÷ 门！',
   },
   ENEMY_BREACH: {
     title: '怪兽冲垮防线',
@@ -94,7 +105,7 @@ export const DEFEAT_META: Record<NonNullDefeatReason, { title: string; tip: stri
   },
   BOSS_ATTACK: {
     title: '被首领火力击溃',
-    tip: '地面红色警示区填满前移到安全车道；首领能量弹可用「相位脉冲」直接震碎清除。',
+    tip: '优先击碎首领双肩部件触发 2.0× 破防眩晕，集火「数字湮灭棱球」将其转正反击轰碎首领核心！',
   },
 };
 
@@ -192,24 +203,24 @@ export const BOSS_META: Record<BossId, BossCodexEntry> = {
     title: '赤焰魔像王',
     color: '#ff4b5c',
     phases: 2,
-    mechanic: '多车道重拳轰击 + 召唤金色棱镜；二阶段滑出紧急金框门支援。',
-    counterTip: '站在金色棱镜正后方让弹幕分裂倍增，避开地面红区即可稳健破核。',
+    mechanic: '双肩重炮+孵化巢、数字湮灭棱球压制；二阶段滑出紧急金框门支援。',
+    counterTip: '先破双肩部件触发 4 秒 2.0× 破防，集火将负值湮灭棱球转正反击轰掉首领 16% 血量！',
   },
   hydra_02: {
     name: 'HYDRA-02',
     title: '双生魔龙',
     color: '#ff4fd8',
     phases: 2,
-    mechanic: '紫焰古龙与电光苍龙协同吐息；二阶段双核分体，每 3.6 秒交替切换无敌护盾。',
-    counterTip: '紧盯未开启蓝盾的暴露龙核（承受 1.5 倍弱点伤害），切勿把火力浪费在护盾上。',
+    mechanic: '紫焰古龙与电光苍龙协同吐息+湮灭棱球；二阶段双核分体交替无敌护盾。',
+    counterTip: '紧盯未开启蓝盾的暴露龙核（1.5× 弱点），击破双翼部件与反弹棱球可瞬间蒸发巨额血量。',
   },
   omega_zero: {
     name: 'OMEGA-ZERO',
     title: '深渊魔王',
     color: '#ffc531',
     phases: 3,
-    mechanic: '一阶段双晶塔维持无敌力场；二阶段召唤烈焰迅龙突袭；三阶段投下连锁电容桶。',
-    counterTip: '先击碎左右两座护盾晶塔触发魔王眩晕并领武器升级；三阶段引爆电容桶重创本体！',
+    mechanic: '一阶段双晶塔维持无敌力场；二阶段召唤迅龙与湮灭棱球；三阶段投下连锁电容桶。',
+    counterTip: '先碎双晶塔破除护盾，再拆双肩重武进入 2.0× 破防窗口，配合棱球反击与电容桶终结魔王！',
   },
 };
 
@@ -335,6 +346,14 @@ export function runModsFromUpgrades(
   };
 }
 
+export function computeMutatorBonusPct(mutators: readonly MutatorId[] = []): number {
+  let pct = 0;
+  for (const m of MUTATORS) {
+    if (mutators.includes(m.id)) pct += m.bonusPct;
+  }
+  return pct;
+}
+
 /** Core shards earned at the end of a run. Defeats still pay out so every attempt progresses. */
 export function computeCoreReward(opts: {
   victory: boolean;
@@ -344,10 +363,12 @@ export function computeCoreReward(opts: {
   firstClear: boolean;
   sector: SectorId;
   bountyLevel?: number;
+  blitz?: boolean;
+  mutatorBonusPct?: number;
 }): { total: number; lines: Array<[string, number]> } {
   const lines: Array<[string, number]> = [];
   if (opts.victory) {
-    lines.push(['区域突破', 30 + opts.sector * 10]);
+    lines.push([opts.blitz ? '闪击锦标夺冠' : '区域突破', opts.blitz ? 65 : 30 + opts.sector * 10]);
     if (opts.stars > 1) lines.push([`星级 ×${opts.stars}`, (opts.stars - 1) * 15]);
     if (opts.firstClear) lines.push(['首次通关', 60]);
   } else {
@@ -355,6 +376,10 @@ export function computeCoreReward(opts: {
   }
   lines.push(['得分换算', Math.floor(opts.score / 250)]);
   const baseTotal = lines.reduce((s, l) => s + l[1], 0);
+  const mutPct = Math.max(0, opts.mutatorBonusPct ?? 0);
+  if (mutPct > 0 && baseTotal > 0) {
+    lines.push([`突变词缀 +${mutPct}%`, Math.max(1, Math.round((baseTotal * mutPct) / 100))]);
+  }
   const bountyLv = Math.max(0, opts.bountyLevel ?? 0);
   if (bountyLv > 0 && baseTotal > 0) {
     const bonus = Math.max(1, Math.round(baseTotal * bountyLv * 0.15));
@@ -362,6 +387,114 @@ export function computeCoreReward(opts: {
   }
   const total = lines.reduce((s, l) => s + l[1], 0);
   return { total, lines };
+}
+
+export interface DamageBreakdownRow {
+  key: DamageSourceKey;
+  label: string;
+  glyph: string;
+  color: string;
+  damage: number;
+  pct: number;
+}
+
+const SOURCE_LABELS: Record<DamageSourceKey, { label: string; glyph: string; color: string }> = {
+  pulse: { label: '棱光脉冲', glyph: '❙❙', color: '#3ef3ff' },
+  scatter: { label: '折射散弹', glyph: '⋰⋱', color: '#7dff6b' },
+  rail: { label: '超导贯穿', glyph: '➤', color: '#b98cff' },
+  plasma: { label: '新星迫击', glyph: '✹', color: '#ff9a3c' },
+  cryo: { label: '绝对零度', glyph: '❄', color: '#8fdcff' },
+  fusions: { label: '超武聚变 & 电弧', glyph: '🌌', color: '#e28cff' },
+  deflect: { label: '棱球反击 & 破防', glyph: '⚡', color: '#19f5a8' },
+  explosives: { label: '跳台震地 & 爆破', glyph: '💥', color: '#ffc531' },
+};
+
+export function computeDamageBreakdown(
+  src: Readonly<Record<DamageSourceKey, number>> | undefined,
+): DamageBreakdownRow[] {
+  if (!src) return [];
+  const entries = (Object.keys(SOURCE_LABELS) as DamageSourceKey[])
+    .map((k) => ({ key: k, damage: Math.round(src[k] ?? 0), ...SOURCE_LABELS[k] }))
+    .filter((r) => r.damage > 0)
+    .sort((a, b) => b.damage - a.damage);
+  const sum = entries.reduce((s, r) => s + r.damage, 0);
+  if (sum <= 0) return [];
+  return entries.slice(0, 4).map((r) => ({
+    ...r,
+    pct: Math.max(1, Math.round((r.damage / sum) * 100)),
+  }));
+}
+
+export interface BuildArchetypeSummary {
+  glyph: string;
+  title: string;
+  tags: string;
+  color: string;
+}
+
+export function computeBuildArchetype(snap: SimSnapshot, maxCombo: number): BuildArchetypeSummary {
+  const fusions = snap.activeFusions ?? [];
+  const muts = snap.mutators ?? [];
+  const mutTag = muts.length
+    ? ` · ${muts.map((m) => MUTATORS.find((x) => x.id === m)?.name ?? m).join('+')}`
+    : '';
+  const unlockedCount = Object.values(snap.arsenal ?? {}).filter((v) => v > 0).length;
+
+  if (fusions.length >= 2) {
+    return {
+      glyph: '👑',
+      title: '双核超武 · 万象神罚统帅',
+      tags: `${fusions.map((f) => FUSIONS[f].name).join(' + ')}${mutTag}`,
+      color: '#ffd84a',
+    };
+  }
+  if (fusions.includes('cryo_singularity')) {
+    return {
+      glyph: '🌌',
+      title: '极寒奇点 · 坍缩湮灭统帅',
+      tags: `极寒黑洞炮 · ${unlockedCount}武同屏齐射${mutTag}`,
+      color: '#b98cff',
+    };
+  }
+  if (fusions.includes('prism_ricochet_web')) {
+    return {
+      glyph: '🕸',
+      title: '棱镜天网 · 折跃电弧宗师',
+      tags: `棱镜折射电网 · ${unlockedCount}武同屏齐射${mutTag}`,
+      color: '#7dff6b',
+    };
+  }
+  if (fusions.includes('seeker_sword_array')) {
+    return {
+      glyph: '⚔',
+      title: '御剑蜂群 · 浮游剑阵统领',
+      tags: `自律浮游剑阵 · 飞刃×${snap.bladesCount}${mutTag}`,
+      color: '#3ef3ff',
+    };
+  }
+  if ((snap.damageBySource?.deflect ?? 0) >= 1200) {
+    return {
+      glyph: '⚡',
+      title: '逆转乾坤 · 破甲反击大师',
+      tags: `首领棱球反击 · 最高 ${maxCombo} 连杀${mutTag}`,
+      color: '#19f5a8',
+    };
+  }
+  if (unlockedCount >= 3) {
+    return {
+      glyph: '🔥',
+      title: '全武矩阵 · 霓虹弹幕暴君',
+      tags: `${unlockedCount} 重武装协同齐射 · 峰值 ${snap.stats.peakSquad} 人${mutTag}`,
+      color: '#ff9a3c',
+    };
+  }
+  const lead = REWARD_META[snap.weapon];
+  return {
+    glyph: lead.glyph,
+    title: `${lead.name} · 锋矢突击先锋`,
+    tags: `Lv.${snap.weaponLevel} 主炮 · 峰值 ${snap.stats.peakSquad} 人${mutTag}`,
+    color: lead.color,
+  };
 }
 
 // ------------------------------------------------------------------ sector challenges (one-time bonus goals)

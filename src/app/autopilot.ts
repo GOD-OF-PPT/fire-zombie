@@ -60,29 +60,39 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
         }
       }
 
+      // Priority 0 offense: Intercept & flip incoming Negative Doom-Orbs back into the Boss!
+      const incomingDoom = snap.doomOrbs?.find((o) => !o.reflected && o.z < playerZ + 0.3);
       // Priority 1 offense: detonate Phase 3 Arena Surge Barrels!
       const liveBarrel = snap.barrels.find((b) => !b.detonated && b.z < playerZ - 1.5);
       const alivePylons = boss.pylons.filter((p) => !p.destroyed);
+      const aliveParts = (boss.parts ?? []).filter((pt) => !pt.destroyed);
 
-      if (liveBarrel) {
+      if (incomingDoom) {
+        if (incomingDoom.z > playerZ - 2.6 && Math.abs(cx - incomingDoom.x) <= r + incomingDoom.radius + 0.3) {
+          // Last-moment dodge if still negative right at squad line
+          score -= 3_800;
+        } else {
+          score -= Math.abs(cx - incomingDoom.x) * 165;
+        }
+      } else if (liveBarrel) {
         score -= Math.abs(cx - liveBarrel.x) * 80;
       } else if (alivePylons.length > 0) {
-        // Priority 2 offense: break Omega-Zero Phase 1 Shield Pylons
         const targetPylon = alivePylons[0]!;
         score -= Math.abs(cx - targetPylon.x) * 75;
+      } else if (aliveParts.length > 0 && !boss.shielded && (boss.breakTimer ?? 0) <= 0) {
+        // Shatter Boss Shoulder Pods to trigger 4.0s 2.0x BREAK stagger!
+        const targetPart = aliveParts[0]!;
+        score -= Math.abs(cx - targetPart.x) * 72;
       } else if (boss.secondaryCore) {
-        // Priority 3 offense: target whichever Hydra-02 core is unshielded (1.5x weakpoint!)
         const aimX = !boss.shielded ? boss.x : boss.secondaryCore.x;
         score -= Math.abs(cx - aimX) * 65;
       } else {
-        // Aim through Prism Lens if well-aligned with Boss core, else directly at Boss core
         const lens = snap.lenses[0];
         const aimX =
           lens && Math.abs(lens.x - boss.x) <= 1.8 ? (lens.x + boss.x) * 0.5 : boss.x;
         score -= Math.abs(cx - aimX) * 60;
       }
 
-      // Slight stability preference to avoid jitter
       score -= Math.abs(cx - snap.squadX) * 4;
 
       if (score > bestScore) {
@@ -95,6 +105,22 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
   }
 
   // 2. Runway Tactical Controller
+  // Check upcoming Dual-Lane Contract Corridor entry to pick the Bounty Elite side when strong!
+  const upcomingWall = snap.contractWalls?.find(
+    (w) => w.zFront < playerZ - 0.5 && w.zFront > playerZ - 14,
+  );
+  if (upcomingWall && snap.squadCount >= 18) {
+    return upcomingWall.bountySide === 'left' ? -2.3 : 2.3;
+  }
+
+  // Check imminent Mag-Lev Jump Pad to leap over negative/division gates!
+  const nearPad = snap.jumpPads?.find(
+    (jp) => !jp.triggered && jp.z <= playerZ + 0.1 && jp.z >= playerZ - 8.5,
+  );
+  if (nearPad) {
+    return nearPad.x;
+  }
+
   // Group active untriggered gates by rowId, sorted by closest Z to playerZ
   const rowMap = new Map<number, GateSnapshot[]>();
   for (const g of snap.gates) {
@@ -106,7 +132,6 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
   }
   const upcomingRows = [...rowMap.values()].sort((a, b) => b[0]!.z - a[0]!.z);
 
-  // Immediate gate-crossing commitment when within 5.0 units of PLAYER_Z
   const imminentRow = upcomingRows.find((rg) => rg[0]!.z >= playerZ - 5.0);
   if (imminentRow) {
     if (imminentRow.length === 2) {
@@ -124,7 +149,14 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
     }
   }
 
-  // Mid-range aiming: prioritize Siphons, Surge Barrels, Mutable Gates needing flip, and Overclock Vaults
+  // Mid-range aiming: prioritize Bounty Elites, Siphons, Surge Barrels, Mutable Gates, and Vaults
+  const bountyElite = snap.enemies.find(
+    (e) => e.isBountyElite && e.z > playerZ - 48 && e.z < playerZ - 2,
+  );
+  if (bountyElite) {
+    return bountyElite.x;
+  }
+
   const siphon = snap.enemies.find(
     (e) => e.kind === 'siphon' && e.z > playerZ - 48 && e.z < playerZ - 3,
   );
@@ -139,7 +171,6 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
     return barrel.x;
   }
 
-  // Check if next gate row has a mutable gate worth shooting (especially negative/lock-flip)
   const nextRow = upcomingRows[0];
   if (nextRow && nextRow[0]!.z > playerZ - 38) {
     const urgentMutable = nextRow.find((g) => g.mutable && (g.polarity !== 'positive' || g.lockHp > 0));
@@ -148,7 +179,6 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
     }
   }
 
-  // Crack reachable Overclock Vaults
   const vault = snap.vaults.find((v) => !v.broken && v.z > playerZ - 44 && v.z < playerZ - 4);
   if (vault) {
     return vault.x;
@@ -168,4 +198,3 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
 
   return 0;
 }
-

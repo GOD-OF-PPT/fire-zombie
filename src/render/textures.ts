@@ -81,7 +81,6 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
   ctx.fillStyle = 'rgba(195,255,245,0.05)';
   for (let y = 22; y < h - 18; y += 6) ctx.fillRect(pad, y, w - pad * 2, 1.5);
 
-  // Subtle corner tech ticks
   ctx.strokeStyle = main;
   ctx.globalAlpha = g.dimmed ? 0.25 : 0.45;
   ctx.lineWidth = 2;
@@ -94,10 +93,9 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
   ctx.fillText(g.mutable ? '◈ TARGETABLE // SHOOT TO BOOST' : '◈ SWARM GATE // FIXED', 36, 44);
   ctx.textAlign = 'right';
   ctx.fillStyle = 'rgba(215,245,255,0.65)';
-  ctx.fillText('PRISM-V2', w - 36, 44);
+  ctx.fillText('PRISM-V5', w - 36, 44);
   ctx.restore();
 
-  // Mutable gates: bold golden targeting reticle brackets
   if (g.mutable) {
     ctx.strokeStyle = COLORS.gold;
     ctx.lineWidth = 15;
@@ -116,7 +114,6 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
     ctx.lineCap = 'butt';
   }
 
-  // Main numeric label
   const isLock = g.lockHp > 0;
   const label = g.label;
   let fontSize = label.length >= 3 ? 152 : 174;
@@ -235,7 +232,6 @@ export function paintVaultPlate(
   ctx.font = `800 27px ${FONT}`;
   ctx.fillStyle = meta.color;
   ctx.fillText(`${meta.short}武装 · 射击解锁`, 122, 95);
-  // HP bar
   const bx = 28;
   const bw = w - 56;
   const by = h - 60;
@@ -275,6 +271,90 @@ export function paintLensPlate(ctx: CanvasRenderingContext2D, w: number, h: numb
   ctx.fillText('✦ 棱镜 ×2 增幅', w / 2, h / 2 + 2);
 }
 
+/** Paints holographic signboards for V5 runway tactical set-pieces (Jump Pad, 45° Reflector, Contract Wall). */
+export function paintSetPiecePlate(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  kind: 'jump' | 'reflector' | 'bounty',
+): void {
+  ctx.clearRect(0, 0, w, h);
+  const cfg =
+    kind === 'jump'
+      ? { c1: 'rgba(6,44,62,0.9)', c2: 'rgba(4,16,32,0.94)', stroke: '#3ef3ff', text: '▲ 跃空跳台 · 震地清场' }
+      : kind === 'reflector'
+        ? { c1: 'rgba(8,46,36,0.9)', c2: 'rgba(4,18,24,0.94)', stroke: '#7dff6b', text: '◈ 45° 折射镜 · ×1.45' }
+        : { c1: 'rgba(58,28,4,0.92)', c2: 'rgba(26,8,16,0.95)', stroke: '#ffc531', text: '★ 死斗悬赏 · 破甲大奖' };
+  const bg = ctx.createLinearGradient(0, 0, w, h);
+  bg.addColorStop(0, cfg.c1);
+  bg.addColorStop(1, cfg.c2);
+  roundRect(ctx, 6, 6, w - 12, h - 12, 22);
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = cfg.stroke;
+  ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `900 38px ${FONT}`;
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(cfg.text, w / 2, h / 2 + 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(cfg.text, w / 2, h / 2 + 2);
+}
+
+/** Paints the Boss's Giant Numbered Doom-Orb counter-parry plate (-18 -> +1 反击破核!). */
+export function paintDoomOrbPlate(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  value: number,
+  chargeRatio: number,
+  reflected: boolean,
+): void {
+  ctx.clearRect(0, 0, w, h);
+  const border = reflected ? '#19f5a8' : '#ff3b5c';
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, reflected ? 'rgba(6,58,38,0.94)' : 'rgba(68,6,26,0.94)');
+  bg.addColorStop(1, 'rgba(6,8,20,0.96)');
+  roundRect(ctx, 8, 8, w - 16, h - 16, 26);
+  ctx.fillStyle = bg;
+  ctx.fill();
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = reflected ? COLORS.gold : border;
+  ctx.stroke();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `900 24px ${FONT}`;
+  ctx.fillStyle = reflected ? '#9fffe0' : '#ffd84a';
+  ctx.fillText(reflected ? '⚡ 逆转反击 · 轰击首领！' : '⚠ 湮灭棱球 · 集火转正反击', w / 2, 34);
+
+  const label = value > 0 ? `+${value}` : String(value);
+  ctx.font = `900 94px ${FONT}`;
+  ctx.lineWidth = 14;
+  ctx.strokeStyle = '#000';
+  ctx.strokeText(label, w / 2, 102);
+  ctx.fillStyle = reflected ? '#19f5a8' : '#ffffff';
+  ctx.fillText(label, w / 2, 102);
+
+  if (!reflected) {
+    const bx = 34;
+    const bw = w - 68;
+    const by = h - 34;
+    roundRect(ctx, bx, by, bw, 16, 8);
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fill();
+    const prog = Math.max(0, Math.min(1, (20 + value + chargeRatio) / 20));
+    if (prog > 0) {
+      roundRect(ctx, bx + 2, by + 2, Math.max(12, (bw - 4) * prog), 12, 6);
+      ctx.fillStyle = COLORS.gold;
+      ctx.fill();
+    }
+  }
+}
+
 /** High-detail 1024×1024 stylized cyberpunk skybox with aurora nebula, ringed cyber-planet, and horizon spires. */
 export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTexture {
   const { ctx, tex, canvas } = makeCanvasTexture(1024, 1024);
@@ -286,7 +366,6 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Diagonal aurora / nebula ribbons across upper sky
   ctx.save();
   ctx.globalCompositeOperation = 'screen';
   for (let band = 0; band < 3; band++) {
@@ -301,7 +380,6 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
   }
   ctx.restore();
 
-  // Crisp starfield
   let seed = 73;
   const rnd = (): number => {
     seed = (seed * 16807) % 2147483647;
@@ -317,7 +395,6 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
     ctx.fill();
   }
 
-  // Ringed Cyber-Moon / Orbital Colony in upper-right vista
   const mx = 710;
   const my = 212;
   const radius = 108;
@@ -328,7 +405,6 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
   ctx.fillStyle = halo;
   ctx.fillRect(mx - radius * 2.5, my - radius * 2.5, radius * 5, radius * 5);
 
-  // Back half of planetary ring
   ctx.save();
   ctx.translate(mx, my);
   ctx.rotate(-0.32);
@@ -339,7 +415,6 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
   ctx.stroke();
   ctx.restore();
 
-  // Moon sphere with cybernetic grid lines & lit craters
   ctx.save();
   ctx.beginPath();
   ctx.arc(mx, my, radius, 0, Math.PI * 2);
@@ -361,7 +436,6 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
     ctx.ellipse(x, y, r, r * 0.68, -0.35, 0, Math.PI * 2);
     ctx.fill();
   }
-  // Glowing orbital city arcs on night-side of moon
   ctx.strokeStyle = 'rgba(98,244,255,0.38)';
   ctx.lineWidth = 1.6;
   for (let k = 0; k < 5; k++) {
@@ -371,7 +445,6 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
   }
   ctx.restore();
 
-  // Front half of planetary ring
   ctx.save();
   ctx.translate(mx, my);
   ctx.rotate(-0.32);
@@ -387,7 +460,6 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
   ctx.stroke();
   ctx.restore();
 
-  // Distant megastructure horizon glow & silhouette spires
   const hg = ctx.createLinearGradient(0, 560, 0, 920);
   hg.addColorStop(0, 'rgba(160,235,255,0)');
   hg.addColorStop(0.55, 'rgba(150,220,255,0.16)');
@@ -425,13 +497,11 @@ export function makeGlowTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-/** Crisp tactical hexagonal command ring decal rendered beneath the player's squad. */
 export function makeHexCommandTexture(): THREE.CanvasTexture {
   const { ctx, tex } = makeCanvasTexture(256, 256);
   ctx.clearRect(0, 0, 256, 256);
   ctx.translate(128, 128);
 
-  // Outer segmented circle
   ctx.strokeStyle = 'rgba(255,255,255,0.85)';
   ctx.lineWidth = 5;
   for (let i = 0; i < 6; i++) {
@@ -442,7 +512,6 @@ export function makeHexCommandTexture(): THREE.CanvasTexture {
     ctx.stroke();
   }
 
-  // Inner tactical hexagon
   ctx.strokeStyle = 'rgba(255,255,255,0.55)';
   ctx.lineWidth = 3;
   ctx.beginPath();
@@ -456,7 +525,6 @@ export function makeHexCommandTexture(): THREE.CanvasTexture {
   ctx.closePath();
   ctx.stroke();
 
-  // Forward directional chevron ticks
   ctx.fillStyle = 'rgba(255,255,255,0.95)';
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;

@@ -1,4 +1,4 @@
-import type { BossId, EnemyKind, SectorId } from '../types/game';
+import type { BossId, EnemyKind, MutatorId, SectorId } from '../types/game';
 import type { UpgradeId } from './meta';
 
 export interface SectorRecord {
@@ -15,6 +15,12 @@ export interface EndlessRecord {
   bosses: number;
 }
 
+export interface BlitzRecord {
+  bestScore: number;
+  bestTime: number;
+  clears: number;
+}
+
 export type CodexKillKey = EnemyKind | BossId;
 
 export interface SaveData {
@@ -24,6 +30,8 @@ export interface SaveData {
   endless: EndlessRecord;
   /** Public ranking display name, entered once on an endless defeat. */
   leaderboardName: string;
+  blitz: BlitzRecord;
+  mutators: MutatorId[];
   muted: boolean;
   seenHints: string[];
   /** workshop currency */
@@ -52,6 +60,8 @@ const KILL_KEYS: readonly CodexKillKey[] = [
   'omega_zero',
 ];
 
+const VALID_MUTATORS: readonly MutatorId[] = ['mirror_twin', 'glass_cannon', 'barrel_carnival'];
+
 function defaultKills(): Record<CodexKillKey, number> {
   return {
     crawler: 0,
@@ -77,6 +87,8 @@ function defaults(): SaveData {
     },
     endless: { bestScore: 0, bestWave: 0, bestTime: 0, bestDistance: 0, bosses: 0 },
     leaderboardName: '',
+    blitz: { bestScore: 0, bestTime: 0, clears: 0 },
+    mutators: [],
     muted: false,
     seenHints: [],
     cores: 0,
@@ -114,6 +126,9 @@ export function loadSave(): SaveData {
     for (const k of KILL_KEYS) {
       kills[k] = Math.max(0, Math.floor(Number(parsed.bestiaryKills?.[k]) || 0));
     }
+    const mutators = Array.isArray(parsed.mutators)
+      ? parsed.mutators.filter((m): m is MutatorId => VALID_MUTATORS.includes(m as MutatorId))
+      : [];
     return {
       version: 1,
       unlocked,
@@ -126,6 +141,12 @@ export function loadSave(): SaveData {
         bestDistance: Math.max(0, Math.floor(Number(parsed.endless?.bestDistance) || 0)),
         bosses: Math.max(0, Math.floor(Number(parsed.endless?.bosses) || 0)),
       },
+      blitz: {
+        bestScore: Math.max(0, Math.floor(Number(parsed.blitz?.bestScore) || 0)),
+        bestTime: Math.max(0, Number(parsed.blitz?.bestTime) || 0),
+        clears: Math.max(0, Math.floor(Number(parsed.blitz?.clears) || 0)),
+      },
+      mutators,
       muted: Boolean(parsed.muted),
       seenHints: Array.isArray(parsed.seenHints) ? parsed.seenHints.filter((s) => typeof s === 'string') : [],
       cores: Math.max(0, Math.floor(Number(parsed.cores) || 0)),

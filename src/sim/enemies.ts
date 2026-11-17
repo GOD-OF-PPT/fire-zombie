@@ -24,6 +24,7 @@ import { CRYO_BRITTLE_DAMAGE_MULT, CRYO_SLOW_MOVE_SCALE } from '../config/weapon
 import { getEndlessEnemyHpMult } from '../config/endless';
 import { hasSynergy } from '../config/protocols';
 import { mitigateLossWithAegis } from './aegis';
+import { grantBountyJackpot, hasMutator, recordDamage, stepSeekerBlades } from './competition';
 import { allocEntityId, type SimEnemy, type SimWorld } from './entities';
 import { applyFlatDeltaToGate, findGateById } from './gates';
 import { clamp, clampSquadCount, normalizeZero } from './math';
@@ -143,6 +144,10 @@ export function damageEnemy(
     enemy.active = false;
     world.stats.kills += 1;
 
+    if (enemy.isBountyElite) {
+      grantBountyJackpot(world, killedX, killedZ, events);
+    }
+
     // Stack live Rampage Frenzy (+attack speed & Chain-Lightning overdrive procs!)
     world.rampageTimer = 2.6;
     world.rampageStacks = Math.min(60, world.rampageStacks + 1);
@@ -221,6 +226,7 @@ export function damageEnemy(
  * Step 3c: Close-range Orbital Bit-Blades defense ring around (squadX, PLAYER_Z).
  */
 export function stepOrbitalBlades(world: SimWorld, events: SimEvent[]): void {
+  if (stepSeekerBlades(world, events)) return;
   if (world.bladesCount <= 0 || world.squadCount <= 0) {
     return;
   }
@@ -346,6 +352,13 @@ export function resolveEnemyBreaches(world: SimWorld, events: SimEvent[]): boole
       const enemyCrossX = enemy.prevX + (enemy.x - enemy.prevX) * t;
       const squadCrossX = world.prevSquadX + (world.squadX - world.prevSquadX) * t;
 
+      if (world.squadAirY > 0.6) {
+        // Soaring airborne over enemies via Mag-Lev Jump Pad!
+        enemy.bypassed = true;
+        enemy.linkedGateId = null;
+        enemy.telegraphTimer = 0;
+        continue;
+      }
       if (Math.abs(enemyCrossX - squadCrossX) <= world.formationRadius + enemy.radius) {
         enemy.consumed = true;
         enemy.active = false;
@@ -353,7 +366,7 @@ export function resolveEnemyBreaches(world: SimWorld, events: SimEvent[]): boole
         enemy.telegraphTimer = 0;
 
         const cfg = ENEMY_CONFIGS[enemy.kind];
-        const rawBreachLoss = clamp(Math.ceil(enemy.hp / cfg.hpPerDroneLoss), 1, cfg.maxLoss);
+        const rawBreachLoss = clamp(Math.ceil(enemy.hp / cfg.hpPerDroneLoss), 1, cfg.maxLoss) * (hasMutator(world, 'glass_cannon') ? 2 : 1);
         const breachLoss = mitigateLossWithAegis(world, rawBreachLoss, events);
         const before = world.squadCount;
         world.squadCount = clampSquadCount(before - breachLoss);

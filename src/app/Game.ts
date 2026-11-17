@@ -1,6 +1,15 @@
 import { createSimulation } from '../sim/index';
-import type { EndlessUpgradeId, NonNullDefeatReason, SectorId, SimEvent, SimSnapshot, SimulationController } from '../types/game';
+import type {
+  EndlessUpgradeId,
+  MutatorId,
+  NonNullDefeatReason,
+  SectorId,
+  SimEvent,
+  SimSnapshot,
+  SimulationController,
+} from '../types/game';
 import { getActiveSynergies, getEndlessThreat, PROTOCOLS } from '../config/protocols';
+import { FUSIONS, generateBlitzScript } from '../config/blitz';
 import { PLAYER_Z } from '../config/constants';
 import { getSectorScript } from '../config/sectors';
 import { getVolleyStreamCount } from '../config/weapons';
@@ -12,7 +21,10 @@ import { chooseHeuristicTargetX } from './autopilot';
 import {
   ACHIEVEMENTS,
   BOSS_META,
+  computeBuildArchetype,
   computeCoreReward,
+  computeDamageBreakdown,
+  computeMutatorBonusPct,
   ENEMY_META,
   getApexCost,
   getTotalWorkshopSpent,
@@ -35,13 +47,17 @@ type AppState = 'title' | 'ready' | 'playing' | 'paused' | 'draft' | 'outro' | '
 const HINTS: Record<string, Content> = {
   mutable: html`<b>金框门</b>可以被射击！对准它，把数字打上去`,
   lock: html`带锁的 ÷ 门：打破锁就会翻转成 <b>×2</b>`,
-  vault: html`击破<b>能量舱</b>获得新武器，重复获得会升级`,
+  vault: html`击破<b>能量舱</b>叠加新武装，凑齐配方自动合成<b>双武超武</b>！`,
   barrel: html`射爆<b>电容桶</b>：范围爆炸、可连锁，还能抬高附近金框门`,
   lens: html`子弹穿过<b>金色棱镜</b>会一分为二并增伤`,
   siphon: html`<b>噬能骷髅灵</b>正在偷取门的数值，先击毁它！`,
   dasher: html`红色锁定线：<b>烈焰迅龙</b>即将冲锋，快闪开或按 <b>E 脉冲</b>`,
   hazard: html`地面红区填满就会轰击，<b>移到安全车道</b>`,
   bastion: html`<b>重甲巨魔</b>血厚攻高：绕开它、引爆电容桶或开启<b>相位脉冲</b>`,
+  jump: html`踩上<b>磁浮跳台</b>跃空飞越致命门，落地引发<b>震地清场</b>！`,
+  reflector: html`射击 <b>45° 折射镜</b>可斜角反弹弹幕（伤害 ×1.45）绕盾爆桶！`,
+  contract: html`<b>双轨死斗契约</b>：激光封锁变道，击杀悬赏重甲领巨额扩编与升阶！`,
+  doom_orb: html`<b>数字湮灭棱球</b>逼近！集火将其从负数打成正数，逆转反击重创首领！`,
 };
 
 function autopilotDrag(snap: SimSnapshot): number {
@@ -76,6 +92,7 @@ export class Game {
   state: AppState = 'title';
   sector: SectorId = 1;
   endless = false;
+  blitz = false;
   score = 0;
   private speedMult: 1 | 2 = 1;
   private last = 0;
@@ -112,18 +129,30 @@ export class Game {
     const seedParam = params.get('seed');
     if (seedParam !== null) this.fixedLayoutSeed = Math.max(0, Math.floor(Number(seedParam) || 0));
 
+    const mutParam = params.get('mutators');
+    if (mutParam) {
+      const valid: MutatorId[] = ['mirror_twin', 'glass_cannon', 'barrel_carnival'];
+      const picked = mutParam
+        .split(',')
+        .map((s) => s.trim() as MutatorId)
+        .filter((m) => valid.includes(m));
+      if (picked.length > 0) this.save.mutators = picked;
+    }
+
     this.renderer = new Renderer(canvas, { forceProcedural: opts.standaloneCanvas === true, trialArt: params.get('art') === 'tripo' });
     this.input = new InputController(stage);
     this.ui = new UI(uiRoot, {
-      onStart: (s) => this.startRun(s),
-      onEndless: () => this.startRun(4, true),
+      onStart: (s) => this.startRun(s, false, false),
+      onEndless: () => this.startRun(4, true, false),
+      onBlitz: () => this.startRun(4, false, true),
+      onToggleMutator: (id) => this.toggleMutator(id),
       onLeaderboard: () => this.openLeaderboard(),
       onProtocol: (id) => this.chooseProtocol(id),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
-      onRetry: () => this.startRun(this.sector, this.endless),
+      onRetry: () => this.startRun(this.sector, this.endless, this.blitz),
       onHome: () => this.toTitle(),
-      onNext: () => this.startRun(Math.min(4, this.sector + 1) as SectorId),
+      onNext: () => this.startRun(Math.min(4, this.sector + 1) as SectorId, false, false),
       onToggleMute: () => this.toggleMute(),
       onToggleSpeed: () => this.toggleSpeed(),
       onBuy: (id) => this.buyUpgrade(id),
@@ -192,8 +221,9 @@ export class Game {
 
     const startSector = Number(params.get('sector'));
     if (params.get('play') === '1' || this.autoplay) {
-      if (params.get('mode') === 'endless' || params.get('endless') === '1') this.startRun(4, true);
-      else this.startRun((startSector >= 2 && startSector <= 4 ? startSector : 1) as SectorId);
+      if (params.get('mode') === 'blitz' || params.get('blitz') === '1') this.startRun(4, false, true);
+      else if (params.get('mode') === 'endless' || params.get('endless') === '1') this.startRun(4, true, false);
+      else this.startRun((startSector >= 2 && startSector <= 4 ? startSector : 1) as SectorId, false, false);
     }
   }
 
@@ -218,11 +248,20 @@ export class Game {
     this.input.setScale(r.width, this.renderer.visibleWidthAtPlayer());
   }
 
+  toggleMutator(id: MutatorId): void {
+    const idx = this.save.mutators.indexOf(id);
+    if (idx >= 0) this.save.mutators.splice(idx, 1);
+    else this.save.mutators.push(id);
+    writeSave(this.save);
+    this.ui.renderMutators(this.save);
+  }
+
   // ------------------------------------------------------------------ flow
   toTitle(): void {
     this.clearRankingViews();
     this.state = 'title';
     this.endless = false;
+    this.blitz = false;
     this.audio.setFever(false);
     this.ui.hideProtocols();
     this.ui.hideHud();
@@ -234,12 +273,13 @@ export class Game {
     this.audio.setMusic(1, 0);
   }
 
-  startRun(sector: SectorId, endless = false): void {
-    if (!endless && sector > this.save.unlocked) return;
+  startRun(sector: SectorId, endless = false, blitz = false): void {
+    if (!endless && !blitz && sector > this.save.unlocked) return;
     this.clearRankingViews();
     this.audio.unlock();
-    this.sector = sector;
+    this.sector = blitz ? 4 : sector;
     this.endless = endless;
+    this.blitz = blitz;
     this.score = 0;
     this.combo = 0;
     this.maxCombo = 0;
@@ -254,15 +294,19 @@ export class Game {
     this.audio.setFever(false);
     this.renderer.resetRun();
     if (endless) this.renderer.setEndlessWave(1);
-    else this.renderer.setSector(sector);
+    else if (blitz) this.renderer.setSector(2);
+    else this.renderer.setSector(this.sector);
     this.sim.setSpeedMultiplier(1);
     const layoutSeed = this.fixedLayoutSeed ?? 1 + Math.floor(Math.random() * 0x7ffffffe);
-    this.sim.startSector(sector, {
+    const activeMutators = [...this.save.mutators];
+    this.sim.startSector(this.sector, {
       ...runModsFromUpgrades(this.save.upgrades, this.save.apexLevel),
       manualOverdrive: true,
       layoutSeed,
       endless,
       manualEndlessDraft: endless,
+      blitz,
+      mutators: activeMutators,
     });
     this.lastSnap = this.sim.getSnapshot();
     this.input.reset();
@@ -273,25 +317,33 @@ export class Game {
     this.ui.hideResult();
     this.ui.showPause(false);
     this.ui.hideProtocols();
-    this.ui.showHud(sector, endless);
+    this.ui.showHud(this.sector, endless, blitz);
     this.state = 'ready';
     this.readyTimer = 0;
     this.ui.showDragHint(true);
-    const meta = SECTOR_META[sector];
-    const bossLine = endless
-      ? `阶段无限 · 双协议羁绊 · 布局 #${layoutSeed}`
-      : sector === 4
-        ? `首领 · ${BOSS_META[getSectorScript(sector, layoutSeed).boss.id].title} · 布局 #${layoutSeed}`
-        : `首领 · ${meta.bossTitle}`;
-    const runTitle = endless ? '无尽协议' : meta.name;
-    const runKicker = endless ? 'ENDLESS PROTOCOL · 阶段 1' : meta.subtitle;
+    const meta = SECTOR_META[this.sector];
+    const mutPct = computeMutatorBonusPct(activeMutators);
+    const mutSuffix = mutPct > 0 ? ` · 突变收益 +${mutPct}%` : '';
+    const bossLine = blitz
+      ? `首领 · ${BOSS_META[generateBlitzScript(layoutSeed).boss.id].title} · 双武聚变 + 机关全开${mutSuffix}`
+      : endless
+        ? `阶段无限 · 双协议羁绊 · 布局 #${layoutSeed}${mutSuffix}`
+        : this.sector === 4
+          ? `首领 · ${BOSS_META[getSectorScript(this.sector, layoutSeed).boss.id].title} · 布局 #${layoutSeed}${mutSuffix}`
+          : `首领 · ${meta.bossTitle}${mutSuffix}`;
+    const runTitle = blitz ? '锦标赛闪击' : endless ? '无尽协议' : meta.name;
+    const runKicker = blitz
+      ? 'TOURNAMENT BLITZ · 90s 极速冲奖'
+      : endless
+        ? 'ENDLESS PROTOCOL · 阶段 1'
+        : meta.subtitle;
     this.ui.showBanner(
       html`<div class="b-kicker">${runKicker}</div><div class="b-title">${runTitle}</div><div class="b-sub">${bossLine}</div>`,
-      'intro',
+      blitz ? 'od' : 'intro',
       1800,
     );
     this.input.onFirstInput = () => this.beginPlay();
-    this.audio.setMusic(sector, 1);
+    this.audio.setMusic(blitz ? 3 : this.sector, 1);
   }
 
   private beginPlay(): void {
@@ -399,7 +451,8 @@ export class Game {
     if (basePoints <= 0) return;
     const feverMult = computeFeverMult(this.combo);
     const bountyMult = 1 + (this.save.upgrades.bounty ?? 0) * 0.08;
-    this.score += Math.round(basePoints * feverMult * bountyMult);
+    const mutMult = 1 + computeMutatorBonusPct(this.lastSnap?.mutators ?? this.save.mutators) / 100;
+    this.score += Math.round(basePoints * feverMult * bountyMult * mutMult);
   }
 
   // ------------------------------------------------------------------ per frame
@@ -456,7 +509,8 @@ export class Game {
     this.lastSnap = snap;
     this.renderer.render(snap, dt, this.state === 'outro' || this.state === 'result');
     if (this.state !== 'title') {
-      const badgeY = snap.squadCount >= 55 ? 2.95 : snap.squadCount >= 14 ? 1.86 : 1.68;
+      const airY = snap.squadAirY ?? 0;
+      const badgeY = (snap.squadCount >= 55 ? 2.95 : snap.squadCount >= 14 ? 1.86 : 1.68) + airY;
       const p = this.renderer.project(snap.squadX, badgeY, PLAYER_Z - snap.formationRadius - 0.25);
       this.ui.updateHud(snap, this.score, p);
     }
@@ -493,8 +547,8 @@ export class Game {
       this.bossWarned = true;
       const meta = SECTOR_META[snap.sector];
       this.ui.bossWarning(
-        this.endless ? '轮回首领' : meta.bossName,
-        this.endless ? `无尽阶段 ${snap.endless?.wave ?? 1}` : meta.bossTitle,
+        this.blitz ? '闪击终局首领' : this.endless ? '轮回首领' : meta.bossName,
+        this.blitz ? '双肩破防 · 棱球反击' : this.endless ? `无尽阶段 ${snap.endless?.wave ?? 1}` : meta.bossTitle,
       );
       this.audio.bossWarning();
       this.ui.doFlash('rgba(255,30,60,0.6)', 0.35);
@@ -518,6 +572,10 @@ export class Game {
     if (snap.vaults.some((v) => near(v.z) && !v.broken)) this.hint('vault');
     if (snap.barrels.some((b) => near(b.z) && !b.detonated)) this.hint('barrel');
     if (snap.lenses.some((l) => near(l.z))) this.hint('lens');
+    if (snap.jumpPads?.some((jp) => near(jp.z) && !jp.triggered)) this.hint('jump');
+    if (snap.reflectors?.some((rf) => near(rf.z))) this.hint('reflector');
+    if (snap.contractWalls?.some((cw) => cw.zFront > -50)) this.hint('contract');
+    if (snap.doomOrbs?.some((o) => !o.reflected)) this.hint('doom_orb');
     for (const e of snap.enemies) {
       if (e.kind === 'siphon' && near(e.z)) this.hint('siphon');
       else if (e.kind === 'dasher' && e.telegraphTimer > 0) this.hint('dasher');
@@ -545,11 +603,134 @@ export class Game {
           if (live && !ev.auxiliary) a.shoot(ev.weapon);
           break;
         case 'CHAIN_ARC': {
-          fx.arc(ev.fromX, ev.fromZ, ev.toX, ev.toZ, 0x62f4ff);
-          fx.impact(ev.toX, 0.85, ev.toZ, 0xffe66d, true);
+          const arcColor = ev.webColor ?? 0x62f4ff;
+          fx.arc(ev.fromX, ev.fromZ, ev.toX, ev.toZ, arcColor);
+          fx.impact(ev.toX, 0.85, ev.toZ, ev.webColor ? 0x9eff7a : 0xffe66d, true);
           if (live) {
             a.chainArc();
             this.addScore(18);
+          }
+          break;
+        }
+        case 'FUSION_UNLOCK': {
+          const f = FUSIONS[ev.fusionId];
+          fx.ring(snap.squadX, PLAYER_Z, f.hex, 7.2, 0.72);
+          fx.burst(snap.squadX, 1.1, PLAYER_Z, f.hex, 110, { speed: 12, size: 0.58, life: 0.85, up: 1.3 });
+          this.renderer.shake(0.32);
+          if (live) {
+            a.fusionUnlock();
+            this.ui.doFlash(f.color, 0.35);
+            this.addScore(420);
+            this.ui.showBanner(
+              html`<div class="b-kicker">⚡ SUPERWEAPON FUSION</div><div class="b-title" style="color:${f.color}">${f.glyph} ${f.name}</div><div class="b-sub">${f.desc}</div>`,
+              'od',
+              1750,
+            );
+          }
+          break;
+        }
+        case 'SINGULARITY_SPAWN': {
+          fx.ring(ev.x, ev.z, 0xb98cff, ev.radius, 0.55, ev.radius * 0.95);
+          fx.burst(ev.x, 0.65, ev.z, 0x8fdcff, 32, { speed: 6.5, size: 0.42, life: 0.5, up: 0.7 });
+          if (live) a.singularity();
+          break;
+        }
+        case 'JUMP_LAUNCH': {
+          fx.ring(ev.x, ev.z, 0x3ef3ff, 4.6, 0.48);
+          fx.burst(ev.x, 0.4, ev.z, 0x62f4ff, 55, { speed: 9.5, size: 0.45, life: 0.55, up: 1.5 });
+          this.renderer.shake(0.18);
+          if (live) {
+            a.jumpLaunch();
+            this.addScore(140);
+            const p = this.worldToScreen(snap.squadX, 2.5, PLAYER_Z - 0.8);
+            this.ui.floatText(p.x, p.y - 12, '跃空突袭！', 'aegis', 1.0);
+          }
+          break;
+        }
+        case 'JUMP_SLAM': {
+          fx.ring(ev.x, ev.z, 0xffd84a, 6.4, 0.58);
+          fx.ring(ev.x, ev.z, 0x3ef3ff, 4.5, 0.42);
+          fx.burst(ev.x, 0.6, ev.z, 0xffd84a, 95, { speed: 13.5, size: 0.55, life: 0.68, up: 0.9 });
+          this.renderer.shake(0.42);
+          if (live) {
+            a.jumpSlam();
+            this.ui.doFlash('rgba(255,216,74,0.42)', 0.28);
+            this.addScore(180 + ev.hits * 35);
+            const p = this.worldToScreen(ev.x, 2.2, ev.z - 1.0);
+            this.ui.floatText(p.x, p.y, ev.hits > 0 ? `震地轰杀 ×${ev.hits}！` : '震地冲击！', 'gold', 1.12);
+          }
+          break;
+        }
+        case 'REFLECTOR_BOUNCE': {
+          if (Math.random() < 0.45) {
+            fx.burst(ev.x, 0.9, ev.z, 0x7dff6b, 4, { speed: 4.5, size: 0.28, life: 0.22, gravity: 0 });
+          }
+          if (live) a.reflectorBounce();
+          break;
+        }
+        case 'BOUNTY_JACKPOT': {
+          fx.ring(ev.x, ev.z, 0xffc531, 6.2, 0.62);
+          fx.burst(ev.x, 1.2, ev.z, 0xffc531, 105, { speed: 12, size: 0.58, life: 0.8, up: 1.2 });
+          this.renderer.shake(0.36);
+          if (live) {
+            a.achievement();
+            this.ui.doFlash('rgba(255,197,49,0.45)', 0.3);
+            this.addScore(520);
+            const p = this.worldToScreen(ev.x, 2.3, ev.z);
+            this.ui.floatText(p.x, p.y, `★ 悬赏大奖 +${ev.squadGain}人 · 升阶！`, 'gold', 1.25);
+          }
+          break;
+        }
+        case 'BOSS_PART_BREAK': {
+          fx.burst(ev.x, 2.2, ev.z, 0x62f4ff, 110, { speed: 14, size: 0.65, life: 0.82, up: 1.0 });
+          fx.burst(ev.x, 2.2, ev.z, 0xffd84a, 65, { speed: 10, size: 0.52, life: 0.6 });
+          fx.ring(ev.x, ev.z, 0x62f4ff, 7.5, 0.65);
+          this.renderer.shake(0.52);
+          if (live) {
+            a.armorBreak();
+            this.ui.doFlash('rgba(98,244,255,0.55)', 0.35);
+            this.addScore(600);
+            this.ui.showBanner(
+              html`<div class="b-kicker">⚡ ARMOR SHATTERED</div><div class="b-title" style="color:#62f4ff">${ev.label} 击碎！</div><div class="b-sub">首领陷入 4.0 秒 2.0× 破防易伤！全力倾泻弹幕！</div>`,
+              'od',
+              1550,
+            );
+          }
+          break;
+        }
+        case 'DOOM_ORB_SPAWN': {
+          fx.ring(ev.x, ev.z, 0xff2a55, 4.2, 0.5);
+          if (live) {
+            a.hazardCharge();
+            const p = this.worldToScreen(ev.x, 2.6, ev.z);
+            this.ui.floatText(p.x, p.y, `⚠ 湮灭球 ${ev.value} · 集火反击!`, 'gold', 1.05);
+          }
+          break;
+        }
+        case 'DOOM_ORB_REFLECT': {
+          fx.ring(ev.x, ev.z, 0x19f5a8, 5.8, 0.58);
+          fx.burst(ev.x, 1.3, ev.z, 0x19f5a8, 85, { speed: 11.5, size: 0.52, life: 0.7, up: 1.1 });
+          this.renderer.shake(0.3);
+          if (live) {
+            a.orbReflect();
+            this.ui.doFlash('rgba(25,245,168,0.45)', 0.25);
+            this.addScore(350);
+            const p = this.worldToScreen(ev.x, 2.4, ev.z);
+            this.ui.floatText(p.x, p.y, '⚡ 逆转反击！', 'gain', 1.15);
+          }
+          break;
+        }
+        case 'DOOM_ORB_SLAM': {
+          fx.burst(ev.x, 2.2, ev.z, 0x19f5a8, 130, { speed: 15, size: 0.68, life: 0.85, up: 1.0 });
+          fx.burst(ev.x, 2.2, ev.z, 0xffd84a, 70, { speed: 11, size: 0.55, life: 0.65 });
+          fx.ring(ev.x, ev.z, 0xffd84a, 9.2, 0.72);
+          this.renderer.shake(0.65);
+          if (live) {
+            a.explosion(4);
+            this.ui.doFlash('rgba(255,230,110,0.65)', 0.38);
+            this.addScore(650);
+            const p = this.worldToScreen(ev.x, 2.8, ev.z);
+            this.ui.floatText(p.x, p.y, `反击破核 -${ev.damage}！`, 'gold', 1.32);
           }
           break;
         }
@@ -703,7 +884,10 @@ export class Game {
             const activeWeapons = snap.arsenal
               ? Object.values(snap.arsenal).filter((v) => v > 0).length
               : 1;
-            this.ui.rewardBanner(ev.reward, ev.newWeaponLevel, activeWeapons);
+            const unlockedFusion = events.some((x) => x.type === 'FUSION_UNLOCK');
+            if (!unlockedFusion) {
+              this.ui.rewardBanner(ev.reward, ev.newWeaponLevel, activeWeapons);
+            }
             a.powerUp();
             this.ui.doFlash(meta.color, 0.22);
             this.addScore(SCORE.vault);
@@ -760,7 +944,7 @@ export class Game {
           fx.ring(0, -20, 0xff3b5c, 10, 1);
           if (live) {
             const m = BOSS_META[ev.bossId];
-            this.ui.showBanner(html`<div class="b-warn">BOSS</div><div class="b-title">${m.title}</div><div class="b-sub">${m.name} · 击毁核心！</div>`, 'boss', 1600);
+            this.ui.showBanner(html`<div class="b-warn">BOSS</div><div class="b-title">${m.title}</div><div class="b-sub">${m.name} · 破肩甲 + 反击棱球！</div>`, 'boss', 1600);
             a.setMusic(this.sector, 2);
             a.bossPhase();
           }
@@ -770,7 +954,7 @@ export class Game {
           fx.ring(ev.x, ev.z, 0xff3b5c, 9, 0.7);
           this.renderer.shake(0.6);
           if (live) {
-            this.ui.showBanner(html`<div class="b-warn">PHASE ${ev.phase}</div><div class="b-title">首领狂暴化</div><div class="b-sub">${ev.phase === 2 ? '攻势加快，注意红区' : '最终形态！'}</div>`, 'boss', 1400);
+            this.ui.showBanner(html`<div class="b-warn">PHASE ${ev.phase}</div><div class="b-title">首领狂暴化</div><div class="b-sub">${ev.phase === 2 ? '攻势加快，注意红区与棱球' : '最终形态！'}</div>`, 'boss', 1400);
             this.ui.doFlash('rgba(255,255,255,0.8)', 0.4);
             a.bossPhase();
           }
@@ -782,7 +966,7 @@ export class Game {
             a.bossDefeat();
             this.save.bestiaryKills[ev.bossId] = (this.save.bestiaryKills[ev.bossId] ?? 0) + 1;
             const completedWave = Math.max(1, (snap.endless?.wave ?? this.sector) - (this.endless ? 1 : 0));
-            this.addScore(SCORE.bossBase * (this.endless ? completedWave * 2 : this.sector));
+            this.addScore(SCORE.bossBase * (this.endless ? completedWave * 2 : this.blitz ? 2 : this.sector));
             fx.after(1.25, () => this.ui.doFlash('rgba(255,255,255,1)', 0.85));
             this.ui.showBanner(html`<div class="b-kicker">TARGET DESTROYED</div><div class="b-title">首领击破！</div>`, 'reward', this.endless ? 900 : 2000);
           }
@@ -832,21 +1016,32 @@ export class Game {
     this.audio.setFever(false);
     const meta = SECTOR_META[this.sector];
     if (victory) this.addScore(snap.squadCount * SCORE.finalSquadPerUnit);
-    const stars = !this.endless && victory ? 1 + (snap.squadCount >= meta.starSquad[0] ? 1 : 0) + (snap.squadCount >= meta.starSquad[1] ? 1 : 0) : 0;
+    const starThresholds: [number, number] = this.blitz ? [85, 180] : meta.starSquad;
+    const stars =
+      !this.endless && victory
+        ? 1 + (snap.squadCount >= starThresholds[0] ? 1 : 0) + (snap.squadCount >= starThresholds[1] ? 1 : 0)
+        : 0;
     const rec = this.save.records[this.sector];
-    const newBest = this.endless ? this.score > this.save.endless.bestScore : this.score > rec.score;
+    const newBest = this.blitz
+      ? this.score > this.save.blitz.bestScore
+      : this.endless
+        ? this.score > this.save.endless.bestScore
+        : this.score > rec.score;
     const newWaveBest = this.endless && (snap.endless?.wave ?? 1) > this.save.endless.bestWave;
+    const mutBonusPct = computeMutatorBonusPct(snap.mutators);
     const reward = computeCoreReward({
       victory,
       stars,
       score: this.score,
       progress: snap.runwayProgress,
-      firstClear: !this.endless && victory && !rec.cleared,
+      firstClear: this.blitz ? victory && this.save.blitz.clears === 0 : !this.endless && victory && !rec.cleared,
       sector: this.sector,
       bountyLevel: this.save.upgrades.bounty ?? 0,
+      blitz: this.blitz,
+      mutatorBonusPct: mutBonusPct,
     });
     const chInput = { victory, finalSquad: snap.squadCount, bossLoss: this.bossLoss, maxCombo: this.maxCombo, stats: snap.stats };
-    const challenges = (this.endless ? [] : SECTOR_CHALLENGES[this.sector]).map((c) => {
+    const challenges = (this.endless || this.blitz ? [] : SECTOR_CHALLENGES[this.sector]).map((c) => {
       const already = this.save.challenges.includes(c.id);
       const done = already || c.check(chInput);
       const isNew = done && !already;
@@ -858,7 +1053,14 @@ export class Game {
       return { text: c.text, reward: c.reward, done, isNew };
     });
 
-    if (!this.endless && victory) {
+    if (this.blitz) {
+      this.save.blitz.bestScore = Math.max(this.save.blitz.bestScore, this.score);
+      if (victory) {
+        this.save.blitz.clears += 1;
+        this.save.blitz.bestTime =
+          this.save.blitz.bestTime > 0 ? Math.min(this.save.blitz.bestTime, this.runTime) : this.runTime;
+      }
+    } else if (!this.endless && victory) {
       rec.cleared = true;
       rec.stars = Math.max(rec.stars, stars);
       if (this.sector < 4) this.save.unlocked = Math.max(this.save.unlocked, this.sector + 1) as SectorId;
@@ -870,11 +1072,10 @@ export class Game {
       er.bestTime = Math.max(er.bestTime, this.runTime);
       er.bestDistance = Math.max(er.bestDistance, Math.round(snap.endless?.distance ?? 0));
       er.bosses = Math.max(er.bosses, snap.endless?.bosses ?? 0);
-    } else {
+    } else if (!this.blitz) {
       rec.score = Math.max(rec.score, this.score);
     }
 
-    // Evaluate global Achievement Medals
     const totalKills = Object.values(this.save.bestiaryKills).reduce((s, n) => s + n, 0);
     const achCtx = {
       victory: !this.endless && victory,
@@ -904,15 +1105,24 @@ export class Game {
     }
 
     const apexAffordable = isApexUnlocked(this.save.upgrades) && this.save.cores >= getApexCost(this.save.apexLevel ?? 0);
+    const bestShown = this.blitz
+      ? this.save.blitz.bestScore
+      : this.endless
+        ? this.save.endless.bestScore
+        : rec.score;
+
     this.pendingResult = {
       victory,
       sector: this.sector,
+      blitz: this.blitz,
       stars,
       score: this.score,
-      best: this.endless ? this.save.endless.bestScore : rec.score,
+      best: bestShown,
       newBest: newBest && this.score > 0,
       reason,
-      hasNext: !this.endless && victory && this.sector < 4,
+      hasNext: !this.endless && !this.blitz && victory && this.sector < 4,
+      archetype: computeBuildArchetype(snap, this.maxCombo),
+      damageBreakdown: computeDamageBreakdown(snap.damageBySource),
       ...(this.endless
         ? {
             endless: {
@@ -943,7 +1153,7 @@ export class Game {
         maxChain: snap.stats.maxChain,
         peakSquad: snap.stats.peakSquad,
         finalSquad: snap.squadCount,
-        time: this.runTime,
+        time: Math.max(this.runTime, snap.simTime),
       },
     };
     this.state = 'outro';
@@ -1051,7 +1261,6 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ debug / verification hooks
-  /** Deterministically advances the live run with the autopilot (used by automated verification). */
   fastForward(seconds: number, useAutopilot = true): void {
     if (this.state === 'ready') this.beginPlay();
     if (this.state !== 'playing') return;

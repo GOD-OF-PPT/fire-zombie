@@ -55,11 +55,11 @@ test('the markup boundary rejects executable tags, event and URL attributes, CSS
       () => render(host, html`<div style="color:${'#fff;background:url(https://evil.example)'}"></div>`),
       () => html(Object.assign(['<b>', '</b>'], { raw: ['<b>', '</b>'] }), 'unsafe'),
     ];
-    render(host, html`<div style="--pc:${'#f0ac52'};width:${50}%"></div>`);
+    render(host, html`<div style="--pc:${'#f0ac52'};--ac:${'#f0ac52'};width:${50}%;background:${'#f0ac52'}"></div>`);
     const style = host.firstElementChild!.getAttribute('style');
     return { style, rejected: cases.map(run => { try { run(); return false; } catch { return true; } }) };
   });
-  expect(rejected.style).toBe('--pc:#f0ac52;width:50%');
+  expect(rejected.style).toBe('--pc:#f0ac52;--ac:#f0ac52;width:50%;background:#f0ac52');
   expect(rejected.rejected).toEqual([true, true, true, true, true, true, true]);
 });
 

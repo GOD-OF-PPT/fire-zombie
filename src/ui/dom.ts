@@ -17,7 +17,7 @@ function checkStyle(value: string): void {
     const [property, ...parts] = declaration.split(':');
     const name = property!.trim();
     const cssValue = parts.join(':').trim();
-    const color = /^(?:color|--(?:cc|mc|pc|sc))$/.test(name) && /^#[a-f\d]{3,8}$/i.test(cssValue);
+    const color = /^(?:color|background|--(?:cc|mc|pc|sc|ac))$/.test(name) && /^#[a-f\d]{3,8}$/i.test(cssValue);
     const width = name === 'width' && /^-?\d+(?:\.\d+)?%$/.test(cssValue);
     if (!color && !width) throw new TypeError('Unsupported UI style');
   }

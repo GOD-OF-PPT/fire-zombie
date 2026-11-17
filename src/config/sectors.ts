@@ -61,12 +61,36 @@ export interface PrismLensEncounter {
   readonly driftFreq?: number;
 }
 
+export interface JumpPadEncounter {
+  readonly type: 'jump_pad';
+  readonly crossDist: number;
+  readonly x: number;
+}
+
+export interface ReflectorEncounter {
+  readonly type: 'reflector';
+  readonly crossDist: number;
+  readonly x: number;
+  readonly lean: 1 | -1;
+}
+
+export interface ContractLaneEncounter {
+  readonly type: 'contract_lane';
+  readonly crossDist: number;
+  readonly length: number;
+  readonly bountySide: 'left' | 'right';
+  readonly bountyHp: number;
+}
+
 export type RunwayEncounter =
   | GateRowEncounter
   | VaultEncounter
   | EnemyGroupEncounter
   | BarrelClusterEncounter
-  | PrismLensEncounter;
+  | PrismLensEncounter
+  | JumpPadEncounter
+  | ReflectorEncounter
+  | ContractLaneEncounter;
 
 export interface BossConfig {
   readonly id: BossId;
@@ -366,11 +390,22 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
     right: { op: 'sub', value: 14, mutable: false },
   },
   {
+    type: 'reflector',
+    crossDist: 468,
+    x: -3.5,
+    lean: 1,
+  },
+  {
     type: 'lens',
     crossDist: 534,
     x: 2.4,
     driftAmp: 0.6,
     driftFreq: 1.1,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 668,
+    x: -3.2,
   },
   {
     type: 'enemies',
@@ -733,11 +768,22 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
     right: { op: 'sub', value: 1, mutable: true, damagePerStep: 16, stepDelta: 2, maxValue: 12 },
   },
   {
+    type: 'reflector',
+    crossDist: 492,
+    x: -3.5,
+    lean: 1,
+  },
+  {
     type: 'lens',
     crossDist: 564,
     x: 2.5,
     driftAmp: 0.7,
     driftFreq: 1.2,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 816,
+    x: -3.2,
   },
   {
     type: 'enemies',
@@ -1129,6 +1175,17 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
     layout: 'paired',
     left: { op: 'sub', value: 4, mutable: true, damagePerStep: 22, stepDelta: 3, maxValue: 20 },
     right: { op: 'add', value: 12, mutable: false },
+  },
+  {
+    type: 'reflector',
+    crossDist: 662,
+    x: 3.5,
+    lean: -1,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 966,
+    x: 3.2,
   },
   {
     type: 'lens',

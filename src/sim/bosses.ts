@@ -15,6 +15,7 @@ import { clamp, clampSquadCount, normalizeZero } from './math';
 import { addResonance } from './resonance';
 import { advanceEndlessStage } from './endless';
 import { mitigateLossWithAegis } from './aegis';
+import { createBossShoulderParts, hasMutator, spawnDoomOrb, syncBossShoulderParts } from './competition';
 import { spawnPrismLens } from './weapons';
 
 const BOSS_INTRO_DURATION_SEC = 1.2;
@@ -93,6 +94,9 @@ export function spawnSectorBoss(world: SimWorld, events: SimEvent[]): SimBossSta
     secondaryCore: null,
     shielded: initialShielded,
     pylons,
+    parts: createBossShoulderParts(world, bossMaxHp),
+    breakTimer: 0,
+    doomOrbTimer: world.mods.blitz ? 3.2 : 4.6,
     hazardZones: [],
     hitPulse: 0,
     introProgress: 0,
@@ -352,9 +356,10 @@ export function damageBossCore(
     if (!boss.secondaryCore || boss.secondaryCore.shielded) {
       return;
     }
-    // Hydra-02 Phase 2 exposed secondary core takes 1.5x weakpoint damage
+    // Hydra-02 Phase 2 exposed secondary core takes 1.5x weakpoint damage (and 2.0x more during BREAK!)
+    const secBreakMult = boss.breakTimer > 0 ? 2.0 : 1.0;
     boss.hitPulse = 1.0;
-    boss.hp = Math.max(0, boss.hp - rawDamage * 1.5);
+    boss.hp = Math.max(0, boss.hp - rawDamage * 1.5 * secBreakMult);
     checkBossPhaseTransitions(world, events);
     return;
   }
@@ -363,7 +368,7 @@ export function damageBossCore(
     return;
   }
 
-  const weakpointMult = boss.id === 'hydra_02' && boss.phase === 2 ? 1.5 : 1.0;
+  const weakpointMult = (boss.id === 'hydra_02' && boss.phase === 2 ? 1.5 : 1.0) * (boss.breakTimer > 0 ? 2.0 : 1.0);
   boss.hitPulse = 1.0;
   boss.hp = Math.max(0, boss.hp - rawDamage * weakpointMult);
   checkBossPhaseTransitions(world, events);
@@ -440,7 +445,13 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
     boss.introProgress = Math.min(1.0, boss.introProgress + FIXED_DT / BOSS_INTRO_DURATION_SEC);
     const smooth = 1 - Math.pow(1 - boss.introProgress, 2);
     boss.z = BOSS_START_Z + (BOSS_BASE_Z - BOSS_START_Z) * smooth;
+    syncBossShoulderParts(boss);
     return;
+  }
+
+  if (boss.breakTimer > 0) {
+    const nextBt = boss.breakTimer - FIXED_DT;
+    boss.breakTimer = nextBt <= 1e-9 ? 0 : nextBt;
   }
 
   boss.phaseElapsed += FIXED_DT;
@@ -450,7 +461,18 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
   if (enrageAfter !== undefined) {
     boss.enrage = 1 + clamp((boss.fightElapsed - enrageAfter) * BOSS_ENRAGE_RAMP_PER_SEC, 0, BOSS_ENRAGE_MAX - 1);
   }
-  const rageDt = FIXED_DT * boss.enrage;
+  const leftBroken = boss.parts[0]?.destroyed === true;
+  const rightBroken = boss.parts[1]?.destroyed === true;
+  const staggerScale = boss.breakTimer > 0 ? 0.35 : 1.0;
+  const rageDt = FIXED_DT * boss.enrage * staggerScale;
+
+  if (boss.orbTimer < 100 && world.doomOrbs.length === 0) {
+    boss.doomOrbTimer -= rageDt;
+    if (boss.doomOrbTimer <= 0) {
+      spawnDoomOrb(world, boss, _events);
+      boss.doomOrbTimer = world.mods.blitz ? 5.6 : 6.8;
+    }
+  }
 
   // Update active BossHazardZones
   for (let i = boss.hazardZones.length - 1; i >= 0; i--) {
@@ -479,7 +501,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.hazardTimer = 3.1;
       }
 
-      boss.summonTimer -= rageDt;
+      boss.summonTimer -= rageDt * (rightBroken ? 0.45 : 1.0);
       if (boss.summonTimer <= 0) {
         for (const [ox, oz] of [[-2.4, 2.8], [-1.2, 2.1], [0, 1.6], [1.2, 2.1], [2.4, 2.8], [-0.6, 3.2], [0.6, 3.2]] as const) {
           spawnEnemy(world, 'crawler', clamp(boss.x + ox, -3.6, 3.6), boss.z + oz, { hp: 5 });
@@ -493,7 +515,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.lensTimer = 10.5;
       }
 
-      boss.orbTimer -= rageDt;
+      boss.orbTimer -= rageDt * (leftBroken ? 0.42 : 1.0);
       if (boss.orbTimer <= 0) {
         spawnHostileOrb(world, boss.x - 0.9, boss.z + 1.5, 0, 18.0, 5);
         spawnHostileOrb(world, boss.x + 0.9, boss.z + 1.5, 0, 18.0, 5);
@@ -509,7 +531,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.hazardTimer = 2.3;
       }
 
-      boss.summonTimer -= rageDt;
+      boss.summonTimer -= rageDt * (rightBroken ? 0.45 : 1.0);
       if (boss.summonTimer <= 0) {
         for (const [ox, oz] of [[-2.6, 2.6], [-1.4, 1.9], [-0.4, 2.4], [0.4, 2.4], [1.4, 1.9], [2.6, 2.6], [0, 3.3]] as const) {
           spawnEnemy(world, 'crawler', clamp(boss.x + ox, -3.6, 3.6), boss.z + oz, { hp: 5 });
@@ -523,7 +545,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.lensTimer = 9.5;
       }
 
-      boss.orbTimer -= rageDt;
+      boss.orbTimer -= rageDt * (leftBroken ? 0.42 : 1.0);
       if (boss.orbTimer <= 0) {
         spawnHostileOrb(world, boss.x - 0.95, boss.z + 1.5, 0, 19.0, 5);
         spawnHostileOrb(world, boss.x + 0.95, boss.z + 1.5, 0, 19.0, 5);
@@ -543,7 +565,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.hazardTimer = 2.9;
       }
 
-      boss.summonTimer -= rageDt;
+      boss.summonTimer -= rageDt * (rightBroken ? 0.45 : 1.0);
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'mitosis', -2.1, boss.z + 2.0);
         spawnEnemy(world, 'mitosis', 2.1, boss.z + 2.0);
@@ -587,7 +609,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.hazardTimer = 2.5;
       }
 
-      boss.summonTimer -= rageDt;
+      boss.summonTimer -= rageDt * (rightBroken ? 0.45 : 1.0);
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'mitosis', -2.2, -17.5);
         spawnEnemy(world, 'mitosis', 2.2, -17.5);
@@ -609,7 +631,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.hazardTimer = 2.8;
       }
 
-      boss.summonTimer -= rageDt;
+      boss.summonTimer -= rageDt * (rightBroken ? 0.45 : 1.0);
       if (boss.summonTimer <= 0) {
         for (const [sx, sz] of [[-2.8, -17.2], [-1.7, -17.5], [-0.6, -17.8], [0.6, -17.8], [1.7, -17.5], [2.8, -17.2], [0, -16.6]] as const) {
           spawnEnemy(world, 'crawler', sx, sz, { hp: 5 });
@@ -626,7 +648,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.hazardTimer = 2.6;
       }
 
-      boss.summonTimer -= rageDt;
+      boss.summonTimer -= rageDt * (rightBroken ? 0.45 : 1.0);
       if (boss.summonTimer <= 0) {
         spawnEnemy(world, 'dasher', -2.6, -21.5);
         spawnEnemy(world, 'dasher', 2.6, -21.5);
@@ -643,7 +665,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
         boss.lensTimer = 9.2;
       }
 
-      boss.orbTimer -= rageDt;
+      boss.orbTimer -= rageDt * (leftBroken ? 0.42 : 1.0);
       if (boss.orbTimer <= 0) {
         spawnHostileOrb(world, boss.x - 1.0, boss.z + 1.5, 0, 19.5, 6);
         spawnHostileOrb(world, boss.x + 1.0, boss.z + 1.5, 0, 19.5, 6);
@@ -669,6 +691,7 @@ export function stepBossAI(world: SimWorld, _events: SimEvent[]): void {
       }
     }
   }
+  syncBossShoulderParts(boss);
 }
 
 /**
@@ -731,6 +754,7 @@ export function checkBossVictory(world: SimWorld, events: SimEvent[]): boolean {
   });
   return true;
 }
+
 
 /**
  * Step 9b: Evaluates firing BossHazardZones and hostile Boss projectiles against the squad.

@@ -6,6 +6,8 @@ import type {
   GamePhase,
   GateOp,
   GatePolarity,
+  DamageSourceKey,
+  FusionId,
   RewardId,
   RunStats,
   SectorId,
@@ -101,6 +103,7 @@ export interface SimEnemy {
   mitosisGeneration: number;
   bladeHitCooldown: number;
   hitPulse: number;
+  isBountyElite: boolean;
   consumed: boolean;
   bypassed: boolean;
   active: boolean;
@@ -196,6 +199,92 @@ export interface SimBossPylon {
   destroyed: boolean;
 }
 
+export interface SimBossPart {
+  id: number;
+  slot: 'left' | 'right';
+  label: string;
+  prevX: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  halfWidth: number;
+  halfDepth: number;
+  hp: number;
+  maxHp: number;
+  hitPulse: number;
+  destroyed: boolean;
+}
+
+export interface SimDoomOrb {
+  id: number;
+  prevX: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  vz: number;
+  radius: number;
+  value: number;
+  damagePerStep: number;
+  accDamage: number;
+  chargeRatio: number;
+  reflected: boolean;
+  hitPulse: number;
+  active: boolean;
+}
+
+export interface SimSingularity {
+  id: number;
+  x: number;
+  z: number;
+  radius: number;
+  timer: number;
+  maxTimer: number;
+  tickAcc: number;
+}
+
+export interface SimJumpPad {
+  id: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  vz: number;
+  halfWidth: number;
+  halfDepth: number;
+  triggered: boolean;
+  active: boolean;
+}
+
+export interface SimReflector {
+  id: number;
+  prevX: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  vz: number;
+  lean: 1 | -1;
+  halfWidth: number;
+  halfDepth: number;
+  pulse: number;
+  active: boolean;
+}
+
+export interface SimContractWall {
+  id: number;
+  zFront: number;
+  zBack: number;
+  length: number;
+  vz: number;
+  bountySide: 'left' | 'right';
+  active: boolean;
+}
+
+export interface SimSeekerBlade {
+  x: number;
+  z: number;
+  cooldown: number;
+  hunting: boolean;
+}
+
 export interface SimBossSecondaryCore {
   prevX: number;
   prevZ: number;
@@ -225,6 +314,9 @@ export interface SimBossState {
   secondaryCore: SimBossSecondaryCore | null;
   shielded: boolean;
   pylons: SimBossPylon[];
+  parts: SimBossPart[];
+  breakTimer: number;
+  doomOrbTimer: number;
   hazardZones: SimBossHazardZone[];
   hitPulse: number;
   introProgress: number;
@@ -305,6 +397,18 @@ export interface SimWorld {
 
   defeatReason: DefeatReason;
   stats: RunStats;
+
+  squadAirY: number;
+  jumpTimer: number;
+  ricochetsThisTick: number;
+  activeFusions: FusionId[];
+  seekerBlades: SimSeekerBlade[];
+  damageBySource: Record<DamageSourceKey, number>;
+  singularities: SimSingularity[];
+  jumpPads: SimJumpPad[];
+  reflectors: SimReflector[];
+  contractWalls: SimContractWall[];
+  doomOrbs: SimDoomOrb[];
 
   gateRows: SimGateRow[];
   gates: SimGate[];
@@ -496,6 +600,7 @@ export function createEntityPools(): Pick<
       mitosisGeneration: 0,
       bladeHitCooldown: 0,
       hitPulse: 0,
+      isBountyElite: false,
       consumed: false,
       bypassed: false,
       active: false,
@@ -518,6 +623,7 @@ export function createEntityPools(): Pick<
       e.mitosisGeneration = 0;
       e.bladeHitCooldown = 0;
       e.hitPulse = 0;
+      e.isBountyElite = false;
       e.consumed = false;
       e.bypassed = false;
       e.active = false;
