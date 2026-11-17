@@ -45,6 +45,7 @@ import {
 } from './models/gltfLibrary';
 import { buildProceduralLibrary } from './models/proceduralLibrary';
 import { createToonCharMaterial, getOutlineMaterial } from './models/toon';
+import { loadTrialVault } from './models/trialVault';
 
 export const WEAPON_COLOR: Record<WeaponId, number> = {
   pulse: 0x3ef3ff,
@@ -130,7 +131,7 @@ interface VaultView {
   core: THREE.Mesh;
   coreOutline: THREE.Mesh;
   coreMat: THREE.Material;
-  frame: THREE.Mesh;
+  frame: THREE.Object3D;
   ringMat: THREE.MeshBasicMaterial;
   reward: string;
   plate: THREE.Mesh;
@@ -340,6 +341,8 @@ export class Renderer {
   private vaultToonMat = createToonCharMaterial({ rimColor: 0xffffff, rimStrength: 0.55 });
   private fallbackRewardGeos = new Map<string, THREE.BufferGeometry>();
   private vaultFrameGeo!: THREE.BufferGeometry;
+  private trialVault: THREE.Group | null = null;
+  private trialPropSource: 'off' | 'loading' | 'tripo' | 'fallback' = 'off';
   private barrelGeo!: THREE.BufferGeometry;
   private towerMat!: THREE.ShaderMaterial;
   private lensTex: THREE.CanvasTexture;
@@ -355,7 +358,7 @@ export class Renderer {
   private bossBlend = 0;
   private fov = 58;
 
-  constructor(canvas: HTMLCanvasElement, opts: { forceProcedural?: boolean } = {}) {
+  constructor(canvas: HTMLCanvasElement, opts: { forceProcedural?: boolean; trialArt?: boolean } = {}) {
     this.forceProcedural = opts.forceProcedural === true;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -380,10 +383,35 @@ export class Renderer {
     this.initPostProcessing();
     this.setSector(1);
 
-    this.assetsReady = this.loadActorModels().catch((err: unknown) => {
+    const actorsReady = this.loadActorModels().catch((err: unknown) => {
       this.actorModelSource = 'failed';
       console.error('Failed building actor models:', err);
     });
+    this.assetsReady = Promise.all([actorsReady, opts.trialArt ? this.loadTrialProps() : Promise.resolve()]).then(() => undefined);
+  }
+
+  get propSource(): 'off' | 'loading' | 'tripo' | 'fallback' {
+    return this.trialPropSource;
+  }
+
+  private async loadTrialProps(): Promise<void> {
+    this.trialPropSource = 'loading';
+    try {
+      this.trialVault = await withTimeout(loadTrialVault(), 12000, 'Tripo trial prop');
+      this.trialPropSource = 'tripo';
+      for (const view of [...this.vaultViews.values(), ...this.vaultPool]) this.installTrialCasing(view);
+    } catch (err) {
+      this.trialPropSource = 'fallback';
+      console.warn('Tripo trial prop unavailable; retaining the original vault casing.', err);
+    }
+  }
+
+  private installTrialCasing(view: VaultView): void {
+    if (!this.trialVault || view.frame.userData.tripoTrial) return;
+    view.frame.removeFromParent();
+    view.frame = this.trialVault.clone(true);
+    view.group.add(view.frame);
+    view.crystal.visible = false;
   }
 
   /** Which actor models are in use; 'procedural' means the GLB models could not be loaded. */
@@ -1943,6 +1971,7 @@ export class Renderer {
   private acquireVault(): VaultView {
     const pooled = this.vaultPool.pop();
     if (pooled) {
+      this.installTrialCasing(pooled);
       pooled.group.visible = true;
       return pooled;
     }
@@ -1995,7 +2024,7 @@ export class Renderer {
     plate.renderOrder = 4;
     group.add(ring, frame, coreGroup, crystal, plate);
     this.scene.add(group);
-    return {
+    const view: VaultView = {
       id: -1,
       group,
       crystal,
@@ -2013,6 +2042,8 @@ export class Renderer {
       key: '',
       seen: false,
     };
+    this.installTrialCasing(view);
+    return view;
   }
 
   private releaseVault(v: VaultView): void {

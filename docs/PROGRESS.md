@@ -6,7 +6,7 @@
 - 无尽协议新增 4 组「双协议共鸣羁绊」（`src/config/protocols.ts`），三选一界面实时预览即将激活的羁绊。
 - 强化工坊扩充至 6 项基础模块 + 无限等级「奇点超频 Lv.∞」+ 100% 免费重置；新增「战术档案·图鉴勋章」三栏弹窗与 12 项晶核奖励勋章，持久化统计首领与怪物生涯击杀数。
 - 升级 5 色阶卡通着色器、流光跑道着色器、1024×1024 星环巨月天际线、空中飞车航道与探照灯束、角色/首领精细几何造型及 8 小节多轨 Synthwave 配乐。
-- 模拟层全部 50 项单测通过，无头 Chromium WebGL 全流程零报错验证通过，同步输出 `public/playable-v2.html`。
+- 模拟层全部 50 项单测通过，无头 Chromium WebGL 全流程零报错验证通过，同步输出默认单文件入口 `index.html`（原 `playable-v2.html`）。
 
 
 《棱镜蜂群：霓虹协议》 PRISM SWARM: Neon Protocol — 竖屏 3D 跑酷射击（Three.js + Vite + TypeScript）。

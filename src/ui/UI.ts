@@ -19,10 +19,12 @@ import {
   type UpgradeId,
 } from '../app/meta';
 import type { SaveData } from '../app/save';
+import { html, render, type Content } from './dom';
 
 export interface UICallbacks {
   onStart(sector: SectorId): void;
   onEndless(): void;
+  onLeaderboard(): void;
   onProtocol(id: EndlessUpgradeId): void;
   onPause(): void;
   onResume(): void;
@@ -61,10 +63,9 @@ export interface ResultData {
   cores: { total: number; lines: Array<[string, number]>; balance: number; affordable: boolean };
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, html?: string): HTMLElementTagNameMap[K] {
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
-  if (html !== undefined) e.innerHTML = html;
   return e;
 }
 
@@ -141,7 +142,7 @@ export class UI {
     this.title = el('div', 'screen title-screen');
     this.title.dataset.testid = 'title-screen';
     this.title.dataset.uiBlock = '1';
-    this.title.innerHTML = `
+    render(this.title, html`
       <div class="title-top">
         <button class="icon-btn mute-btn" data-testid="mute-btn-title" aria-label="静音">🔊</button>
         <div class="title-ver">NEON PROTOCOL · V2</div>
@@ -154,21 +155,22 @@ export class UI {
         <div class="tagline">拖动蜂群 · 射击金门 · 相位护盾 · 击溃首领</div>
       </div>
       <div class="sector-list" data-testid="sector-list"></div>
-      <button class="endless-card locked" data-testid="endless-btn">
+      <div class="endless-actions"><button class="endless-card locked" data-testid="endless-btn">
         <span class="endless-icon">∞</span>
         <span class="endless-body"><b>无尽协议</b><small>无限阶段 · 双协议羁绊 · 首领轮回</small></span>
         <span class="endless-go">🔒</span>
-      </button>
+      </button><button class="ranking-shortcut" data-testid="leaderboard-btn" aria-label="无尽排行榜">🏆<span>排行</span></button></div>
       <div class="title-row">
         <div class="core-count" data-testid="core-count"><i>${CORE_GLYPH}</i><b>0</b></div>
         <button class="mid-btn codex-btn" data-testid="codex-btn">图鉴勋章 <small class="medal-count">0/12</small></button>
         <button class="mid-btn workshop-btn" data-testid="workshop-btn">强化工坊<i class="dot"></i></button>
       </div>
       <button class="big-btn start-btn" data-testid="start-btn"><span>出击</span></button>
-      <div class="title-foot">拖动 / A D 移动 · 空格 超载 · E 相位脉冲 · X 倍速 · P 暂停</div>`;
+      <div class="title-foot">拖动 / A D 移动 · 空格 超载 · E 相位脉冲 · X 倍速 · P 暂停</div>`);
     this.root.appendChild(this.title);
     this.title.querySelector('.start-btn')!.addEventListener('click', () => this.cb.onStart(this.selected));
     this.title.querySelector('[data-testid=endless-btn]')!.addEventListener('click', () => this.cb.onEndless());
+    this.title.querySelector('[data-testid=leaderboard-btn]')!.addEventListener('click', () => this.cb.onLeaderboard());
     this.title.querySelector('.help-btn')!.addEventListener('click', () => this.showHelp(true));
     this.title.querySelector('.workshop-btn')!.addEventListener('click', () => this.showWorkshop(true));
     this.title.querySelector('.codex-btn')!.addEventListener('click', () => this.showCodex(true));
@@ -180,7 +182,7 @@ export class UI {
   private buildHud(): void {
     this.hud = el('div', 'hud');
     this.hud.dataset.testid = 'hud';
-    this.hud.innerHTML = `
+    render(this.hud, html`
       <div class="hud-top" data-ui-block="1">
         <button class="icon-btn pause-btn" data-testid="pause-btn" aria-label="暂停">❚❚</button>
         <div class="progress" data-testid="progress">
@@ -215,7 +217,7 @@ export class UI {
         <div class="reso" data-testid="resonance"><div class="reso-fill"></div><span>共鸣</span></div>
       </div>
       <div class="combo"></div>
-      <div class="hint" data-testid="drag-hint"><div class="hand">👆</div><div>左右拖动控制蜂群</div></div>`;
+      <div class="hint" data-testid="drag-hint"><div class="hand">👆</div><div>左右拖动控制蜂群</div></div>`);
     this.root.appendChild(this.hud);
     this.progressWrap = this.hud.querySelector('.progress')!;
     this.progressFill = this.hud.querySelector('.progress-fill')!;
@@ -266,7 +268,7 @@ export class UI {
     this.pauseEl = el('div', 'screen modal pause-screen');
     this.pauseEl.dataset.testid = 'pause-screen';
     this.pauseEl.dataset.uiBlock = '1';
-    this.pauseEl.innerHTML = `
+    render(this.pauseEl, html`
       <div class="panel">
         <h2>战术暂停</h2>
         <div class="pause-info"></div>
@@ -274,7 +276,7 @@ export class UI {
         <button class="big-btn" data-testid="resume-btn">继续作战</button>
         <button class="mid-btn" data-testid="restart-btn">重新开始</button>
         <button class="mid-btn ghost" data-testid="home-btn">返回主页</button>
-      </div>`;
+      </div>`);
     this.root.appendChild(this.pauseEl);
     this.pauseEl.querySelector('[data-testid=resume-btn]')!.addEventListener('click', () => this.cb.onResume());
     this.pauseEl.querySelector('[data-testid=restart-btn]')!.addEventListener('click', () => this.cb.onRetry());
@@ -288,7 +290,7 @@ export class UI {
     this.helpEl = el('div', 'screen modal help-screen');
     this.helpEl.dataset.uiBlock = '1';
     this.helpEl.dataset.testid = 'help-screen';
-    this.helpEl.innerHTML = `
+    render(this.helpEl, html`
       <div class="panel help-panel">
         <h2>作战手册</h2>
         <ul class="help-list">
@@ -301,14 +303,14 @@ export class UI {
           <li><i class="hi barrel">🔥</i><div><b>炽热连杀 & 双协议羁绊</b>：连续击杀提升得分倍率（最高 ×2.5）；无尽模式凑齐特定协议组合激活强力共鸣羁绊！</div></li>
         </ul>
         <button class="big-btn" data-testid="help-close">明白了</button>
-      </div>`;
+      </div>`);
     this.root.appendChild(this.helpEl);
     this.helpEl.querySelector('[data-testid=help-close]')!.addEventListener('click', () => this.showHelp(false));
 
     this.workshopEl = el('div', 'screen modal workshop-screen');
     this.workshopEl.dataset.uiBlock = '1';
     this.workshopEl.dataset.testid = 'workshop-screen';
-    this.workshopEl.innerHTML = `
+    render(this.workshopEl, html`
       <div class="panel ws-panel">
         <div class="ws-head">
           <h2>强化工坊</h2>
@@ -318,7 +320,7 @@ export class UI {
         <div class="ws-list"></div>
         <div class="ws-note">每局结算与解锁勋章均奖励晶核；任意模块满级后解锁「奇点超频 Lv.∞」。</div>
         <button class="big-btn" data-testid="workshop-close">返回</button>
-      </div>`;
+      </div>`);
     this.root.appendChild(this.workshopEl);
     this.workshopEl.querySelector('[data-testid=workshop-close]')!.addEventListener('click', () => this.showWorkshop(false));
     this.workshopEl.querySelector('[data-testid=respec-btn]')!.addEventListener('click', () => this.cb.onRespec());
@@ -326,7 +328,7 @@ export class UI {
     this.codexEl = el('div', 'screen modal codex-screen');
     this.codexEl.dataset.uiBlock = '1';
     this.codexEl.dataset.testid = 'codex-screen';
-    this.codexEl.innerHTML = `
+    render(this.codexEl, html`
       <div class="panel codex-panel">
         <h2>战术档案 · 勋章</h2>
         <div class="codex-tabs">
@@ -336,7 +338,7 @@ export class UI {
         </div>
         <div class="codex-body"></div>
         <button class="big-btn" data-testid="codex-close">返回</button>
-      </div>`;
+      </div>`);
     this.root.appendChild(this.codexEl);
     this.codexEl.querySelector('[data-testid=codex-close]')!.addEventListener('click', () => this.showCodex(false));
     this.codexEl.querySelectorAll<HTMLButtonElement>('.codex-tab').forEach((btn) => {
@@ -363,7 +365,7 @@ export class UI {
     const body = this.codexEl.querySelector('.codex-body')!;
     if (this.codexTab === 'arsenal') {
       const weaponIds: RewardId[] = ['pulse', 'scatter', 'rail', 'plasma', 'cryo', 'blades'];
-      body.innerHTML = weaponIds
+      render(body, weaponIds
         .map((id) => {
           const m = REWARD_META[id];
           const statLine =
@@ -375,7 +377,7 @@ export class UI {
                   const l3 = cfg.levels[2];
                   return `射速 ${l1.shotsPerSecond}→${l3.shotsPerSecond}/s · 倍率 ×${l1.dpsMult.toFixed(2)}→×${l3.dpsMult.toFixed(2)}`;
                 })();
-          return `<div class="cx-card" style="--cc:${m.color}">
+          return html`<div class="cx-card" style="--cc:${m.color}">
             <div class="cx-icon">${m.glyph}</div>
             <div class="cx-main">
               <div class="cx-title"><b>${m.name}</b><span>${m.short}武装</span></div>
@@ -383,14 +385,13 @@ export class UI {
               <div class="cx-meta"><em>克制：${m.counters}</em><small>${statLine}</small></div>
             </div>
           </div>`;
-        })
-        .join('');
+        }));
     } else if (this.codexTab === 'bestiary') {
       const enemyCards = (Object.keys(ENEMY_META) as Array<keyof typeof ENEMY_META>)
         .map((k) => {
           const m = ENEMY_META[k];
           const kills = save.bestiaryKills?.[k] ?? 0;
-          return `<div class="cx-card" style="--cc:${m.hex}">
+          return html`<div class="cx-card" style="--cc:${m.hex}">
             <div class="cx-icon">👾</div>
             <div class="cx-main">
               <div class="cx-title"><b>${m.name}</b><span>${m.role} · 已歼灭 ${kills}</span></div>
@@ -398,13 +399,12 @@ export class UI {
               <div class="cx-meta"><em>弱点：${m.weakness}</em></div>
             </div>
           </div>`;
-        })
-        .join('');
+        });
       const bossCards = (Object.keys(BOSS_META) as Array<keyof typeof BOSS_META>)
         .map((k) => {
           const b = BOSS_META[k];
           const kills = save.bestiaryKills?.[k] ?? 0;
-          return `<div class="cx-card boss" style="--cc:${b.color}">
+          return html`<div class="cx-card boss" style="--cc:${b.color}">
             <div class="cx-icon">☠</div>
             <div class="cx-main">
               <div class="cx-title"><b>${b.title} · ${b.name}</b><span>${b.phases} 阶段首领 · 已讨伐 ${kills}</span></div>
@@ -412,21 +412,20 @@ export class UI {
               <div class="cx-meta"><em>战术：${b.counterTip}</em></div>
             </div>
           </div>`;
-        })
-        .join('');
-      body.innerHTML = `<div class="cx-sec">首领档案</div>${bossCards}<div class="cx-sec">感染体档案</div>${enemyCards}`;
+        });
+      render(body, html`<div class="cx-sec">首领档案</div>${bossCards}<div class="cx-sec">感染体档案</div>${enemyCards}`);
     } else {
       const unlockedSet = new Set(save.achievements ?? []);
-      body.innerHTML = ACHIEVEMENTS.map((a) => {
+      render(body, ACHIEVEMENTS.map((a) => {
         const done = unlockedSet.has(a.id);
-        return `<div class="cx-card medal${done ? ' done' : ''}" style="--cc:${a.color}">
+        return html`<div class="cx-card medal${done ? ' done' : ''}" style="--cc:${a.color}">
           <div class="cx-icon">${done ? a.glyph : '🔒'}</div>
           <div class="cx-main">
             <div class="cx-title"><b>${a.name}</b><span class="cx-rw">${done ? '✓ 已达成' : `+${CORE_GLYPH}${a.reward}`}</span></div>
             <div class="cx-desc">${a.desc}</div>
           </div>
         </div>`;
-      }).join('');
+      }));
     }
   }
 
@@ -454,7 +453,7 @@ export class UI {
     respecBtn.disabled = totalSpent <= 0;
 
     const list = this.workshopEl.querySelector('.ws-list')!;
-    list.innerHTML = '';
+    render(list, '');
     for (const u of UPGRADES) {
       const lv = save.upgrades[u.id] ?? 0;
       const maxed = lv >= u.max;
@@ -462,14 +461,14 @@ export class UI {
       const can = !maxed && save.cores >= cost;
       const row = el('div', `ws-row${boughtId === u.id ? ' bought' : ''}`);
       row.style.setProperty('--uc', u.color);
-      row.innerHTML = `
+      render(row, html`
         <div class="ws-glyph">${u.glyph}</div>
         <div class="ws-body">
           <div class="ws-name">${u.name} <small>Lv${lv}</small></div>
-          <div class="ws-eff">${lv > 0 ? u.effect(lv) : '未强化'}${maxed ? '' : ` <em>→ ${u.effect(lv + 1)}</em>`}</div>
-          <div class="ws-pips">${Array.from({ length: u.max }, (_, i) => `<i class="${i < lv ? 'on' : ''}"></i>`).join('')}</div>
+          <div class="ws-eff">${lv > 0 ? u.effect(lv) : '未强化'}${maxed ? '' : html` <em>→ ${u.effect(lv + 1)}</em>`}</div>
+          <div class="ws-pips">${Array.from({ length: u.max }, (_, i) => html`<i class="${i < lv ? 'on' : ''}"></i>`)}</div>
         </div>
-        <button class="ws-buy${can ? '' : ' off'}" data-testid="buy-${u.id}" ${maxed ? 'disabled' : ''}>${maxed ? '已满级' : `${CORE_GLYPH} ${cost}`}</button>`;
+        <button class="ws-buy${can ? '' : ' off'}" data-testid="buy-${u.id}" disabled="${maxed}">${maxed ? '已满级' : `${CORE_GLYPH} ${cost}`}</button>`);
       row.querySelector('button')!.addEventListener('click', () => {
         if (can) this.cb.onBuy(u.id);
         else if (!maxed) {
@@ -485,19 +484,19 @@ export class UI {
     const apexCan = apexUnlocked && save.cores >= apexCost;
     const apexRow = el('div', `ws-row apex-row${boughtId === 'apex' ? ' bought' : ''}${apexUnlocked ? '' : ' locked'}`);
     apexRow.style.setProperty('--uc', '#ffd84a');
-    apexRow.innerHTML = `
+    render(apexRow, html`
       <div class="ws-glyph">۞</div>
       <div class="ws-body">
         <div class="ws-name">奇点超频 <small>${apexUnlocked ? `Lv.${apexLv} (∞)` : '需任一模块满级'}</small></div>
         <div class="ws-eff">${
           apexUnlocked
-            ? `全伤害 +${apexLv * 4}% · 开局 +${apexLv} 人 <em>→ +${(apexLv + 1) * 4}% / +${apexLv + 1} 人</em>`
+            ? html`全伤害 +${apexLv * 4}% · 开局 +${apexLv} 人 <em>→ +${(apexLv + 1) * 4}% / +${apexLv + 1} 人</em>`
             : '任意基础强化升至 Lv5 后解锁无限等级突破'
         }</div>
       </div>
-      <button class="ws-buy${apexCan ? '' : ' off'}" data-testid="buy-apex" ${apexUnlocked ? '' : 'disabled'}>${
+      <button class="ws-buy${apexCan ? '' : ' off'}" data-testid="buy-apex" disabled="${!apexUnlocked}">${
         apexUnlocked ? `${CORE_GLYPH} ${apexCost}` : '🔒 未解锁'
-      }</button>`;
+      }</button>`);
     apexRow.querySelector('button')!.addEventListener('click', () => {
       if (apexCan) this.cb.onBuyApex();
       else if (apexUnlocked) {
@@ -526,21 +525,21 @@ export class UI {
 
   private renderSectorList(save: SaveData): void {
     const list = this.title.querySelector('.sector-list')!;
-    list.innerHTML = '';
+    render(list, '');
     for (const id of [1, 2, 3, 4] as SectorId[]) {
       const meta = SECTOR_META[id];
       const rec = save.records[id];
       const locked = id > save.unlocked;
       const card = el('button', `sector-card s${id}${locked ? ' locked' : ''}${this.selected === id ? ' sel' : ''}`);
       card.dataset.testid = `sector-${id}`;
-      card.innerHTML = `
+      render(card, html`
         <div class="sc-num">0${id}</div>
         <div class="sc-body">
-          <div class="sc-name">${meta.name} ${rec.score > 0 ? `<small class="sc-hi">${rec.score.toLocaleString('en-US')} 分</small>` : ''}</div>
+          <div class="sc-name">${meta.name} ${rec.score > 0 ? html`<small class="sc-hi">${rec.score.toLocaleString('en-US')} 分</small>` : ''}</div>
           <div class="sc-boss">首领 · ${meta.bossTitle}</div>
-          ${!locked && this.selected === id ? `<div class="sc-ch">${SECTOR_CHALLENGES[id].map((c) => `<span class="${save.challenges.includes(c.id) ? 'ok' : ''}">${save.challenges.includes(c.id) ? '✓' : '○'} ${c.text}</span>`).join('')}</div>` : ''}
+          ${!locked && this.selected === id ? html`<div class="sc-ch">${SECTOR_CHALLENGES[id].map((c) => html`<span class="${save.challenges.includes(c.id) ? 'ok' : ''}">${save.challenges.includes(c.id) ? '✓' : '○'} ${c.text}</span>`)}</div>` : ''}
         </div>
-        <div class="sc-stars">${locked ? '🔒' : [0, 1, 2].map((i) => `<span class="${i < rec.stars ? 'on' : ''}">★</span>`).join('')}</div>`;
+        <div class="sc-stars">${locked ? '🔒' : [0, 1, 2].map((i) => html`<span class="${i < rec.stars ? 'on' : ''}">★</span>`)}</div>`);
       if (!locked) {
         card.addEventListener('click', () => {
           this.selected = id;
@@ -596,7 +595,7 @@ export class UI {
       .map(([id, level]) => `${PROTOCOLS[id as EndlessUpgradeId].name} ×${level}`)
       .join(' · ');
 
-    this.protocolEl.innerHTML = `<div class="panel protocol-panel">
+    render(this.protocolEl, html`<div class="panel protocol-panel">
       <div class="protocol-kicker">STAGE ${run.wave - 1} CLEARED</div>
       <h2>选择你的进化</h2>
       <p class="protocol-lead">首领已击破。安装一项协议，构筑共鸣羁绊。</p>
@@ -609,26 +608,24 @@ export class UI {
             (s) => s.active(nextUpgrades) && !s.active(run.upgrades),
           );
           const synBadge = newlyUnlocked.length
-            ? `<em class="syn-unlock">✦ 激活羁绊「${newlyUnlocked.map((s) => s.name).join(' / ')}」</em>`
+            ? html`<em class="syn-unlock">✦ 激活羁绊「${newlyUnlocked.map((s) => s.name).join(' / ')}」</em>`
             : '';
-          return `<button class="protocol-choice" style="--pc:${p.color}" data-protocol="${id}" data-testid="protocol-${id}">
+          return html`<button class="protocol-choice" style="--pc:${p.color}" data-protocol="${id}" data-testid="protocol-${id}">
             <span class="protocol-glyph">${p.glyph}</span>
             <span class="protocol-copy"><small>${p.tag} · Lv.${level}</small><b>${p.name}</b><span>${p.description}</span>${synBadge}</span>
             <i>${i + 1}</i>
           </button>`;
-        })
-        .join('')}</div>
+        })}</div>
       ${
         currentSynergies.length
-          ? `<div class="protocol-synergies">${currentSynergies
-              .map((s) => `<span style="--sc:${s.color}" title="${s.effectText}">${s.glyph} ${s.name}</span>`)
-              .join('')}</div>`
+          ? html`<div class="protocol-synergies">${currentSynergies
+              .map((s) => html`<span style="--sc:${s.color}" title="${s.effectText}">${s.glyph} ${s.name}</span>`)}</div>`
           : ''
       }
       <div class="protocol-next"><span>下一战场 / 阶段 ${run.wave}</span><b>${threat.glyph} ${threat.name}</b><small>${threat.description}</small></div>
-      ${installed ? `<div class="protocol-installed">已安装：${installed}</div>` : ''}
+      ${installed ? html`<div class="protocol-installed">已安装：${installed}</div>` : ''}
       <div class="protocol-note">选择后继续 · 强化仅本局有效 · 键盘 1 / 2 / 3</div>
-    </div>`;
+    </div>`);
     this.protocolEl.querySelectorAll<HTMLButtonElement>('[data-protocol]').forEach((b) => {
       b.addEventListener('click', () => this.cb.onProtocol(b.dataset.protocol as EndlessUpgradeId));
     });
@@ -677,16 +674,16 @@ export class UI {
     this.pauseEl.classList.toggle('show', v);
     if (v && snap) {
       const w = REWARD_META[snap.weapon];
-      this.pauseEl.querySelector('.pause-info')!.innerHTML = `
+      render(this.pauseEl.querySelector('.pause-info')!, html`
         <div><span>蜂群</span><b>${snap.squadCount}</b></div>
         <div><span>武器</span><b style="color:${w.color}">${w.name} Lv${snap.weaponLevel}</b></div>
         <div><span>实时DPS</span><b>${Math.round(snap.trueSquadDps)}</b></div>
-        <div><span>${snap.endless ? '无尽阶段' : '进度'}</span><b>${snap.endless ? `${snap.endless.wave} · ${Math.round(snap.endless.distance)}m` : `${Math.round(snap.runwayProgress * 100)}%`}</b></div>`;
+        <div><span>${snap.endless ? '无尽阶段' : '进度'}</span><b>${snap.endless ? `${snap.endless.wave} · ${Math.round(snap.endless.distance)}m` : `${Math.round(snap.runwayProgress * 100)}%`}</b></div>`);
       const synEl = this.pauseEl.querySelector('.pause-synergies')!;
       const syns = getActiveSynergies(snap.endless?.upgrades);
-      synEl.innerHTML = syns.length
-        ? syns.map((s) => `<span style="--sc:${s.color}">${s.glyph} ${s.name}：${s.effectText}</span>`).join('')
-        : '';
+      render(synEl, syns.length
+        ? syns.map((s) => html`<span style="--sc:${s.color}">${s.glyph} ${s.name}：${s.effectText}</span>`)
+        : '');
     }
   }
 
@@ -739,7 +736,7 @@ export class UI {
     if (wkey !== this.lastWeaponKey) {
       this.lastWeaponKey = wkey;
       const w = REWARD_META[snap.weapon];
-      this.weaponChip.innerHTML = `<span class="g" style="color:${w.color}">${w.glyph}</span><span class="n">${w.name}</span><span class="lv">${[1, 2, 3].map((i) => `<i class="${i <= snap.weaponLevel ? 'on' : ''}"></i>`).join('')}</span>`;
+      render(this.weaponChip, html`<span class="g" style="color:${w.color}">${w.glyph}</span><span class="n">${w.name}</span><span class="lv">${[1, 2, 3].map((i) => html`<i class="${i <= snap.weaponLevel ? 'on' : ''}"></i>`)}</span>`);
       this.weaponChip.style.setProperty('--wc', w.color);
       this.weaponChip.classList.remove('pop');
       void this.weaponChip.offsetWidth;
@@ -754,7 +751,7 @@ export class UI {
 
     if (snap.bladesCount > 0) {
       this.bladesChip.classList.add('show');
-      this.bladesChip.innerHTML = `<span class="g">✦</span>环轨刃 ×${snap.bladesCount}`;
+      render(this.bladesChip, html`<span class="g">✦</span>环轨刃 ×${snap.bladesCount}`);
     } else {
       this.bladesChip.classList.remove('show');
     }
@@ -799,7 +796,7 @@ export class UI {
       const enraged = (b.enrage ?? 1) > 1;
       this.bossName.textContent = `${meta.name}《${meta.title}》${enraged ? ' · 狂暴' : ''}`;
       this.bossBar.classList.toggle('enraged', enraged);
-      this.bossPhase.innerHTML = Array.from({ length: b.maxPhases }, (_, i) => `<i class="${i < b.phase ? 'on' : ''}"></i>`).join('');
+      render(this.bossPhase, Array.from({ length: b.maxPhases }, (_, i) => html`<i class="${i < b.phase ? 'on' : ''}"></i>`));
       this.bossFill.style.width = `${Math.max(0, (b.hp / b.maxHp) * 100).toFixed(2)}%`;
       this.bossBar.classList.toggle('shielded', b.shielded && !b.secondaryCore);
     } else if (!b) {
@@ -855,9 +852,9 @@ export class UI {
     }
   }
 
-  showBanner(html: string, cls: string, ms = 1600): void {
+  showBanner(html: Content, cls: string, ms = 1600): void {
     this.banner.className = `banner ${cls}`;
-    this.banner.innerHTML = html;
+    render(this.banner, html);
     void this.banner.offsetWidth;
     this.banner.classList.add('show');
     if (this.bannerTimer !== null) clearTimeout(this.bannerTimer);
@@ -874,7 +871,7 @@ export class UI {
     const m = REWARD_META[reward];
     const lvl = reward === 'blades' ? `×${level}` : `Lv${level}`;
     this.showBanner(
-      `<div class="b-kicker">${reward === 'blades' ? '护卫展开' : level > 1 ? '武器升级' : '获得武器'}</div>
+      html`<div class="b-kicker">${reward === 'blades' ? '护卫展开' : level > 1 ? '武器升级' : '获得武器'}</div>
        <div class="b-title" style="color:${m.color}">${m.glyph} ${m.name} ${lvl}</div>
        <div class="b-sub">${m.desc}</div>`,
       'reward',
@@ -884,14 +881,14 @@ export class UI {
 
   bossWarning(name: string, title: string): void {
     this.showBanner(
-      `<div class="b-warn">⚠ WARNING ⚠</div><div class="b-title">${title}</div><div class="b-sub">${name} 正在接近</div>`,
+      html`<div class="b-warn">⚠ WARNING ⚠</div><div class="b-title">${title}</div><div class="b-sub">${name} 正在接近</div>`,
       'boss',
       2300,
     );
   }
 
-  toast(text: string, ms = 2600): void {
-    this.toastEl.innerHTML = text;
+  toast(text: Content, ms = 2600): void {
+    render(this.toastEl, text);
     this.toastEl.classList.remove('show');
     void this.toastEl.offsetWidth;
     this.toastEl.classList.add('show');
@@ -900,7 +897,7 @@ export class UI {
   }
 
   combo(n: number): void {
-    this.comboEl.innerHTML = `<b>${n}</b> 连杀`;
+    render(this.comboEl, html`<b>${n}</b> 连杀`);
     this.comboEl.classList.remove('show');
     void this.comboEl.offsetWidth;
     this.comboEl.classList.add('show');
@@ -936,23 +933,22 @@ export class UI {
     const isEndless = r.endless !== undefined;
     const medalsHtml =
       r.unlockedMedals && r.unlockedMedals.length
-        ? `<div class="r-medals">${r.unlockedMedals
-            .map((m) => `<span style="--mc:${m.color}">${m.glyph} 勋章「${m.name}」+${CORE_GLYPH}${m.reward}</span>`)
-            .join('')}</div>`
+        ? html`<div class="r-medals">${r.unlockedMedals
+            .map((m) => html`<span style="--mc:${m.color}">${m.glyph} 勋章「${m.name}」+${CORE_GLYPH}${m.reward}</span>`)}</div>`
         : '';
-    this.resultEl.innerHTML = `
+    render(this.resultEl, html`
       <div class="panel result-panel ${r.victory ? 'win' : 'lose'}">
         <div class="r-kicker">${isEndless ? 'ENDLESS PROTOCOL · 无尽协议' : meta.subtitle}</div>
         <h2 class="r-title">${isEndless ? '无尽信号中断' : r.victory ? (finale ? '奇点终结 · 全线通关' : '区域突破') : '蜂群信号丢失'}</h2>
-        ${r.victory ? `<div class="stars">${[0, 1, 2].map((i) => `<span class="star" data-i="${i}">★</span>`).join('')}</div>` : `
+        ${r.victory ? html`<div class="stars">${[0, 1, 2].map((i) => html`<span class="star" data-i="${i}">★</span>`)}</div>` : html`
           <div class="defeat-box" data-testid="defeat-reason">
             <div class="d-title">${reason?.title ?? ''}</div>
             <div class="d-tip">💡 ${reason?.tip ?? ''}</div>
-            ${r.bossHpFrac !== null ? `<div class="d-prog boss"><div style="width:${Math.round(r.bossHpFrac * 100)}%"></div><span>首领剩余血量 ${Math.max(1, Math.round(r.bossHpFrac * 100))}%${r.bossHpFrac < 0.35 ? ' · 差一点！' : ''}</span></div>` : `<div class="d-prog"><div style="width:${Math.round(r.progress * 100)}%"></div><span>推进 ${Math.round(r.progress * 100)}%</span></div>`}
+            ${r.bossHpFrac !== null ? html`<div class="d-prog boss"><div style="width:${Math.round(r.bossHpFrac * 100)}%"></div><span>首领剩余血量 ${Math.max(1, Math.round(r.bossHpFrac * 100))}%${r.bossHpFrac < 0.35 ? ' · 差一点！' : ''}</span></div>` : html`<div class="d-prog"><div style="width:${Math.round(r.progress * 100)}%"></div><span>推进 ${Math.round(r.progress * 100)}%</span></div>`}
           </div>`}
-        <div class="r-score"><span>得分</span><b data-testid="result-score">0</b>${r.newBest ? '<em>新纪录!</em>' : `<small>最佳 ${r.best.toLocaleString('en-US')}</small>`}</div>
+        <div class="r-score"><span>得分</span><b data-testid="result-score">0</b>${r.newBest ? html`<em>新纪录!</em>` : html`<small>最佳 ${r.best.toLocaleString('en-US')}</small>`}</div>
         <div class="r-stats">
-          ${r.endless ? `
+          ${r.endless ? html`
             <div class="r-endless-wave"><span>抵达阶段${r.endless.newWaveBest ? ' · 新纪录' : ''}</span><b data-testid="result-wave">${r.endless.wave}</b></div>
             <div><span>击破首领</span><b>${r.endless.bosses}</b></div>
             <div><span>推进距离</span><b>${Math.round(r.endless.distance)}m</b></div>
@@ -960,7 +956,7 @@ export class UI {
             <div><span>击杀</span><b>${r.stats.kills}</b></div>
             <div><span>峰值蜂群</span><b>${r.stats.peakSquad}</b></div>
             <div><span>最高连杀</span><b>${r.maxCombo}</b></div>
-            <div><span>存活时间</span><b>${mm}:${ss}</b></div>` : `
+            <div><span>存活时间</span><b>${mm}:${ss}</b></div>` : html`
             <div><span>剩余蜂群</span><b data-testid="result-squad">${r.stats.finalSquad}</b></div>
             <div><span>峰值蜂群</span><b>${r.stats.peakSquad}</b></div>
             <div><span>击杀</span><b>${r.stats.kills}</b></div>
@@ -971,19 +967,20 @@ export class UI {
             <div><span>用时</span><b>${mm}:${ss}</b></div>`}
         </div>
         ${medalsHtml}
-        <div class="r-ch" data-testid="result-challenges">${r.challenges.map((c) => `<div class="${c.done ? 'ok' : ''}${c.isNew ? ' new' : ''}"><i>${c.done ? '✓' : '○'}</i>${c.text}<b>${c.isNew ? `+${c.reward}` : c.done ? '已完成' : `${CORE_GLYPH}${c.reward}`}</b></div>`).join('')}</div>
+        <div class="r-ch" data-testid="result-challenges">${r.challenges.map((c) => html`<div class="${c.done ? 'ok' : ''}${c.isNew ? ' new' : ''}"><i>${c.done ? '✓' : '○'}</i>${c.text}<b>${c.isNew ? `+${c.reward}` : c.done ? '已完成' : `${CORE_GLYPH}${c.reward}`}</b></div>`)}</div>
         <div class="r-cores" data-testid="result-cores">
           <div class="rc-main"><i>${CORE_GLYPH}</i> +<b>${r.cores.total}</b> 晶核 <small>（共 ${r.cores.balance.toLocaleString('en-US')}）</small></div>
-          <div class="rc-lines">${r.cores.lines.filter(([k]) => !k.startsWith('挑战·') && !k.startsWith('勋章·')).map(([k, v]) => `<span>${k} +${v}</span>`).join('')}${r.challenges.some((c) => c.isNew) ? '<span>挑战奖励（见上）</span>' : ''}</div>
-          ${r.cores.affordable ? '<div class="rc-tip">可在主页「强化工坊」升级蜂群！</div>' : ''}
+          <div class="rc-lines">${r.cores.lines.filter(([k]) => !k.startsWith('挑战·') && !k.startsWith('勋章·')).map(([k, v]) => html`<span>${k} +${v}</span>`)}${r.challenges.some((c) => c.isNew) ? html`<span>挑战奖励（见上）</span>` : ''}</div>
+          ${r.cores.affordable ? html`<div class="rc-tip">可在主页「强化工坊」升级蜂群！</div>` : ''}
         </div>
-        ${r.victory ? `<div class="r-goal">★★ 剩余 ≥ ${meta.starSquad[0]}　★★★ 剩余 ≥ ${meta.starSquad[1]}</div>` : ''}
+        ${r.victory ? html`<div class="r-goal">★★ 剩余 ≥ ${meta.starSquad[0]}　★★★ 剩余 ≥ ${meta.starSquad[1]}</div>` : ''}
+        ${isEndless ? html`<div class="result-ranking" data-testid="result-ranking"></div>` : ''}
         <div class="r-btns">
-          ${r.hasNext ? '<button class="big-btn" data-testid="next-btn">下一关 ▶</button>' : ''}
+          ${r.hasNext ? html`<button class="big-btn" data-testid="next-btn">下一关 ▶</button>` : ''}
           <button class="${r.hasNext ? 'mid-btn' : 'big-btn'}" data-testid="retry-btn">${isEndless ? '再战无尽' : r.victory ? (r.sector === 4 ? '新布局再战' : '再战一次') : '重新挑战'}</button>
           <button class="mid-btn ghost" data-testid="result-home-btn">返回主页</button>
         </div>
-      </div>`;
+      </div>`);
     this.resultEl.classList.add('show');
     this.resultEl.querySelector('[data-testid=next-btn]')?.addEventListener('click', () => this.cb.onNext());
     this.resultEl.querySelector('[data-testid=retry-btn]')!.addEventListener('click', () => this.cb.onRetry());

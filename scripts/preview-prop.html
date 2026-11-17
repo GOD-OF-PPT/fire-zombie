@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tripo 能量舱 · 美术试验</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; overflow: hidden; background: #0a1426; color: #e7f3ff; font-family: system-ui, sans-serif; }
+    canvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
+    header { position: fixed; z-index: 1; top: 24px; left: 28px; pointer-events: none; }
+    small { color: #7bdbde; letter-spacing: 3px; font-size: 11px; }
+    h1 { font-size: clamp(22px, 4vw, 34px); margin: 8px 0; font-weight: 650; }
+    p { color: #91a5c0; font-size: 12px; line-height: 1.8; margin: 0; }
+    nav { position: fixed; z-index: 1; bottom: 28px; left: 28px; right: 28px; display: flex; gap: 12px; flex-wrap: wrap; }
+    button, a { border: 1px solid #68879c66; border-radius: 8px; background: #152940dd; color: #b9e8f1; padding: 11px 17px; text-decoration: none; font: 13px system-ui; cursor: pointer; }
+    a { margin-left: auto; }
+  </style>
+</head>
+<body>
+  <header><small>PRISM SWARM / ART TRIAL</small><h1>科幻能量舱</h1><p id="status">正在加载模型…</p><p>Tripo 网页 H2.5 · 仅限非商业用途 · 拖动旋转，滚轮缩放</p></header>
+  <canvas aria-label="能量舱三维预览"></canvas>
+  <nav><button id="front">正面细节</button><button id="game">游戏视角</button><a href="../index.html?play=1&art=tripo">进入游戏试用 →</a></nav>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+    import { loadTrialVault } from '../src/render/models/trialVault.ts';
+    const renderer = new THREE.WebGLRenderer({ canvas: document.querySelector('canvas'), antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a1426);
+    const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 60);
+    camera.position.set(2.8, 2.7, 4.3);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0.95, 0);
+    controls.enableDamping = true;
+    controls.minDistance = 2.4; controls.maxDistance = 9;
+    scene.add(new THREE.HemisphereLight(0xdcf0ff, 0x3b2c6e, 0.9));
+    const key = new THREE.DirectionalLight(0xffe7ce, 2.2); key.position.set(-8, 14, 4); scene.add(key);
+    const back = new THREE.DirectionalLight(0x9be8ff, 0.85); back.position.set(-4, 8, -14); scene.add(back);
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(2.3, 64), new THREE.MeshStandardMaterial({ color: 0x142a44, metalness: 0.25, roughness: 0.7 }));
+    floor.rotation.x = -Math.PI / 2; floor.position.y = -0.01; scene.add(floor);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(2.25, 2.27, 64), new THREE.MeshBasicMaterial({ color: 0x4ca4b2 }));
+    ring.rotation.x = -Math.PI / 2; scene.add(ring);
+    try {
+      const model = await loadTrialVault(); scene.add(model);
+      let triangles = 0; model.traverse(o => { if (o.isMesh) triangles += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; });
+      document.querySelector('#status').textContent = `${triangles.toLocaleString()} 个三角面 · 单材质 PBR · 1K 贴图`;
+    } catch (error) { document.querySelector('#status').textContent = '模型加载失败'; console.error(error); }
+    document.querySelector('#front').onclick = () => camera.position.set(0, 1.5, 4.8);
+    document.querySelector('#game').onclick = () => camera.position.set(2.8, 3.9, 3.8);
+    const resize = () => { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); };
+    addEventListener('resize', resize); resize();
+    renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+  </script>
+</body>
+</html>

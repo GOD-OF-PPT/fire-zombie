@@ -22,6 +22,8 @@ export interface SaveData {
   unlocked: SectorId;
   records: Record<SectorId, SectorRecord>;
   endless: EndlessRecord;
+  /** Public ranking display name, entered once on an endless defeat. */
+  leaderboardName: string;
   muted: boolean;
   seenHints: string[];
   /** workshop currency */
@@ -74,6 +76,7 @@ function defaults(): SaveData {
       4: { stars: 0, score: 0, cleared: false },
     },
     endless: { bestScore: 0, bestWave: 0, bestTime: 0, bestDistance: 0, bosses: 0 },
+    leaderboardName: '',
     muted: false,
     seenHints: [],
     cores: 0,
@@ -115,6 +118,7 @@ export function loadSave(): SaveData {
       version: 1,
       unlocked,
       records,
+      leaderboardName: typeof parsed.leaderboardName === 'string' ? parsed.leaderboardName.trim().slice(0, 80) : '',
       endless: {
         bestScore: Math.max(0, Math.floor(Number(parsed.endless?.bestScore) || 0)),
         bestWave: Math.max(0, Math.floor(Number(parsed.endless?.bestWave) || 0)),

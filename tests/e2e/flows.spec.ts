@@ -60,6 +60,8 @@ async function touchDrag(page: Page, dx: number): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
+  // These gameplay regressions never create players or scores on the live service.
+  await page.route('**/api/v1/games/fire-zombie/**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'TEST_NETWORK_DISABLED' }) }));
   await page.goto('/?seed=0');
   await page.evaluate(() => localStorage.clear());
   await page.reload();
@@ -68,7 +70,7 @@ test.beforeEach(async ({ page }) => {
 
 test('title → start → touch drag moves the swarm and stays in bounds', async ({ page }) => {
   await page.evaluate(() => (window as any).__prism.renderer.assetsReady);
-  expect(await page.evaluate(() => (window as any).__prism.renderer.modelSource)).toBe('gltf');
+  expect(await page.evaluate(() => (window as any).__prism.renderer.modelSource)).toBe('procedural');
   await page.getByTestId('start-btn').click();
   await expect(page.getByTestId('hud')).toBeVisible();
   await touchDrag(page, -120);
@@ -181,6 +183,7 @@ test('endless is immediately available, drafts an upgrade, saves records, and re
   expect((await snap(page)).phase).toBe('DEFEAT');
   const finalWave = (await snap(page)).endless!.wave;
   await expect(page.getByTestId('result-wave')).toHaveText(String(finalWave));
+  await page.getByTestId('ranking-name-skip').click();
   await expect(page.getByTestId('next-btn')).toHaveCount(0);
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('prism-swarm-save-v1')!));
   expect(saved.endless.bestWave).toBe(finalWave);
@@ -235,12 +238,14 @@ test('pause freezes simulation; resume via Esc; mute persists', async ({ page })
   expect(muted).toBe(true);
 });
 
-test('GLB load failure falls back to procedural models with a notice', async ({ page }) => {
-  await page.route('**/*.glb', (route) => route.abort());
+test('default playable entry needs no external GLB downloads', async ({ page }) => {
+  let modelRequests = 0;
+  await page.route('**/*.glb', (route) => { modelRequests++; return route.abort(); });
   await page.reload();
-  await expect(page.getByTestId('toast')).toHaveClass(/show/, { timeout: 15000 });
-  await expect(page.getByTestId('toast')).toContainText('简化模型');
+  await page.evaluate(() => (window as any).__prism.renderer.assetsReady);
   expect(await page.evaluate(() => (window as any).__prism.renderer.modelSource)).toBe('procedural');
+  expect(modelRequests).toBe(0);
+  await expect(page.getByTestId('toast')).not.toContainText('简化模型');
   await page.getByTestId('start-btn').click();
   await touchDrag(page, 10);
   await ff(page, 20);
@@ -254,6 +259,18 @@ test('GLB load failure falls back to procedural models with a notice', async ({ 
   });
   expect(shown.squad).toBeGreaterThan(1);
   expect(shown.enemies).toBeGreaterThan(0);
+});
+
+test('root loads the default index entry and the legacy playable URL preserves run parameters', async ({ page }) => {
+  const root = await page.request.get('/?play=1&mode=endless&seed=5', { maxRedirects: 0 });
+  expect(root.status()).toBe(200);
+  expect(root.headers().location).toBeUndefined();
+  const legacy = await page.request.get('/playable-v2.html?play=1&mode=endless&seed=5', { maxRedirects: 0 });
+  expect(legacy.status()).toBe(302);
+  expect(legacy.headers().location).toBe('./index.html?play=1&mode=endless&seed=5');
+  await page.goto('/index.html?play=1&sector=2&seed=0&unlock=1');
+  await expect(page).toHaveURL(/\/index\.html\?play=1&sector=2&seed=0&unlock=1$/);
+  expect((await snap(page)).sector).toBe(2);
 });
 
 test('workshop purchase spends cores and boosts the next run', async ({ page }) => {

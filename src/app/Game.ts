@@ -25,19 +25,22 @@ import {
   type UpgradeId,
 } from './meta';
 import { loadSave, writeSave, type SaveData } from './save';
+import { LeaderboardClient, rankingErrorMessage, validateRankingName, type EndlessRunScore } from '../services/leaderboard';
+import { LeaderboardUI } from '../ui/LeaderboardUI';
+import { html, type Content } from '../ui/dom';
 
 type AppState = 'title' | 'ready' | 'playing' | 'paused' | 'draft' | 'outro' | 'result';
 
-const HINTS: Record<string, string> = {
-  mutable: '<b>金框门</b>可以被射击！对准它，把数字打上去',
-  lock: '带锁的 ÷ 门：打破锁就会翻转成 <b>×2</b>',
-  vault: '击破<b>能量舱</b>获得新武器，重复获得会升级',
-  barrel: '射爆<b>电容桶</b>：范围爆炸、可连锁，还能抬高附近金框门',
-  lens: '子弹穿过<b>金色棱镜</b>会一分为二并增伤',
-  siphon: '<b>噬能骷髅灵</b>正在偷取门的数值，先击毁它！',
-  dasher: '红色锁定线：<b>烈焰迅龙</b>即将冲锋，快闪开或按 <b>E 脉冲</b>',
-  hazard: '地面红区填满就会轰击，<b>移到安全车道</b>',
-  bastion: '<b>重甲巨魔</b>血厚攻高：绕开它、引爆电容桶或开启<b>相位脉冲</b>',
+const HINTS: Record<string, Content> = {
+  mutable: html`<b>金框门</b>可以被射击！对准它，把数字打上去`,
+  lock: html`带锁的 ÷ 门：打破锁就会翻转成 <b>×2</b>`,
+  vault: html`击破<b>能量舱</b>获得新武器，重复获得会升级`,
+  barrel: html`射爆<b>电容桶</b>：范围爆炸、可连锁，还能抬高附近金框门`,
+  lens: html`子弹穿过<b>金色棱镜</b>会一分为二并增伤`,
+  siphon: html`<b>噬能骷髅灵</b>正在偷取门的数值，先击毁它！`,
+  dasher: html`红色锁定线：<b>烈焰迅龙</b>即将冲锋，快闪开或按 <b>E 脉冲</b>`,
+  hazard: html`地面红区填满就会轰击，<b>移到安全车道</b>`,
+  bastion: html`<b>重甲巨魔</b>血厚攻高：绕开它、引爆电容桶或开启<b>相位脉冲</b>`,
 };
 
 function autopilotDrag(snap: SimSnapshot): number {
@@ -60,6 +63,14 @@ export class Game {
   readonly input: InputController;
   readonly audio = new AudioEngine();
   save: SaveData = loadSave();
+  private readonly ranking = new LeaderboardClient();
+  private readonly rankingUI: LeaderboardUI;
+  private rankingSequence = 0;
+  private rankingRun: { id: number; run: Readonly<EndlessRunScore>; submitted: boolean } | null = null;
+  private rankingSubmission: number | null = null;
+  private rankingOpen = false;
+  private rankingOffset = 0;
+  private rankingQuery = 0;
 
   state: AppState = 'title';
   sector: SectorId = 1;
@@ -95,11 +106,12 @@ export class Game {
     const seedParam = params.get('seed');
     if (seedParam !== null) this.fixedLayoutSeed = Math.max(0, Math.floor(Number(seedParam) || 0));
 
-    this.renderer = new Renderer(canvas, { forceProcedural: opts.standaloneCanvas === true });
+    this.renderer = new Renderer(canvas, { forceProcedural: opts.standaloneCanvas === true, trialArt: params.get('art') === 'tripo' });
     this.input = new InputController(stage);
     this.ui = new UI(uiRoot, {
       onStart: (s) => this.startRun(s),
       onEndless: () => this.startRun(4, true),
+      onLeaderboard: () => this.openLeaderboard(),
       onProtocol: (id) => this.chooseProtocol(id),
       onPause: () => this.pause(),
       onResume: () => this.resume(),
@@ -112,11 +124,27 @@ export class Game {
       onBuyApex: () => this.buyApexUpgrade(),
       onRespec: () => this.respecWorkshop(),
     });
+    this.rankingUI = new LeaderboardUI(uiRoot, {
+      onName: name => this.saveRankingName(name),
+      onSkipName: () => {
+        this.rankingUI.hideName();
+        this.rankingUI.submission('name', '本局尚未上传，可稍后填写姓名');
+      },
+      onOpen: () => this.openLeaderboard(),
+      onClose: () => this.closeLeaderboard(),
+      onRefresh: () => { void this.loadLeaderboard(); },
+      onPage: offset => { this.rankingOffset = offset; void this.loadLeaderboard(); },
+      onRetry: () => { void this.submitRanking(); },
+    });
     this.audio.setMuted(this.save.muted);
     this.ui.setMuted(this.save.muted);
     void this.renderer.assetsReady.then(() => {
+      this.stage.dataset.propSource = this.renderer.propSource;
+      if (params.get('art') === 'tripo') {
+        this.ui.toast(this.renderer.propSource === 'tripo' ? 'Tripo 美术试验 · 仅限非商业用途' : '试验模型不可用，已使用原版能量舱', 4500);
+      }
       if (this.renderer.modelSource === 'procedural' && !opts.standaloneCanvas) {
-        this.ui.toast('模型加载失败，已切换为<b>简化模型</b>', 5000);
+        this.ui.toast(html`模型加载失败，已切换为<b>简化模型</b>`, 5000);
       }
     });
     this.ui.onOverdrive = () => this.input.requestOverdrive();
@@ -186,6 +214,7 @@ export class Game {
 
   // ------------------------------------------------------------------ flow
   toTitle(): void {
+    this.clearRankingViews();
     this.state = 'title';
     this.endless = false;
     this.audio.setFever(false);
@@ -201,6 +230,7 @@ export class Game {
 
   startRun(sector: SectorId, endless = false): void {
     if (!endless && sector > this.save.unlocked) return;
+    this.clearRankingViews();
     this.audio.unlock();
     this.sector = sector;
     this.endless = endless;
@@ -250,7 +280,7 @@ export class Game {
     const runTitle = endless ? '无尽协议' : meta.name;
     const runKicker = endless ? 'ENDLESS PROTOCOL · 阶段 1' : meta.subtitle;
     this.ui.showBanner(
-      `<div class="b-kicker">${runKicker}</div><div class="b-title">${runTitle}</div><div class="b-sub">${bossLine}</div>`,
+      html`<div class="b-kicker">${runKicker}</div><div class="b-title">${runTitle}</div><div class="b-sub">${bossLine}</div>`,
       'intro',
       1800,
     );
@@ -306,10 +336,10 @@ export class Game {
     const newSyns = getActiveSynergies(snap.endless?.upgrades).filter((s) => !prevSynIds.has(s.id));
     if (newSyns.length > 0) {
       this.audio.achievement();
-      this.ui.toast(`✦ 激活共鸣羁绊：<b>${newSyns.map((s) => s.name).join(' · ')}</b>`, 3200);
+      this.ui.toast(html`✦ 激活共鸣羁绊：<b>${newSyns.map((s) => s.name).join(' · ')}</b>`, 3200);
     }
     this.ui.showBanner(
-      `<div class="b-kicker">PROTOCOL INSTALLED · ${threat.name}</div><div class="b-title">${PROTOCOLS[id].name}</div><div class="b-sub">${threat.description}</div>`,
+      html`<div class="b-kicker">PROTOCOL INSTALLED · ${threat.name}</div><div class="b-title">${PROTOCOLS[id].name}</div><div class="b-sub">${threat.description}</div>`,
       'od',
       1500,
     );
@@ -349,7 +379,7 @@ export class Game {
     writeSave(this.save);
     this.audio.gateFlip();
     this.ui.renderWorkshop(this.save);
-    this.ui.toast(`已全额返还 <b>${refund}</b> 晶核`, 2400);
+    this.ui.toast(html`已全额返还 <b>${refund}</b> 晶核`, 2400);
   }
 
   toggleMute(): void {
@@ -636,7 +666,7 @@ export class Game {
           fx.ring(snap.squadX, PLAYER_Z, 0xfff36b, 6, 0.6);
           fx.burst(snap.squadX, 0.8, PLAYER_Z, 0xfff36b, 80, { speed: 10, size: 0.5, life: 0.7, up: 1.2 });
           if (live) {
-            this.ui.showBanner('<div class="b-kicker">RESONANCE OVERDRIVE</div><div class="b-title">共鸣超载！</div><div class="b-sub">射速 ×1.5 · 穿透 +1</div>', 'od', 1300);
+            this.ui.showBanner(html`<div class="b-kicker">RESONANCE OVERDRIVE</div><div class="b-title">共鸣超载！</div><div class="b-sub">射速 ×1.5 · 穿透 +1</div>`, 'od', 1300);
             a.overdrive();
             this.ui.doFlash('rgba(255,243,107,0.6)', 0.3);
           }
@@ -660,7 +690,7 @@ export class Game {
           fx.ring(0, -20, 0xff3b5c, 10, 1);
           if (live) {
             const m = BOSS_META[ev.bossId];
-            this.ui.showBanner(`<div class="b-warn">BOSS</div><div class="b-title">${m.title}</div><div class="b-sub">${m.name} · 击毁核心！</div>`, 'boss', 1600);
+            this.ui.showBanner(html`<div class="b-warn">BOSS</div><div class="b-title">${m.title}</div><div class="b-sub">${m.name} · 击毁核心！</div>`, 'boss', 1600);
             a.setMusic(this.sector, 2);
             a.bossPhase();
           }
@@ -670,7 +700,7 @@ export class Game {
           fx.ring(ev.x, ev.z, 0xff3b5c, 9, 0.7);
           this.renderer.shake(0.6);
           if (live) {
-            this.ui.showBanner(`<div class="b-warn">PHASE ${ev.phase}</div><div class="b-title">首领狂暴化</div><div class="b-sub">${ev.phase === 2 ? '攻势加快，注意红区' : '最终形态！'}</div>`, 'boss', 1400);
+            this.ui.showBanner(html`<div class="b-warn">PHASE ${ev.phase}</div><div class="b-title">首领狂暴化</div><div class="b-sub">${ev.phase === 2 ? '攻势加快，注意红区' : '最终形态！'}</div>`, 'boss', 1400);
             this.ui.doFlash('rgba(255,255,255,0.8)', 0.4);
             a.bossPhase();
           }
@@ -684,7 +714,7 @@ export class Game {
             const completedWave = Math.max(1, (snap.endless?.wave ?? this.sector) - (this.endless ? 1 : 0));
             this.addScore(SCORE.bossBase * (this.endless ? completedWave * 2 : this.sector));
             fx.after(1.25, () => this.ui.doFlash('rgba(255,255,255,1)', 0.85));
-            this.ui.showBanner('<div class="b-kicker">TARGET DESTROYED</div><div class="b-title">首领击破！</div>', 'reward', this.endless ? 900 : 2000);
+            this.ui.showBanner(html`<div class="b-kicker">TARGET DESTROYED</div><div class="b-title">首领击破！</div>`, 'reward', this.endless ? 900 : 2000);
           }
           break;
         }
@@ -695,7 +725,7 @@ export class Game {
           if (live) {
             this.addScore(ev.wave * 500);
             this.ui.showBanner(
-              `<div class="b-kicker">ENDLESS · STAGE ${ev.wave}</div><div class="b-title">阶段 ${ev.wave} · 威胁升级</div><div class="b-sub">补员 +${ev.bonus} · 共鸣充满 · 护盾刷新</div>`,
+              html`<div class="b-kicker">ENDLESS · STAGE ${ev.wave}</div><div class="b-title">阶段 ${ev.wave} · 威胁升级</div><div class="b-sub">补员 +${ev.bonus} · 共鸣充满 · 护盾刷新</div>`,
               'od',
               1500,
             );
@@ -800,7 +830,7 @@ export class Game {
     writeSave(this.save);
     if (unlockedMedals.length > 0) {
       this.audio.achievement();
-      this.ui.toast(`🏅 解锁勋章：<b>${unlockedMedals.map((m) => m.name).join(' · ')}</b>`, 3200);
+      this.ui.toast(html`🏅 解锁勋章：<b>${unlockedMedals.map((m) => m.name).join(' · ')}</b>`, 3200);
     }
 
     const apexAffordable = isApexUnlocked(this.save.upgrades) && this.save.cores >= getApexCost(this.save.apexLevel ?? 0);
@@ -858,6 +888,96 @@ export class Game {
     if (r.victory) this.audio.victory();
     this.audio.setMusic(this.sector, 0);
     this.ui.showResult(r, (i) => this.audio.star(i));
+    if (r.endless && !r.victory) {
+      this.rankingRun = {
+        id: ++this.rankingSequence,
+        submitted: false,
+        run: Object.freeze({
+          score: r.score, duration: r.stats.time, wave: r.endless.wave, distance: r.endless.distance,
+          bosses: r.endless.bosses, kills: r.stats.kills, maxCombo: r.maxCombo,
+        }),
+      };
+      const host = this.ui.root.querySelector<HTMLElement>('[data-testid=result-ranking]')!;
+      this.rankingUI.mountResult(host, !!this.save.leaderboardName);
+      if (this.save.leaderboardName) void this.submitRanking();
+      else this.rankingUI.showName();
+    }
+  }
+
+  private clearRankingViews(): void {
+    this.rankingSequence += 1;
+    this.rankingRun = null;
+    this.closeLeaderboard();
+    this.rankingUI.hideName();
+    this.rankingUI.detachResult();
+  }
+
+  private saveRankingName(value: string): void {
+    if (this.state !== 'result' || !this.rankingRun) return;
+    let name: string;
+    try { name = validateRankingName(value); }
+    catch (error) { this.rankingUI.setNameError(rankingErrorMessage(error)); return; }
+    this.save.leaderboardName = name;
+    writeSave(this.save);
+    this.rankingUI.hideName();
+    void this.submitRanking();
+  }
+
+  private async submitRanking(): Promise<void> {
+    const job = this.rankingRun;
+    if (!job || job.submitted || this.rankingSubmission === job.id) return;
+    if (!this.save.leaderboardName) { this.rankingUI.showName(); return; }
+    this.rankingSubmission = job.id;
+    this.rankingUI.submission('uploading', '正在上传本局成绩…');
+    let accepted: boolean;
+    try {
+      const result = await this.ranking.submit(this.save.leaderboardName, job.run);
+      job.submitted = true;
+      accepted = result.accepted;
+    } catch (error) {
+      if (this.rankingRun === job) this.rankingUI.submission('error', `${rankingErrorMessage(error)}；本局成绩已保留`);
+      return;
+    } finally {
+      if (this.rankingSubmission === job.id) this.rankingSubmission = null;
+    }
+    if (this.rankingRun !== job) return;
+    const message = accepted ? '本局成绩已上传' : '已保留历史最好成绩';
+    this.rankingUI.submission('done', `${message}，正在查询名次…`);
+    try {
+      const own = await this.ranking.me();
+      if (this.rankingRun === job) this.rankingUI.submission('done', own ? `${message} · 我的名次 #${own.rank}` : `${message} · 名次等待刷新`);
+    } catch {
+      if (this.rankingRun === job) this.rankingUI.submission('done', `${message} · 名次暂不可用，可打开榜单刷新`);
+    }
+    if (this.rankingRun === job && this.rankingOpen) void this.loadLeaderboard();
+  }
+
+  private openLeaderboard(): void {
+    if (this.state !== 'title' && this.state !== 'result') return;
+    this.rankingOpen = true;
+    this.rankingOffset = 0;
+    this.rankingUI.open();
+    void this.loadLeaderboard();
+  }
+
+  private closeLeaderboard(): void {
+    this.rankingOpen = false;
+    this.rankingQuery += 1;
+    this.rankingUI.close();
+  }
+
+  private async loadLeaderboard(): Promise<void> {
+    if (!this.rankingOpen) return;
+    const query = ++this.rankingQuery;
+    const name = this.save.leaderboardName;
+    this.rankingUI.loading(name);
+    const [page, own] = await Promise.allSettled([
+      this.ranking.top(this.rankingOffset),
+      name ? this.ranking.me() : Promise.resolve(null),
+    ]);
+    if (!this.rankingOpen || query !== this.rankingQuery) return;
+    if (page.status === 'rejected') { this.rankingUI.showBoardError(rankingErrorMessage(page.reason)); return; }
+    this.rankingUI.showBoard(page.value, own.status === 'fulfilled' ? own.value : null, name, own.status === 'rejected');
   }
 
   // ------------------------------------------------------------------ debug / verification hooks
