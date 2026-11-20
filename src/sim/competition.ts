@@ -1,3 +1,4 @@
+import { matchDualSynergyPair, matchOverlimitResonance } from '../config/blitz';
 import {
   BLADES_DAMAGE,
   BLADES_ORBIT_RADIUS,
@@ -7,7 +8,7 @@ import {
   RESONANCE_GAIN_VAULT_BREAK,
   TRACK_HALF_WIDTH,
 } from '../config/constants';
-import type { DamageSourceKey, FusionId, MutatorId, SimEvent, WeaponId } from '../types/game';
+import type { BossId, BossPartSlot, DamageSourceKey, DualSynergyId, FusionId, MutatorId, OverlimitResonanceId, SimEvent, WeaponId } from '../types/game';
 import { applyBarrelBlastToBoss, checkBossPhaseTransitions } from './bosses';
 import { damageBarrel } from './barrels';
 import { mitigateLossWithAegis } from './aegis';
@@ -21,14 +22,17 @@ import {
   type SimEnemy,
   type SimJumpPad,
   type SimProjectile,
+  type SimMaglevTrain,
   type SimReflector,
   type SimSingularity,
+  type SimSkyCargo,
   type SimWorld,
 } from './entities';
 import { applyProjectileHitToGate } from './gates';
 import { clamp, clampSquadCount, normalizeZero } from './math';
 import { addResonance } from './resonance';
-import { damageVault } from './weapons';
+import { chargeCapacitorTower, hasChip, spawnCoreShard } from './v20Mechanics';
+import { damageVault, spawnPrismLens } from './weapons';
 
 const JUMP_DURATION_SEC = 1.32;
 const JUMP_PEAK_Y = 2.85;
@@ -45,31 +49,96 @@ export function recordDamage(world: SimWorld, source: DamageSourceKey, amount: n
 }
 
 /**
+ * Grants squad recruits while converting any overflow above MAX_SQUAD_COUNT (999) into
+ * Reserve Troops (up to 180) + tangible Resonance Overdrive energy!
+ */
+export function grantSquadWithReserve(world: SimWorld, rawGain: number, events?: SimEvent[]): number {
+  if (rawGain <= 0) return 0;
+  const before = world.squadCount;
+  const rawAfter = before + Math.floor(rawGain);
+  const after = clampSquadCount(rawAfter);
+  world.squadCount = after;
+  if (after > world.stats.peakSquad) {
+    world.stats.peakSquad = after;
+  }
+  const overflow = Math.max(0, rawAfter - after);
+  if (overflow > 0) {
+    world.reserveTroops = Math.min(180, (world.reserveTroops ?? 0) + overflow);
+    if (events) {
+      addResonance(world, Math.min(0.45, overflow * 0.009), events);
+    } else {
+      world.resonance = Math.min(1, world.resonance + Math.min(0.45, overflow * 0.009));
+    }
+  }
+  return after - before;
+}
+
+/**
+ * Automatically deploys Reserve Troops after non-lethal squad losses so high-count players
+ * immediately feel the value of banked reserve reinforcements!
+ */
+export function deployReserveIfAvailable(world: SimWorld, lost: number, events: SimEvent[]): void {
+  if (lost <= 0 || world.squadCount <= 0 || (world.reserveTroops ?? 0) <= 0) return;
+  const deploy = Math.min(world.reserveTroops, Math.max(1, Math.ceil(lost * 0.7)));
+  if (deploy <= 0) return;
+  const before = world.squadCount;
+  world.squadCount = clampSquadCount(before + deploy);
+  const used = world.squadCount - before;
+  if (used > 0) {
+    world.reserveTroops -= used;
+    events.push({ type: 'RESERVE_DEPLOY', count: used });
+  }
+}
+
+/**
  * Evaluates which of the 3 Competition Weapon Evolution Fusions are currently unlocked
  * and emits FUSION_UNLOCK events on newly synthesized superweapons.
  */
 export function syncActiveFusions(world: SimWorld, events?: SimEvent[]): FusionId[] {
-  if (world.stats.vaultsCracked <= 0 && !world.mods.blitz) {
+  if (world.stats.vaultsCracked <= 0) {
     world.activeFusions.length = 0;
     return world.activeFusions;
   }
-  const lv = world.learnedWeaponLevels;
-  const reqSum = world.mods.blitz ? 2 : 3;
-  const next: FusionId[] = [];
 
-  if (lv.plasma > 0 && lv.cryo > 0 && lv.plasma + lv.cryo >= reqSum) {
-    next.push('cryo_singularity');
+  // Ultimate 12s Tri-Fusion Climax: ignite ALL 3 Superweapons simultaneously!
+  if ((world.triFusionTimer ?? 0) > 0) {
+    const allThree: FusionId[] = ['cryo_singularity', 'prism_ricochet_web', 'seeker_sword_array'];
+    world.activeFusions = allThree;
+    return world.activeFusions;
   }
-  if (lv.scatter > 0 && lv.rail > 0 && lv.scatter + lv.rail >= reqSum) {
-    next.push('prism_ricochet_web');
+
+  const lv = world.learnedWeaponLevels;
+  const loadout = world.activeLoadout ?? [];
+  const inLoadout = (w: WeaponId): boolean => loadout.length === 0 || loadout.includes(w);
+
+  const candidates: FusionId[] = [];
+  if (lv.plasma > 0 && lv.cryo > 0 && lv.plasma + lv.cryo >= 3 && inLoadout('plasma') && inLoadout('cryo')) {
+    candidates.push('cryo_singularity');
   }
-  if (
-    world.bladesCount > 0 &&
-    lv.pulse > 0 &&
-    (world.bladesCount + lv.pulse >= 3 || (world.mods.blitz && world.bladesCount >= 1 && lv.pulse >= 1))
-  ) {
-    next.push('seeker_sword_array');
+  if (lv.scatter > 0 && lv.rail > 0 && lv.scatter + lv.rail >= 3 && inLoadout('scatter') && inLoadout('rail')) {
+    candidates.push('prism_ricochet_web');
   }
+  const reqBlades = world.simTime >= 2 ? 2 : 1;
+  if (world.bladesCount >= reqBlades && lv.pulse >= 2 && world.bladesCount + lv.pulse >= 3 && (inLoadout('pulse') || loadout.length < 2)) {
+    candidates.push('seeker_sword_array');
+  }
+
+  // Select the single active Core Fusion best matching the current 2-weapon activeLoadout!
+  let chosen: FusionId | null = null;
+  if (inLoadout('plasma') && inLoadout('cryo') && candidates.includes('cryo_singularity')) {
+    chosen = 'cryo_singularity';
+  } else if (inLoadout('scatter') && inLoadout('rail') && candidates.includes('prism_ricochet_web')) {
+    chosen = 'prism_ricochet_web';
+  } else if (inLoadout('pulse') && candidates.includes('seeker_sword_array')) {
+    chosen = 'seeker_sword_array';
+  } else if (world.primaryFusion && candidates.includes(world.primaryFusion)) {
+    chosen = world.primaryFusion;
+  } else if (candidates.length > 0) {
+    chosen = candidates[candidates.length - 1]!;
+  }
+
+  world.primaryFusion = chosen;
+  const next: FusionId[] = chosen ? [chosen] : [];
 
   if (events) {
     for (const fId of next) {
@@ -79,6 +148,42 @@ export function syncActiveFusions(world: SimWorld, events?: SimEvent[]): FusionI
     }
   }
   world.activeFusions = next;
+
+  // Evaluate Tactical Dual-Weapon Synergy when no Major Fusion overrides it (zero dead-end 2-weapon pairs!)
+  let nextDual: DualSynergyId | null = null;
+  if (next.length === 0) {
+    const pairA = loadout.length >= 2 ? loadout[0]! : loadout.length === 1 ? loadout[0]! : null;
+    const pairB = loadout.length >= 2 ? loadout[1]! : loadout.length === 1 && loadout[0] !== 'pulse' ? 'pulse' : null;
+    if (pairA && pairB) {
+      const lvSum = (lv[pairA] ?? 0) + (lv[pairB] ?? 0);
+      if (lvSum >= 3) {
+        nextDual = matchDualSynergyPair(pairA, pairB);
+      }
+    }
+  }
+  if (nextDual && world.activeDualSynergy !== nextDual && events) {
+    events.push({ type: 'DUAL_SYNERGY_UNLOCK', synergyId: nextDual });
+  }
+  world.activeDualSynergy = nextDual;
+
+  // Stage 3: Overlimit Dual-Weapon Resonance Synthesis (unlocks at LvSum >= 5, OR LvSum >= 3 during Overdrive, OR Range toggle!)
+  let nextOverlimit: OverlimitResonanceId | null = null;
+  const pA = loadout.length >= 2 ? loadout[0]! : loadout.length === 1 ? loadout[0]! : null;
+  const pB = loadout.length >= 2 ? loadout[1]! : loadout.length === 1 && loadout[0] !== 'pulse' ? 'pulse' : null;
+  if (pA && pB) {
+    const sumLv = (lv[pA] ?? 0) + (lv[pB] ?? 0);
+    const ready =
+      (world.isFiringRange && world.rangeForceOverlimit) ||
+      sumLv >= 5 ||
+      (sumLv >= 3 && world.overdriveTimer > 0);
+    if (ready) {
+      nextOverlimit = matchOverlimitResonance(pA, pB);
+    }
+  }
+  if (nextOverlimit && world.overlimitResonance !== nextOverlimit && events && world.overdriveTimer <= 0) {
+    events.push({ type: 'OVERLIMIT_UNLOCK', resonanceId: nextOverlimit });
+  }
+  world.overlimitResonance = nextOverlimit;
   return next;
 }
 
@@ -94,25 +199,29 @@ export function spawnOrRefreshSingularity(
   x: number,
   z: number,
   events: SimEvent[],
+  customRadius = SINGULARITY_RADIUS,
+  customDuration = SINGULARITY_DURATION,
 ): void {
   // Refresh existing nearby singularity if within 2.5u
   for (let i = 0; i < world.singularities.length; i++) {
     const s = world.singularities[i]!;
     if (Math.hypot(s.x - x, s.z - z) <= 2.5) {
-      s.timer = SINGULARITY_DURATION;
+      s.timer = Math.max(s.timer, customDuration);
       return;
     }
   }
   if (world.singularities.length >= 3) {
     world.singularities.shift();
   }
+  const vortexMult = 1 + Math.max(0, world.mods.specVortex ?? 0) * 0.10;
+  const effRadius = Number((customRadius * vortexMult).toFixed(2));
   const sing: SimSingularity = {
     id: allocEntityId(world),
     x: normalizeZero(clamp(x, -TRACK_HALF_WIDTH + 0.8, TRACK_HALF_WIDTH - 0.8)),
     z,
-    radius: SINGULARITY_RADIUS,
-    timer: SINGULARITY_DURATION,
-    maxTimer: SINGULARITY_DURATION,
+    radius: effRadius,
+    timer: customDuration,
+    maxTimer: customDuration,
     tickAcc: 0,
   };
   world.singularities.push(sing);
@@ -148,7 +257,7 @@ export function stepSingularities(world: SimWorld, events: SimEvent[]): void {
       const pulseDmg =
         (9 + world.squadCount * 0.22) *
         world.mods.damageMult *
-        (hasMutator(world, 'glass_cannon') ? 2.4 : 1.0);
+        (hasMutator(world, 'glass_cannon') ? 2.0 : 1.0);
       const snapLen = world.enemies.length;
       for (let k = 0; k < snapLen; k++) {
         const e = world.enemies[k];
@@ -239,7 +348,7 @@ export function stepSeekerBlades(world: SimWorld, events: SimEvent[]): boolean {
     world.seekerBlades.length = count;
   }
 
-  const glassMult = hasMutator(world, 'glass_cannon') ? 2.4 : 1.0;
+  const glassMult = hasMutator(world, 'glass_cannon') ? 2.0 : 1.0;
   const sliceDmg = BLADES_DAMAGE * 1.45 * world.mods.damageMult * glassMult;
 
   for (let i = 0; i < count; i++) {
@@ -485,7 +594,7 @@ export function applyContractWallClamp(world: SimWorld): void {
 export function grantBountyJackpot(world: SimWorld, x: number, z: number, events: SimEvent[]): void {
   const gain = Math.min(60, Math.max(12, Math.floor(world.squadCount * 0.85)));
   const before = world.squadCount;
-  world.squadCount = clampSquadCount(before + gain);
+  grantSquadWithReserve(world, gain, events);
   const actualGain = world.squadCount - before;
   if (world.squadCount > world.stats.peakSquad) {
     world.stats.peakSquad = world.squadCount;
@@ -495,7 +604,10 @@ export function grantBountyJackpot(world: SimWorld, x: number, z: number, events
   addResonance(world, 1.0, events);
   world.stats.vaultsCracked += 1;
   world.masteryCount += 1;
-  const order: readonly WeaponId[] = ['plasma', 'cryo', 'scatter', 'rail', 'pulse'];
+  const order: readonly WeaponId[] =
+    world.activeLoadout.length > 0
+      ? [...world.activeLoadout, world.weapon]
+      : ['plasma', 'cryo', 'scatter', 'rail', 'pulse'];
   let upgradedW: WeaponId = world.weapon;
   for (const w of order) {
     if (world.learnedWeaponLevels[w] < 3) {
@@ -519,7 +631,74 @@ export function grantBountyJackpot(world: SimWorld, x: number, z: number, events
   });
 }
 
+export function triggerOverlimitOpticEvolution(
+  world: SimWorld,
+  proj: SimProjectile,
+  hitX: number,
+  hitZ: number,
+  events: SimEvent[],
+): void {
+  const ov = world.overlimitResonance;
+  if (!ov || world.ricochetsThisTick >= 5) return;
+  const specRic = Math.max(0, world.mods.specRicochet ?? 0);
+
+  if (ov === 'prism_arc_lattice' || ov === 'photon_prism_fan') {
+    world.ricochetsThisTick += 1;
+    const maxJumps = 3 + (specRic >= 2 ? 1 : 0);
+    const arcDmg = proj.damage * (0.58 + specRic * 0.08);
+    let curX = hitX;
+    let curZ = hitZ;
+    const visited = new Set<number>();
+    for (let j = 0; j < maxJumps; j++) {
+      let bestE: SimEnemy | null = null;
+      let bestD = 9.5;
+      for (let i = 0; i < world.enemies.length; i++) {
+        const e = world.enemies[i];
+        if (!e || !e.active || e.consumed || e.bypassed || e.hp <= 0 || visited.has(e.id)) continue;
+        const d = Math.hypot(e.x - curX, e.z - curZ);
+        if (d <= bestD && e.z < PLAYER_Z) {
+          bestD = d;
+          bestE = e;
+        }
+      }
+      if (!bestE) break;
+      visited.add(bestE.id);
+      events.push({
+        type: 'CHAIN_ARC',
+        fromX: curX,
+        fromZ: curZ,
+        toX: bestE.x,
+        toZ: bestE.z,
+        damage: Math.max(1, Math.round(arcDmg)),
+        webColor: 0x7dff6b,
+      });
+      recordDamage(world, 'fusions', Math.min(bestE.hp, arcDmg));
+      curX = bestE.x;
+      curZ = bestE.z;
+      damageEnemy(world, bestE, arcDmg, 0, events, { bypassShield: true });
+    }
+    // Also spark-ignite any Surge Barrel near the bounce line!
+    for (let bIdx = 0; bIdx < world.barrels.length; bIdx++) {
+      const b = world.barrels[bIdx];
+      if (b && b.active && !b.detonated && Math.hypot(b.x - curX, b.z - curZ) <= 5.5) {
+        damageBarrel(world, b, arcDmg, events, applyBarrelBlastToBoss, true);
+        break;
+      }
+    }
+    for (let cIdx = 0; cIdx < world.capTowers.length; cIdx++) {
+      const cap = world.capTowers[cIdx];
+      if (cap && cap.active && !cap.discharged && Math.hypot(cap.x - curX, cap.z - curZ) <= 7.5) {
+        chargeCapacitorTower(world, cap, arcDmg * 1.35, true, events);
+      }
+    }
+  } else if (ov === 'gravity_lens_well') {
+    world.ricochetsThisTick += 1;
+    spawnOrRefreshSingularity(world, clamp(hitX + proj.vx * 0.18, -3.6, 3.6), hitZ - 7.5, events, 3.4, 1.85);
+  }
+}
+
 export function bounceProjectileAtReflector(
+  world: SimWorld,
   proj: SimProjectile,
   ref: SimReflector,
   hitX: number,
@@ -528,18 +707,53 @@ export function bounceProjectileAtReflector(
 ): void {
   proj.hitIds.add(ref.id);
   const speed = Math.hypot(proj.vx, proj.vz);
-  const bounceAngle = ref.lean * ((36 * Math.PI) / 180);
+  const deg = ref.angleDeg !== undefined ? ref.angleDeg : ref.lean * 36;
+  const bounceAngle = (deg * Math.PI) / 180;
   proj.vx = Math.sin(bounceAngle) * speed;
   proj.vz = -Math.cos(bounceAngle) * speed;
-  proj.damage *= 1.45;
+  const specRicMult = 1 + Math.max(0, world.mods.specRicochet ?? 0) * 0.12;
+  proj.damage *= 1.45 * specRicMult;
   proj.amplified = true;
-  proj.remainingPierce += 2;
+  proj.remainingPierce += 2 + ((world.mods.specRicochet ?? 0) >= 2 ? 1 : 0);
   proj.prevX = normalizeZero(hitX);
   proj.prevZ = hitZ;
   proj.x = normalizeZero(clamp(hitX + proj.vx * FIXED_DT, -TRACK_HALF_WIDTH + 0.18, TRACK_HALF_WIDTH - 0.18));
   proj.z = hitZ + proj.vz * FIXED_DT;
   ref.pulse = 1.0;
   events.push({ type: 'REFLECTOR_BOUNCE', x: hitX, z: hitZ });
+  triggerOverlimitOpticEvolution(world, proj, hitX, hitZ, events);
+
+  // Chip `chip_prism_split`: 45° Reflector spawns an extra counter-angled split bolt at 38% damage!
+  if (hasChip(world, 'chip_prism_split') && world.projectiles.length < 360) {
+    const sp = world.projectilePool.acquire();
+    sp.id = allocEntityId(world);
+    sp.weapon = proj.weapon;
+    sp.radius = proj.radius;
+    sp.damage = proj.damage * 0.38;
+    sp.remainingPierce = 2;
+    sp.amplified = true;
+    sp.powerScale = proj.powerScale;
+    sp.hostile = false;
+    sp.hostileLoss = 0;
+    sp.maxRange = proj.maxRange;
+    sp.splashRadius = proj.splashRadius;
+    sp.splashDamageRatio = proj.splashDamageRatio;
+    sp.cryoSlowDuration = proj.cryoSlowDuration;
+    sp.sweepStartFraction = 0;
+    sp.fodderPunches = 0;
+    sp.active = true;
+    sp.hitIds.clear();
+    sp.hitIds.add(ref.id);
+    const twinAng = ((-deg * 0.65) * Math.PI) / 180;
+    sp.vx = Math.sin(twinAng) * speed;
+    sp.vz = -Math.cos(twinAng) * speed;
+    sp.prevX = normalizeZero(hitX);
+    sp.prevZ = hitZ;
+    sp.x = normalizeZero(clamp(hitX + sp.vx * FIXED_DT, -TRACK_HALF_WIDTH + 0.18, TRACK_HALF_WIDTH - 0.18));
+    sp.z = hitZ + sp.vz * FIXED_DT;
+    sp.distanceTraveled = speed * FIXED_DT;
+    world.projectiles.push(sp);
+  }
 }
 
 export function resolveJumpPadCrossings(world: SimWorld, events: SimEvent[]): void {
@@ -569,7 +783,7 @@ export function stepJumpArc(world: SimWorld, events: SimEvent[]): void {
     world.squadAirY = 0;
     // Touchdown Sky-Slam Shockwave!
     const slamRadius = 7.2;
-    const slamDmg = 95 * world.mods.damageMult * (hasMutator(world, 'glass_cannon') ? 2.4 : 1.0);
+    const slamDmg = 95 * world.mods.damageMult * (hasMutator(world, 'glass_cannon') ? 2.0 : 1.0);
     let slammed = 0;
     const snapLen = world.enemies.length;
     for (let i = 0; i < snapLen; i++) {
@@ -583,6 +797,9 @@ export function stepJumpArc(world: SimWorld, events: SimEvent[]): void {
         damageEnemy(world, e, slamDmg, 1.4, events);
       }
     }
+    if ((world.endless?.upgrades.blades ?? 0) >= 1) {
+      spawnOrRefreshSingularity(world, world.squadX, PLAYER_Z - 4.0, events, 4.2, 2.6);
+    }
     events.push({ type: 'JUMP_SLAM', x: world.squadX, z: PLAYER_Z, hits: slammed });
   } else {
     world.jumpTimer = nextT;
@@ -594,59 +811,121 @@ export function stepJumpArc(world: SimWorld, events: SimEvent[]): void {
 // ---------------------------------------------------------------------------
 // 5. Destructible Boss Shoulder Parts & Polarity-Flip Deflectable Doom-Orbs
 // ---------------------------------------------------------------------------
-export function createBossShoulderParts(world: SimWorld, bossMaxHp: number): SimBossPart[] {
-  const partHp = Math.max(220, Math.round(bossMaxHp * 0.15));
+export function createBossShoulderParts(
+  world: SimWorld,
+  bossMaxHp: number,
+  titanScale = 1,
+  bossId: BossId = 'warden_01',
+): SimBossPart[] {
+  const partHp = Math.max(165, Math.round(bossMaxHp * 0.082));
+  const reactorHp = Math.max(190, Math.round(bossMaxHp * 0.092));
+  const sx = Number((2.15 * (1 + (titanScale - 1) * 0.42)).toFixed(3));
+  const hw = Number((1.05 * (1 + (titanScale - 1) * 0.35)).toFixed(3));
+  const leftLabel =
+    bossId === 'hydra_02' ? '紫焰吐息翼' : bossId === 'omega_zero' ? '歼星重炮肩' : '重火炮肩甲';
+  const rightLabel =
+    bossId === 'hydra_02' ? '苍雷分体翼' : bossId === 'omega_zero' ? '深渊裂隙肩' : '孵化巢肩甲';
+  const reactorLabel =
+    bossId === 'hydra_02' ? '双生共鸣冠核' : bossId === 'omega_zero' ? '相位护盾发生器' : '超压熔炉核心';
   return [
     {
       id: allocEntityId(world),
       slot: 'left',
-      label: '重火炮肩甲',
-      prevX: -2.05,
+      label: leftLabel,
+      prevX: -sx,
       prevZ: -32.8,
-      x: -2.05,
+      x: -sx,
       z: -32.8,
-      halfWidth: 0.88,
-      halfDepth: 0.85,
+      halfWidth: hw,
+      halfDepth: hw,
       hp: partHp,
       maxHp: partHp,
       hitPulse: 0,
+      telegraph: 0,
       destroyed: false,
     },
     {
       id: allocEntityId(world),
       slot: 'right',
-      label: '虫巢孵化肩',
-      prevX: 2.05,
+      label: rightLabel,
+      prevX: sx,
       prevZ: -32.8,
-      x: 2.05,
+      x: sx,
       z: -32.8,
-      halfWidth: 0.88,
-      halfDepth: 0.85,
+      halfWidth: hw,
+      halfDepth: hw,
       hp: partHp,
       maxHp: partHp,
       hitPulse: 0,
+      telegraph: 0,
       destroyed: false,
     },
   ];
+  void reactorHp;
+  void reactorLabel;
+}
+
+export function spawnPhaseTwoReactorPart(world: SimWorld, boss: SimBossState): void {
+  if (boss.parts.some((p) => p.slot === 'reactor')) return;
+  const reactorHp = Math.max(190, Math.round(boss.maxHp * 0.092));
+  const hw = Number((0.98 * (1 + ((boss.titanScale ?? 1) - 1) * 0.35)).toFixed(3));
+  const reactorLabel =
+    boss.id === 'hydra_02' ? '双生共鸣冠核' : boss.id === 'omega_zero' ? '相位护盾发生器' : '超压熔炉核心';
+  boss.parts.push({
+    id: allocEntityId(world),
+    slot: 'reactor',
+    label: reactorLabel,
+    prevX: 2.15,
+    prevZ: boss.z + 1.55,
+    x: 2.15,
+    z: boss.z + 1.55,
+    halfWidth: hw,
+    halfDepth: hw,
+    hp: reactorHp,
+    maxHp: reactorHp,
+    hitPulse: 0,
+    telegraph: 0,
+    destroyed: false,
+  });
 }
 
 export function syncBossShoulderParts(boss: SimBossState): void {
+  const sx = 2.15 * (1 + ((boss.titanScale ?? 1) - 1) * 0.42);
   for (let i = 0; i < boss.parts.length; i++) {
     const pt = boss.parts[i]!;
     pt.prevX = pt.x;
     pt.prevZ = pt.z;
-    const ox = pt.slot === 'left' ? -2.05 : 2.05;
-    if (boss.id === 'hydra_02' && boss.phase === 2 && boss.secondaryCore) {
-      const anchor = pt.slot === 'left' ? boss : boss.secondaryCore;
-      pt.x = normalizeZero(clamp(anchor.x + (pt.slot === 'left' ? -1.2 : 1.2), -4.2, 4.2));
-      pt.z = anchor.z + 1.05;
+    // In HYDRA-02 Phase 2 Twin-Dragon split, Left Wing tracks Primary Dragon and Right Wing tracks Secondary Dragon!
+    if (pt.slot === 'reactor') {
+      // Orbits across lateral flanks (±2.25m) so active players snipe it while AFK x=0 players cannot!
+      const orbitX = Math.sin(boss.phaseElapsed * 1.65 + 1.1) >= 0 ? 2.25 : -2.25;
+      const rx = boss.id === 'hydra_02' && boss.phase >= 2 && boss.secondaryCore
+        ? clamp((boss.x + boss.secondaryCore.x) * 0.5 + orbitX * 0.85, -3.6, 3.6)
+        : clamp(boss.x + orbitX * 0.65, -3.6, 3.6);
+      pt.x = normalizeZero(rx);
+      pt.z = normalizeZero(boss.z + 1.65);
+    } else if (boss.id === 'hydra_02' && boss.phase >= 2 && boss.secondaryCore && pt.slot === 'right') {
+      pt.x = normalizeZero(boss.secondaryCore.x + 1.35);
+      pt.z = normalizeZero(boss.secondaryCore.z + 1.05);
+    } else if (boss.id === 'hydra_02' && boss.phase >= 2 && pt.slot === 'left') {
+      pt.x = normalizeZero(boss.x - 1.35);
+      pt.z = normalizeZero(boss.z + 1.05);
     } else {
-      pt.x = normalizeZero(clamp(boss.x + ox, -4.2, 4.2));
-      pt.z = boss.z + 1.15;
+      pt.x = normalizeZero(boss.x + (pt.slot === 'left' ? -sx : sx));
+      pt.z = normalizeZero(boss.z + 1.15);
+    }
+    if (pt.destroyed) {
+      pt.telegraph = 0;
+    } else if (pt.slot === 'left') {
+      const nextShot = Math.min(boss.orbTimer, boss.doomOrbTimer);
+      pt.telegraph = boss.introProgress >= 1 && nextShot < 1.15 ? clamp(1 - nextShot / 1.15, 0, 1) : 0;
+    } else if (pt.slot === 'reactor') {
+      pt.telegraph = boss.introProgress >= 1 && (boss.shielded || boss.hazardTimer < 1.05) ? clamp(boss.shielded ? 0.85 : 1 - boss.hazardTimer / 1.05, 0, 1) : 0;
+    } else {
+      pt.telegraph = boss.introProgress >= 1 && boss.summonTimer < 1.15 ? clamp(1 - boss.summonTimer / 1.15, 0, 1) : 0;
     }
     if (pt.hitPulse > 0) {
-      const next = pt.hitPulse - 6.0 * FIXED_DT;
-      pt.hitPulse = next <= 1e-9 ? 0 : next;
+      pt.hitPulse = Math.max(0, pt.hitPulse - FIXED_DT * 5);
     }
   }
 }
@@ -673,12 +952,65 @@ export function damageBossPart(
       recordDamage(world, 'explosives', Math.min(boss.hp, shatterChunk));
       boss.hp = Math.max(0, boss.hp - shatterChunk);
     }
-    boss.breakTimer = 4.0;
-    addResonance(world, RESONANCE_GAIN_VAULT_BREAK, events);
+    boss.breakTimer = part.slot === 'reactor' ? 4.5 : 4.0;
+    if (part.slot === 'reactor') {
+      // Breaking Dorsal Shield/Overload Reactor immediately collapses active shields, suppresses Enrage pulse & drops an Amplified Prism Lens!
+      boss.shielded = false;
+      if (boss.secondaryCore) boss.secondaryCore.shielded = false;
+      for (const py of boss.pylons) {
+        if (!py.destroyed) {
+          py.hp = Math.max(0, Math.round(py.hp * 0.35));
+          if (py.hp <= 0) py.destroyed = true;
+        }
+      }
+      boss.enragePulseTimer = 8.0;
+      spawnPrismLens(world, clamp(boss.x, -2.5, 2.5), -11.5, 1.8, 2.2, 1.1);
+    } else if (part.slot === 'left') {
+      // Breaking Left Heavy Cannon Shoulder immediately purges all airborne Boss projectiles!
+      for (let i = world.projectiles.length - 1; i >= 0; i--) {
+        const p = world.projectiles[i];
+        if (p && p.active && p.hostile) {
+          world.projectilePool.release(p);
+          world.projectiles.splice(i, 1);
+        }
+      }
+    } else {
+      // Breaking Right Hive Shoulder immediately collapses half of active summoned swarm minions!
+      let purged = 0;
+      for (let i = 0; i < world.enemies.length; i++) {
+        const e = world.enemies[i];
+        if (e && e.active && e.isSwarmFodder && !e.consumed && e.hp > 0 && purged % 2 === 0) {
+          e.hp = 0;
+          e.consumed = true;
+          e.active = false;
+        }
+        if (e && e.isSwarmFodder) purged += 1;
+      }
+    }
+    addResonance(world, RESONANCE_GAIN_VAULT_BREAK + (hasChip(world, 'chip_exec_protocol') ? 0.25 : 0), events);
+    if (hasChip(world, 'chip_exec_protocol')) {
+      world.nukeCharge = Math.min(1, world.nukeCharge + 0.25);
+    }
+    spawnCoreShard(world, part.x, part.z + 1.5, 2);
+    const effectDesc =
+      part.slot === 'reactor'
+        ? '护盾过载崩解 · 投射黄金聚能透镜 · 4.5s 2.0× 破防暴露'
+        : boss.id === 'hydra_02'
+        ? part.slot === 'left'
+          ? '紫焰吐息弹幕锐减 72% · 侧翼红区收窄 25%'
+          : '召唤裂变锐减 72% · 二阶段破盾暴露延长至 5.0s'
+        : boss.id === 'omega_zero'
+          ? part.slot === 'left'
+            ? '全阶段歼星重炮锐减 72% · 空中弹球清空'
+            : '深渊虫潮召唤锐减 72% · 额外空投引爆电容桶'
+          : part.slot === 'left'
+            ? '重火炮弹幕锐减 72% · 空中弹球瞬间清空'
+            : '母巢召唤频率锐减 72% · 场上半数杂兵湮灭';
     events.push({
       type: 'BOSS_PART_BREAK',
       slot: part.slot,
       label: part.label,
+      effectDesc,
       x: part.x,
       z: part.z,
     });
@@ -695,8 +1027,8 @@ export function spawnDoomOrb(world: SimWorld, boss: SimBossState, events: SimEve
     prevZ: boss.z + 1.8,
     x: normalizeZero(clamp(boss.x, -3.2, 3.2)),
     z: boss.z + 1.8,
-    vz: 5.4,
-    radius: 1.08,
+    vz: 7.2,
+    radius: 1.12,
     value: startVal,
     damagePerStep: dmgPerStep,
     accDamage: 0,
@@ -802,8 +1134,255 @@ export function stepCompetitionEntitiesMotion(world: SimWorld, events: SimEvent[
       continue;
     }
 
+    // Unreflected Negative Doom-Orb crossing PLAYER_Z punishes AFK/undodged squad!
+    if (!orb.reflected && orb.prevZ < PLAYER_Z && orb.z >= PLAYER_Z && world.squadAirY <= 0.6) {
+      const hitCenter = Math.abs(world.squadX - orb.x) <= orb.radius + 0.42 * world.formationRadius;
+      const hitTwin =
+        hasMutator(world, 'mirror_twin') &&
+        Math.abs(world.squadX) > 0.45 &&
+        Math.abs(-world.squadX - orb.x) <= orb.radius + 0.36 * world.formationRadius;
+      if (hitCenter || hitTwin) {
+        orb.active = false;
+        const baseOrbLoss = Math.max(2, Math.min(18, Math.round(Math.abs(orb.value) * (hitCenter ? 0.55 : 0.3))));
+        const endlessScaleLoss =
+          world.endless && world.endless.wave >= 2 && hitCenter
+            ? Math.round(world.squadCount * (world.endless.wave >= 3 ? 0.38 : 0.25))
+            : 0;
+        const rawLoss = Math.max(baseOrbLoss, endlessScaleLoss);
+        const loss = mitigateLossWithAegis(world, rawLoss, events);
+        const before = world.squadCount;
+        world.squadCount = clampSquadCount(before - loss);
+        const actual = before - world.squadCount;
+        if (actual > 0) {
+          events.push({ type: 'SQUAD_LOSS', x: orb.x, z: PLAYER_Z, lost: actual, reason: 'BOSS_ATTACK' });
+          deployReserveIfAvailable(world, actual, events);
+        }
+        if (world.squadCount === 0) {
+          world.phase = 'DEFEAT';
+          world.defeatReason = 'BOSS_ATTACK';
+          events.push({ type: 'RUN_DEFEAT', sector: world.sector, reason: 'BOSS_ATTACK' });
+        }
+        world.doomOrbs.splice(i, 1);
+        continue;
+      }
+    }
     if (orb.z > DESPAWN_Z || orb.z < -85) {
       world.doomOrbs.splice(i, 1);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 6. AAA Mid-Run Set-Pieces: Shootable Sky-Drop Plasma Cargo & Maglev Express Sweep
+// ---------------------------------------------------------------------------
+function allocSpectacleId(world: SimWorld): number {
+  world.spectacleIdSeq = (world.spectacleIdSeq ?? 0) + 1;
+  return 900000 + world.spectacleIdSeq;
+}
+
+export function spawnSkyCargo(
+  world: SimWorld,
+  x: number,
+  z: number,
+  vz: number,
+  events?: SimEvent[],
+  overrideHp?: number,
+): SimSkyCargo {
+  const maxHp = Math.max(18, Math.round(overrideHp ?? Math.max(24, world.trueSquadDps * 0.48)));
+  const clampedX = normalizeZero(clamp(x, -TRACK_HALF_WIDTH + 1.5, TRACK_HALF_WIDTH - 1.5));
+  const cargo: SimSkyCargo = {
+    id: allocSpectacleId(world),
+    prevX: clampedX,
+    prevZ: z,
+    x: clampedX,
+    y: 3.85,
+    z,
+    vy: 0,
+    vz,
+    halfWidth: 1.48,
+    halfDepth: 1.15,
+    hp: maxHp,
+    maxHp,
+    state: 'hanging',
+    slamTimer: 0,
+    hitPulse: 0,
+    active: true,
+  };
+  world.skyCargos.push(cargo);
+  if (events) events.push({ type: 'SKY_CARGO_SPAWN', x: cargo.x, z: cargo.z });
+  return cargo;
+}
+
+export function damageSkyCargo(
+  world: SimWorld,
+  cargo: SimSkyCargo,
+  damage: number,
+  events: SimEvent[],
+): void {
+  if (!cargo.active || cargo.state !== 'hanging' || damage <= 0) return;
+  cargo.hp = Math.max(0, cargo.hp - damage);
+  cargo.hitPulse = 1.0;
+  if (cargo.hp <= 0) {
+    cargo.hp = 0;
+    cargo.state = 'falling';
+    cargo.vy = -4.5;
+    events.push({ type: 'SKY_CARGO_DROP', x: cargo.x, z: cargo.z });
+  }
+}
+
+export function spawnMaglevSweep(
+  world: SimWorld,
+  z: number,
+  dir: 1 | -1,
+  events?: SimEvent[],
+): SimMaglevTrain {
+  const train: SimMaglevTrain = {
+    id: allocSpectacleId(world),
+    z,
+    dir,
+    trainX: -dir * 34,
+    prevTrainX: -dir * 34,
+    state: 'warning',
+    elapsed: 0,
+    warningDuration: 1.25,
+    warningProgress: 0,
+    sweepEmitted: false,
+    kills: 0,
+    active: true,
+  };
+  world.maglevTrains.push(train);
+  if (events) events.push({ type: 'MAGLEV_WARN', z, dir });
+  return train;
+}
+
+export function stepMidRunSpectacles(world: SimWorld, events: SimEvent[]): void {
+  // Auto-schedule mid-run spectacles during active runway advance (never mutating RNG or boss fight)
+  if (!world.boss && world.currentScrollSpeed > 1) {
+    const isLooped = Boolean(world.endless || world.mods.blitz);
+    const cargoStage = isLooped
+      ? Math.floor((world.simTime + 8.5) / 16.5)
+      : world.runwayProgress >= 0.74
+        ? 3
+        : world.runwayProgress >= 0.44
+          ? 2
+          : world.runwayProgress >= 0.14
+            ? 1
+            : 0;
+    if (cargoStage > world.lastCargoStage && world.skyCargos.length < 2) {
+      world.lastCargoStage = cargoStage;
+      const laneX = ((cargoStage + world.sector) % 3 - 1) * 2.15;
+      spawnSkyCargo(world, laneX, PLAYER_Z - 42, world.currentScrollSpeed * 0.68, events);
+    }
+
+    const magStage = isLooped
+      ? Math.floor((world.simTime + 11.0) / 21.0)
+      : world.runwayProgress >= 0.62
+        ? 2
+        : world.runwayProgress >= 0.28
+          ? 1
+          : 0;
+    if (magStage > world.lastMaglevStage && world.maglevTrains.length === 0) {
+      world.lastMaglevStage = magStage;
+      const dir: 1 | -1 = (magStage + world.sector) % 2 === 0 ? 1 : -1;
+      spawnMaglevSweep(world, PLAYER_Z - 23.5, dir, events);
+    }
+  }
+
+  // Step SkyCargos (hanging -> falling -> slammed AoE crush)
+  for (let i = world.skyCargos.length - 1; i >= 0; i--) {
+    const c = world.skyCargos[i]!;
+    if (!c.active) {
+      world.skyCargos.splice(i, 1);
+      continue;
+    }
+    c.prevX = c.x;
+    c.prevZ = c.z;
+    if (c.hitPulse > 0) {
+      const np = c.hitPulse - 6.0 * FIXED_DT;
+      c.hitPulse = np <= 1e-9 ? 0 : np;
+    }
+
+    if (c.state === 'hanging') {
+      c.z += (world.currentScrollSpeed > 0 ? world.currentScrollSpeed * 0.68 : c.vz) * FIXED_DT;
+      if (c.z > DESPAWN_Z) {
+        c.active = false;
+        world.skyCargos.splice(i, 1);
+      }
+    } else if (c.state === 'falling') {
+      c.z += world.currentScrollSpeed * 0.35 * FIXED_DT;
+      c.vy -= 38.0 * FIXED_DT;
+      c.y += c.vy * FIXED_DT;
+      if (c.y <= 0.05) {
+        c.y = 0;
+        c.state = 'slammed';
+        c.slamTimer = 0.55;
+        const crushRadius = 6.2;
+        const crushDmg = (240 + world.trueSquadDps * 2.4) * world.mods.damageMult;
+        let kills = 0;
+        const snapLen = world.enemies.length;
+        for (let k = 0; k < snapLen; k++) {
+          const e = world.enemies[k];
+          if (!e || !e.active || e.consumed || e.bypassed || e.hp <= 0) continue;
+          if (Math.hypot(e.x - c.x, e.z - c.z) <= crushRadius + e.radius) {
+            recordDamage(world, 'explosives', Math.min(e.hp, crushDmg));
+            if (damageEnemy(world, e, crushDmg, 2.0, events, { bypassShield: true })) {
+              kills += 1;
+            }
+          }
+        }
+        addResonance(world, 0.28, events);
+        events.push({ type: 'SKY_CARGO_SLAM', x: c.x, z: c.z, kills });
+      }
+    } else {
+      c.z += world.currentScrollSpeed * FIXED_DT;
+      c.slamTimer -= FIXED_DT;
+      if (c.slamTimer <= 0 || c.z > DESPAWN_Z) {
+        c.active = false;
+        world.skyCargos.splice(i, 1);
+      }
+    }
+  }
+
+  // Step Maglev Express Crossings (1.25s laser telegraph -> 136 m/s lateral bullet-train sweep!)
+  for (let i = world.maglevTrains.length - 1; i >= 0; i--) {
+    const tr = world.maglevTrains[i]!;
+    if (!tr.active) {
+      world.maglevTrains.splice(i, 1);
+      continue;
+    }
+    tr.elapsed += FIXED_DT;
+    if (tr.state === 'warning') {
+      tr.warningProgress = clamp(tr.elapsed / tr.warningDuration, 0, 1);
+      if (tr.elapsed >= tr.warningDuration) {
+        tr.state = 'crossing';
+        tr.elapsed = 0;
+        tr.warningProgress = 1;
+      }
+    } else {
+      tr.prevTrainX = tr.trainX;
+      tr.trainX += tr.dir * 136.0 * FIXED_DT;
+      const minSweepX = Math.min(tr.prevTrainX, tr.trainX) - 7.5;
+      const maxSweepX = Math.max(tr.prevTrainX, tr.trainX) + 7.5;
+      const snapLen = world.enemies.length;
+      for (let k = 0; k < snapLen; k++) {
+        const e = world.enemies[k];
+        if (!e || !e.active || e.consumed || e.bypassed || e.hp <= 0) continue;
+        if (Math.abs(e.z - tr.z) <= 3.35 + e.radius && e.x >= minSweepX && e.x <= maxSweepX) {
+          const ramDmg = Math.max(e.hp + 50, 9999);
+          recordDamage(world, 'explosives', e.hp);
+          if (damageEnemy(world, e, ramDmg, 0, events, { bypassShield: true })) {
+            tr.kills += 1;
+          }
+        }
+      }
+      if (!tr.sweepEmitted && tr.dir * tr.trainX >= -2.0) {
+        tr.sweepEmitted = true;
+        events.push({ type: 'MAGLEV_SWEEP', z: tr.z, dir: tr.dir, kills: tr.kills });
+      }
+      if (Math.abs(tr.trainX) > 38) {
+        tr.active = false;
+        world.maglevTrains.splice(i, 1);
+      }
     }
   }
 }

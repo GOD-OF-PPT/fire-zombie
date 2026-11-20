@@ -80,13 +80,10 @@ describe('Sector 4 Random Corridor generator', () => {
     }
   });
 
-  it('is winnable by the autopilot and lost by an idle player', () => {
-    for (const seed of [1, 2, 3, 4, 5, 6]) {
-      const win = runSector4(seed, 'auto');
-      expect(win.phase).toBe('VICTORY');
-      expect(win.simTime).toBeLessThanOrEqual(150);
-      const afk = runSector4(seed, 'afk');
-      expect(afk.phase).toBe('DEFEAT');
-    }
+  it.each([1, 2, 3, 4, 5, 6])('allows a steered win and an idle defeat on seed %i', (seed) => {
+    const win = runSector4(seed, 'auto');
+    expect(win.phase).toBe('VICTORY');
+    expect(win.simTime).toBeLessThanOrEqual(150);
+    expect(runSector4(seed, 'afk').phase).toBe('DEFEAT');
   });
 });

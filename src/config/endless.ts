@@ -56,7 +56,10 @@ function scaleEncounter(enc: RunwayEncounter, wave: number): RunwayEncounter {
       const extras = Math.min(10, Math.floor((wave - 1) * 2.5));
       for (let i = 0; i < extras; i++) {
         const src = enc.units[(i * 2 + wave) % enc.units.length]!;
-        const kind = src.kind === 'bastion' || src.kind === 'dasher' ? 'crawler' : src.kind;
+        const kind =
+          src.kind === 'bastion' || src.kind === 'brood' || src.kind === 'glacier' || src.kind === 'dasher'
+            ? 'crawler'
+            : src.kind;
         units.push({
           kind,
           x: Math.max(-3.4, Math.min(3.4, -src.x * 0.82 + ((i % 3) - 1) * 0.6)),
@@ -104,6 +107,56 @@ export function generateEndlessStage(seed: number, wave: number): SectorScriptCo
       ...(bossId === 'omega_zero' ? { pylonHp: Math.round(3200 * hpMult) } : {}),
       enrageAfterSec: bossId === 'omega_zero' ? 38 : bossId === 'hydra_02' ? 30 : 26,
     },
-    encounters: generated.encounters.map((enc) => scaleEncounter(enc, w)),
+    encounters: (() => {
+      const scaled = generated.encounters.map((enc) => scaleEncounter(enc, w));
+      // Wave 2+ Chapter Operation Problems: Alternating Bilateral Division Forks + Jump-Pad Flyovers
+      // Rewards active lane weaving & Jump-Pad timing while defeating static X camping!
+      if (w >= 2) {
+        const side = w % 2 === 0 ? 1 : -1;
+        scaled.push(
+          {
+            type: 'jump_pad',
+            crossDist: 298,
+            x: 2.55 * side,
+          },
+          {
+            type: 'gate_row',
+            crossDist: 312,
+            layout: 'standalone',
+            single: { x: 0.0, halfWidth: 2.25, op: 'div', value: w >= 3 ? 4 : 3, mutable: false },
+          },
+          {
+            type: 'enemies',
+            crossDist: 586,
+            units: [
+              { kind: 'dasher', x: 0.0, dz: 0 },
+              { kind: 'burrower', x: -0.75, dz: 1.3 },
+              { kind: 'burrower', x: 0.75, dz: 1.3 },
+              { kind: 'bastion', x: 0.0, dz: 2.6 },
+              { kind: 'stalker', x: -2.4 * side, dz: 3.1 },
+            ],
+          },
+          {
+            type: 'jump_pad',
+            crossDist: 612,
+            x: -2.55 * side,
+          },
+          {
+            type: 'gate_row',
+            crossDist: 626,
+            layout: 'standalone',
+            single: { x: 0.95 * side, halfWidth: 2.35, op: 'div', value: 3, mutable: false },
+          },
+          {
+            type: 'gate_row',
+            crossDist: 825,
+            layout: 'standalone',
+            single: { x: 0.0, halfWidth: 2.15, op: 'sub', value: 65 + w * 18, mutable: false },
+          },
+        );
+        scaled.sort((a, b) => a.crossDist - b.crossDist);
+      }
+      return scaled;
+    })(),
   };
 }

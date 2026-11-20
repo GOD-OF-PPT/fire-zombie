@@ -21,6 +21,15 @@ const ENEMY_CLIPS = {
   bastion: ['Walk', 'Weapon', 'Death'],
   mitosis: ['Walk', 'Death'],
   siphon: ['Fast_Flying', 'Flying_Idle', 'Death'],
+  bomber: ['Run', 'Prime', 'Death'],
+  phalanx: ['Walk', 'Bash', 'Death'],
+  stalker: ['Run', 'Slash', 'Death'],
+  brood: ['Walk', 'Spawn', 'Death'],
+  howler: ['Walk', 'Howl', 'Death'],
+  glacier: ['Walk', 'Smash', 'Death'],
+  beholder: ['Flying_Idle', 'Focus', 'Death'],
+  burrower: ['Run', 'Drill', 'Death'],
+  necromancer: ['Flying_Idle', 'Cast', 'Death'],
 } as const;
 const BOSS_CLIPS = {
   warden: ['Fast_Flying', 'Punch', 'Death'],

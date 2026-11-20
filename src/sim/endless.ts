@@ -1,6 +1,6 @@
 import { generateEndlessStage } from '../config/endless';
 import type { SimWorld } from './entities';
-import { clampSquadCount } from './math';
+import { grantSquadWithReserve } from './competition';
 import { getProtocolOffers, hasSynergy } from '../config/protocols';
 import type { EndlessUpgradeId } from '../types/game';
 import { BLADES_MAX_COUNT } from '../config/constants';
@@ -23,7 +23,7 @@ export function advanceEndlessStage(world: SimWorld): EndlessStageTransition {
   const completedWave = state.wave - 1;
   const synBonus = hasSynergy(state.upgrades, 'immortal_legion') ? 10 : 0;
   const bonus = Math.min(40, 10 + completedWave * 2) + (state.upgrades.supply ?? 0) * 12 + synBonus;
-  world.squadCount = clampSquadCount(world.squadCount + bonus);
+  grantSquadWithReserve(world, bonus);
   world.stats.peakSquad = Math.max(world.stats.peakSquad, world.squadCount);
   world.resonance = 1;
   world.overdriveTimer = 0;
@@ -67,7 +67,7 @@ export function chooseEndlessUpgrade(world: SimWorld, id: EndlessUpgradeId): boo
   state.upgrades[id] = (state.upgrades[id] ?? 0) + 1;
   switch (id) {
     case 'power': world.mods.damageMult *= 1.18; break;
-    case 'recruits': world.squadCount = clampSquadCount(world.squadCount + 40); break;
+    case 'recruits': grantSquadWithReserve(world, 40); break;
     case 'resonance': world.mods.resonanceMult *= 1.3; break;
     case 'weapon':
       world.stats.vaultsCracked = Math.max(1, world.stats.vaultsCracked);

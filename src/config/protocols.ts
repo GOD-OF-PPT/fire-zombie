@@ -3,9 +3,9 @@ import type { EndlessUpgradeId } from '../types/game';
 export const PROTOCOLS: Record<EndlessUpgradeId, { name: string; tag: string; glyph: string; color: string; description: string }> = {
   power: { name: '棱镜增幅', tag: '火力构筑', glyph: '✦', color: '#75e6ff', description: '全武器伤害 +18%，本局持续生效，可叠加。' },
   recruits: { name: '空降援军', tag: '即时补给', glyph: '◇', color: '#88efba', description: '立即补充 40 名战士，扩充编队与基础火力。' },
-  resonance: { name: '共鸣回路', tag: '超载构筑', glyph: 'ϟ', color: '#d7adff', description: '共鸣充能效率 +30%，更频繁地释放超载。' },
-  weapon: { name: '武装校准', tag: '武器进化', glyph: '⌖', color: '#ffca75', description: '当前武器升 1 级；已满级则获得 3 层武器精通。' },
-  blades: { name: '环轨护卫', tag: '近身防线', glyph: '⟡', color: '#a8bdff', description: '增加 2 枚环轨刃（最多 4 枚）；已满编则全武器伤害 +12%。' },
+  resonance: { name: '镜面回路', tag: '棱镜质变', glyph: 'ϟ', color: '#d7adff', description: '充能效率+30%；脉冲将敌弹反射为穿甲光矛，超载召唤跟随增幅棱镜！' },
+  weapon: { name: '双核校准', tag: '武器质变', glyph: '⌖', color: '#ffca75', description: '主武器升 1 级（满级+3层精通）；2阶起额外提升全构筑齐射射速！' },
+  blades: { name: '奇点护卫', tag: '引力质变', glyph: '⟡', color: '#a8bdff', description: '+2 枚环轨刃；相位脉冲与跳台震地额外坍缩生成引力奇点聚怪！' },
   supply: { name: '后勤链路', tag: '长期成长', glyph: '▱', color: '#f9b3ce', description: '此后每次击破首领额外补员 12 人，可叠加。' },
 };
 

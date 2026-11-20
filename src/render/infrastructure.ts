@@ -63,7 +63,7 @@ export class Infrastructure {
   update(scroll: number): void {
     const d = this.d;
     for (let i = 0; i < 20; i++) {
-      const z = -130 + ((i * 8 + scroll) % 160);
+      const z = -170 + ((((i * 9 + scroll) % 180) + 180) % 180);
       for (let side = 0; side < 2; side++) {
         d.position.set((side ? 1 : -1) * 5.95, 0, z);
         d.rotation.set(0, side ? 0 : Math.PI, 0);

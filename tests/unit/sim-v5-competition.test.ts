@@ -10,7 +10,7 @@ import {
 } from '../../src/sim/competition';
 import { spawnEnemy } from '../../src/sim/enemies';
 import { spawnGateRow } from '../../src/sim/gates';
-import { createSimulation } from '../../src/sim/index';
+import { computeDynamicSwarmProfile, createSimulation } from '../../src/sim/index';
 import { damageVault, spawnVault } from '../../src/sim/weapons';
 import {
   buildSimSnapshot,
@@ -162,8 +162,8 @@ describe('V5 Competition Blueprint: 3 Superweapon Fusions, Track Set-Pieces, Bos
     const shoulderBeforeMovement = boss.parts[0]!.x;
     for (let i = 0; i < 30; i++) stepWorldFixed(world, { dragDeltaX: 0, keyAxisX: 0 });
     expect(boss.parts[0]!.x).not.toBe(shoulderBeforeMovement);
-    expect(boss.parts[0]!.x).toBeCloseTo(Math.max(-4.2, boss.x - 2.05), 6);
-    expect(boss.parts[1]!.x).toBeCloseTo(Math.min(4.2, boss.x + 2.05), 6);
+    expect(boss.parts[0]!.x).toBeCloseTo(boss.x - 2.15, 6);
+    expect(boss.parts[1]!.x).toBeCloseTo(boss.x + 2.15, 6);
 
     // 1. Break Left Shoulder Cannon -> triggers BOSS_PART_BREAK & 4.0s breakTimer!
     const brkEvs: Parameters<typeof damageBossPart>[3] = [];
@@ -228,5 +228,107 @@ describe('V5 Competition Blueprint: 3 Superweapon Fusions, Track Set-Pieces, Bos
     const negProjs = s1.projectiles.filter((p) => !p.hostile && p.x < -0.3).length;
     expect(posProjs).toBeGreaterThan(0);
     expect(negProjs).toBeGreaterThan(0);
+  });
+
+  it('evolves Boss into Colossal Titan Rank with multi-layer HP bars and floods the arena with a Sea of Minions when upgraded', () => {
+    const baseWorld = createSimWorld();
+    resetSimWorldForSector(baseWorld, 1);
+    const baseBoss = spawnSectorBoss(baseWorld, []);
+    expect(baseBoss.maxHp).toBe(7500);
+    expect(baseBoss.titanRank).toBe(1);
+
+    const upWorld = createSimWorld();
+    resetSimWorldForSector(upWorld, 1, {
+      bonusSquad: 36,
+      damageMult: 2.6,
+      critChance: 0.35,
+      mutators: ['mirror_twin'],
+    });
+    upWorld.enemyPool.releaseAll(upWorld.enemies);
+    upWorld.squadCount = 240;
+    upWorld.learnedWeaponLevels.plasma = 3;
+    upWorld.learnedWeaponLevels.cryo = 2;
+    upWorld.learnedWeaponLevels.scatter = 2;
+    upWorld.overclockStacks = 3;
+    reconcileFormationAndDps(upWorld);
+
+    const titanEvs: Parameters<typeof spawnSectorBoss>[1] = [];
+    const titanBoss = spawnSectorBoss(upWorld, titanEvs);
+    expect(titanBoss.titanRank).toBeGreaterThanOrEqual(5);
+    expect(titanBoss.titanScale).toBeGreaterThan(1.25);
+    expect(titanBoss.hpBars).toBeGreaterThanOrEqual(4);
+    expect(titanBoss.maxHp).toBeGreaterThan(30000);
+    expect(titanEvs.some((e) => e.type === 'BOSS_INTRO' && (e.titanRank ?? 0) >= 5)).toBe(true);
+
+    // Finish Boss intro & step 2.5s -> massive Sea of Minions (> 30 active enemies!) pours onto the bridge!
+    upWorld.fireCooldown = 999;
+    upWorld.auxCooldowns = { pulse: 999, scatter: 999, rail: 999, plasma: 999, cryo: 999 };
+    for (let i = 0; i < 200; i++) {
+      stepWorldFixed(upWorld, { dragDeltaX: 0, keyAxisX: 0 });
+    }
+    expect(upWorld.enemies.length).toBeGreaterThanOrEqual(32);
+  });
+
+  it('scales monster wave density, SWARM_SURGE tiers, and slaughter kills strictly upward with live character strength even on a 0-upgrade run', () => {
+    const runSegment = (setup: (w: ReturnType<typeof createSimWorld>) => void) => {
+      const w = createSimWorld();
+      resetSimWorldForSector(w, 1); // ZERO meta upgrades!
+      w.gateRowPool.releaseAll(w.gateRows);
+      w.gatePool.releaseAll(w.gates);
+      w.vaultPool.releaseAll(w.vaults);
+      w.enemyPool.releaseAll(w.enemies);
+      w.scrollDistance = 110;
+      w.spawnCursor = 999; // Measure pure Dynamic Swarm Director + combat slaughter!
+      w.playerHasSteered = true;
+      setup(w);
+      reconcileFormationAndDps(w);
+
+      let surges = 0;
+      let peakActiveEnemies = 0;
+      for (let i = 0; i < 360; i++) {
+        const evs = stepWorldFixed(w, { dragDeltaX: 0, keyAxisX: i % 60 < 30 ? -0.2 : 0.2 });
+        surges += evs.filter((e) => e.type === 'SWARM_SURGE').length;
+        if (w.enemies.length > peakActiveEnemies) peakActiveEnemies = w.enemies.length;
+      }
+      return {
+        profile: computeDynamicSwarmProfile(w),
+        kills: w.stats.kills,
+        surges,
+        peakActiveEnemies,
+      };
+    };
+
+    const weak = runSegment((w) => {
+      w.squadCount = 6;
+    });
+    const medium = runSegment((w) => {
+      w.squadCount = 58;
+      w.learnedWeaponLevels.scatter = 2;
+      w.bladesCount = 2;
+    });
+    const powerhouse = runSegment((w) => {
+      w.squadCount = 220;
+      w.learnedWeaponLevels.plasma = 3;
+      w.learnedWeaponLevels.cryo = 2;
+      w.learnedWeaponLevels.scatter = 2;
+      w.learnedWeaponLevels.rail = 2;
+      w.activeFusions = ['cryo_singularity', 'prism_ricochet_web'];
+      w.overclockStacks = 2;
+      w.overdriveTimer = 5.0;
+    });
+
+    // Stronger character -> strictly higher swarm multiplier & tier!
+    expect(weak.profile.swarmMult).toBe(1);
+    expect(medium.profile.swarmMult).toBeGreaterThan(2.5);
+    expect(powerhouse.profile.swarmMult).toBeGreaterThan(6.5);
+    expect(powerhouse.profile.swarmTier).toBeGreaterThan(medium.profile.swarmTier);
+
+    // Stronger character -> triggers SWARM_SURGE & floods the highway with massive slaughter!
+    expect(weak.kills).toBe(0);
+    expect(medium.surges).toBeGreaterThanOrEqual(1);
+    expect(powerhouse.surges).toBeGreaterThanOrEqual(1);
+    expect(medium.kills).toBeGreaterThanOrEqual(20);
+    expect(powerhouse.kills).toBeGreaterThan(medium.kills * 1.8);
+    expect(powerhouse.peakActiveEnemies).toBeGreaterThanOrEqual(30);
   });
 });

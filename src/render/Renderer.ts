@@ -1,10 +1,18 @@
+import type { AccessibilityConfig } from '../app/save';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { describeVaultRelation } from '../config/blitz';
+import { SQUAD_SKINS } from '../app/meta';
 import type {
   BarrelSnapshot,
+  CollapseRiftSnapshot,
+  HighSpireSnapshot,
+  PantheonCoBossSnapshot,
+  TacticalEventSnapshot,
   BossSnapshot,
   ContractWallSnapshot,
   DoomOrbSnapshot,
@@ -17,10 +25,16 @@ import type {
   RewardId,
   SectorId,
   SimSnapshot,
+  SquadSkinId,
   VaultSnapshot,
   WeaponId,
+  NemesisSnapshot,
+  NirvanaArchetype,
+  PhotoFilterKind,
+  TriPrismLinkSnapshot,
 } from '../types/game';
 import { BLADES_ORBIT_RADIUS, GOLDEN_ANGLE_RAD, PLAYER_Z, TRACK_HALF_WIDTH } from '../config/constants';
+import { ENEMY_CONFIGS } from '../config/enemies';
 import { SECTORS } from '../config/sectors';
 import { REWARD_META, SECTOR_META } from '../app/meta';
 import { Effects } from './Effects';
@@ -30,6 +44,7 @@ import {
   COLORS,
   gateColors,
   gateTextureKey,
+  setGateColorblindMode,
   makeCanvasTexture,
   makeGlowTexture,
   makeHexCommandTexture,
@@ -43,15 +58,21 @@ import {
 } from './textures';
 import { makeCharacterMaterial } from './models/rig';
 import { buildBladeGeo, buildBoltGeo, buildRewardDisplayGeo } from './models/soldiers';
-import { GeoBuilder, box, cyl, oct, sph, tor } from './models/kit';
+import { GeoBuilder, box, cone, cyl, oct, sph, tor } from './models/kit';
 import {
   AnimatedActor,
+  bakeEnemyPoseFrames,
   loadGltfLibrary,
   spawnActor,
+  type BakedPosePair,
   type GltfLibrary,
 } from './models/gltfLibrary';
 import { buildProceduralLibrary } from './models/proceduralLibrary';
-import { createToonCharMaterial, getOutlineMaterial } from './models/toon';
+import {
+  createInstancedEnemyToonMaterial,
+  createToonCharMaterial,
+  getOutlineMaterial,
+} from './models/toon';
 import { loadTrialVault } from './models/trialVault';
 
 export const WEAPON_COLOR: Record<WeaponId, number> = {
@@ -62,28 +83,106 @@ export const WEAPON_COLOR: Record<WeaponId, number> = {
   cryo: 0x9fe6ff,
 };
 
-const TRACK_LEN = 150;
-const TRACK_CENTER_Z = -60;
+const TRACK_LEN = 220;
+const TRACK_CENTER_Z = -95;
 /** Max rendered squad actors so every chibi trooper & weapon stays distinct (never a mushy overlap blob) */
 const MAX_RENDER_SQUAD = 32;
 const SQUAD_POOL_SIZES: [number, number, number] = [32, 18, 6];
-const MAX_PROJ = 1800;
-const MAX_SHADOWS = 520;
+const MAX_PROJ = 2400;
+const MAX_SHADOWS = 1280;
+const MAX_DECALS = 1024;
 
-const ENEMY_POOL_SIZE: Record<EnemyKind, number> = {
-  crawler: 96,
-  dasher: 36,
-  bastion: 24,
-  mitosis: 40,
-  siphon: 20,
+interface DecalEntry {
+  active: boolean;
+  x: number;
+  z: number;
+  radius: number;
+  rot: number;
+  age: number;
+  maxAge: number;
+  kind: 0 | 1 | 2 | 3 | 4 | 5; // 0=crater, 1=acid, 2=frost, 3=slash, 4=magma_fissure, 5=mag_tidal_ripple
+  r: number;
+  g: number;
+  b: number;
+}
+
+interface SkyCargoView {
+  id: number;
+  group: THREE.Group;
+  drone: THREE.Group;
+  crate: THREE.Mesh;
+  tether: THREE.Mesh;
+  reticle: THREE.Mesh;
+  hpFill: THREE.Mesh;
+  seen: boolean;
+}
+
+interface MaglevView {
+  id: number;
+  group: THREE.Group;
+  railWarn: THREE.Mesh;
+  railMat: THREE.MeshBasicMaterial;
+  train: THREE.Group;
+  seen: boolean;
+}
+
+/** Per-pose InstancedMesh capacity per EnemyKind (7 pose buckets each -> handles 350+ simultaneous horde smoothly!) */
+const ENEMY_BATCH_CAP: Record<EnemyKind, number> = {
+  crawler: 260,
+  dasher: 64,
+  bastion: 32,
+  mitosis: 96,
+  siphon: 32,
+  bomber: 56,
+  phalanx: 42,
+  stalker: 52,
+  brood: 28,
+  howler: 32,
+  glacier: 36,
+  beholder: 36,
+  burrower: 48,
+  necromancer: 32,
+};
+
+/**
+ * V10 4-Tier Visual Size Hierarchy:
+ *  - Tier 1 Swarm Minion (crawler): 1.24x solid hound-scale fodder
+ *  - Tier 2 Raiders (bomber/stalker/burrower/dasher/mitosis): 1.46x-1.56x chunky skirmishers
+ *  - Tier 3 Armored Elites (phalanx/howler/beholder/necromancer/siphon): 1.64x-1.70x imposing specialists
+ *  - Tier 4 Super-Armor Juggernauts (glacier/brood/bastion): 1.72x-1.84x towering raid-miniboss giants!
+ */
+const ENEMY_VISUAL_SCALE: Record<EnemyKind, number> = {
+  crawler: 1.24,
+  bomber: 1.48,
+  stalker: 1.5,
+  burrower: 1.56,
+  dasher: 1.48,
+  mitosis: 1.46,
+  siphon: 1.64,
+  beholder: 1.68,
+  howler: 1.64,
+  necromancer: 1.66,
+  phalanx: 1.68,
+  brood: 1.62,
+  glacier: 1.70,
+  bastion: 1.66,
 };
 
 const ENEMY_BAR_H: Record<EnemyKind, number> = {
-  crawler: 1.42,
-  dasher: 1.88,
-  bastion: 2.95,
-  mitosis: 1.92,
-  siphon: 2.45,
+  crawler: 1.45,
+  dasher: 1.92,
+  bastion: 2.98,
+  mitosis: 1.96,
+  siphon: 2.48,
+  bomber: 1.8,
+  phalanx: 2.2,
+  stalker: 1.86,
+  brood: 2.15,
+  howler: 2.32,
+  glacier: 2.42,
+  beholder: 2.2,
+  burrower: 1.62,
+  necromancer: 2.32,
 };
 
 /** A stalled model download falls back to procedural actors instead of leaving the run empty */
@@ -238,21 +337,32 @@ interface SquadSlotState {
   actor: AnimatedActor | null;
 }
 
+interface EnemyPoseBatch {
+  body: THREE.InstancedMesh;
+  outline: THREE.InstancedMesh;
+  fxAttr: THREE.InstancedBufferAttribute;
+  fxArray: Float32Array;
+  count: number;
+  outlineCount: number;
+  cap: number;
+}
+
 interface ActiveEnemyEntry {
   kind: EnemyKind;
-  actor: AnimatedActor;
   x: number;
   z: number;
   scale: number;
+  animTime: number;
   recoilZ: number;
+  recoilX: number;
   recoilTilt: number;
+  recoilRoll: number;
   prevHit: number;
   seen: boolean;
 }
 
 interface DyingEnemyEntry {
   kind: EnemyKind;
-  actor: AnimatedActor;
   x: number;
   y: number;
   z: number;
@@ -264,6 +374,7 @@ interface DyingEnemyEntry {
   scale: number;
   age: number;
   duration: number;
+  nukeScorched: boolean;
 }
 
 interface BossActorView {
@@ -316,12 +427,44 @@ function additive(color: number, opacity: number, map?: THREE.Texture): THREE.Me
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(58, 9 / 16, 0.5, 220);
+  readonly camera = new THREE.PerspectiveCamera(58, 9 / 16, 0.5, 265);
   readonly effects = new Effects();
   readonly assetsReady: Promise<void>;
 
   private composer: EffectComposer | null = null;
   private bloomPass: UnrealBloomPass | null = null;
+  private impactPass: ShaderPass | null = null;
+  private chromaAmt = 0;
+  private radialBlurAmt = 0;
+  private impactCenter = new THREE.Vector2(0.5, 0.5);
+  private phaseCamTimer = 0;
+  private phaseCamDur = 1.15;
+  private awakenCamTimer = 0;
+  private awakenCamDur = 0.85;
+  private splitToneAmt = 0;
+  private v22SkinColorB = new THREE.Color();
+  private wingmanLeftGroup!: THREE.Group;
+  private wingmanRightGroup!: THREE.Group;
+  private wingmanLeftMirror!: THREE.Mesh;
+  private wingmanRightMirror!: THREE.Mesh;
+  private wingmanCoreMatL!: THREE.MeshBasicMaterial;
+  private wingmanCoreMatR!: THREE.MeshBasicMaterial;
+  private reactorMandalaGroup!: THREE.Group;
+  private reactorMandalaOuter!: THREE.Mesh;
+  private reactorMandalaInner!: THREE.Mesh;
+  private reactorMandalaMat!: THREE.MeshBasicMaterial;
+  private bossApexGroup!: THREE.Group;
+  private bossApexLaserA!: THREE.Mesh;
+  private bossApexLaserB!: THREE.Mesh;
+  private bossApexCloneL!: THREE.Mesh;
+  private bossApexCloneR!: THREE.Mesh;
+  private bossApexTideRing!: THREE.Mesh;
+  private bossHarmonicDome!: THREE.Mesh;
+  private ghostGroup!: THREE.Group;
+  private ghostBodyMat!: THREE.MeshBasicMaterial;
+  private ghostRingMat!: THREE.MeshBasicMaterial;
+  public activePointLightsCount = 0;
+  private visualSquadScratch: Array<{ x: number; z: number; tier: 1 | 2 | 3 }> = [];
   private width = 1;
   private height = 1;
   private sector: SectorId = 1;
@@ -334,13 +477,7 @@ export class Renderer {
   private squadSlots: SquadSlotState[] = [];
   private currentWeapon: WeaponId = 'pulse';
 
-  private enemyPools: Record<EnemyKind, AnimatedActor[]> = {
-    crawler: [],
-    dasher: [],
-    bastion: [],
-    mitosis: [],
-    siphon: [],
-  };
+  private enemyBatches: Partial<Record<EnemyKind, EnemyPoseBatch[]>> = {};
   private activeEnemies = new Map<number, ActiveEnemyEntry>();
   private dyingEnemies: DyingEnemyEntry[] = [];
   private bossViews = new Map<BossSnapshot['id'], BossActorView>();
@@ -383,6 +520,11 @@ export class Renderer {
   private hpFg!: THREE.InstancedMesh;
   private telegraphs!: THREE.InstancedMesh;
   private tethers: THREE.Mesh[] = [];
+  public shieldInstMesh!: THREE.InstancedMesh;
+  public auraInstMesh!: THREE.InstancedMesh;
+  public jugHaloInstMesh!: THREE.InstancedMesh;
+  public shardDropInstMesh!: THREE.InstancedMesh;
+  public weatherMesh!: THREE.InstancedMesh;
   private projMesh!: THREE.InstancedMesh;
   private projCoreMesh!: THREE.InstancedMesh;
   private orbMesh!: THREE.InstancedMesh;
@@ -405,10 +547,123 @@ export class Renderer {
   private contractPool: ContractWallView[] = [];
   private doomOrbViews = new Map<number, DoomOrbView>();
   private doomOrbPool: DoomOrbView[] = [];
-  private bossShoulderPods: [THREE.Group, THREE.Group] | null = null;
+  private skyCargoViews = new Map<number, SkyCargoView>();
+  private skyCargoPool: SkyCargoView[] = [];
+  private maglevViews = new Map<number, MaglevView>();
+  private maglevPool: MaglevView[] = [];
+  private magRailViews = new Map<number, { id: number; group: THREE.Group; stripMat: THREE.MeshBasicMaterial; seen: boolean }>();
+  private magRailPool: Array<{ id: number; group: THREE.Group; stripMat: THREE.MeshBasicMaterial; seen: boolean }> = [];
+  private capTowerViews = new Map<number, { id: number; group: THREE.Group; core: THREE.Mesh; ring: THREE.Mesh; fillMat: THREE.MeshBasicMaterial; seen: boolean }>();
+  private capTowerPool: Array<{ id: number; group: THREE.Group; core: THREE.Mesh; ring: THREE.Mesh; fillMat: THREE.MeshBasicMaterial; seen: boolean }> = [];
+  private phaseGateViews = new Map<number, { id: number; group: THREE.Group; curtainMat: THREE.MeshBasicMaterial; signMat: THREE.MeshBasicMaterial; polarity: string; seen: boolean }>();
+  private phaseGatePool: Array<{ id: number; group: THREE.Group; curtainMat: THREE.MeshBasicMaterial; signMat: THREE.MeshBasicMaterial; polarity: string; seen: boolean }> = [];
+  private refractRibbonMesh!: THREE.InstancedMesh;
+  private ribbonDispersionMat!: THREE.ShaderMaterial;
+  private anamorphicFlareMesh!: THREE.InstancedMesh;
+  private triPrismLatticeMesh!: THREE.InstancedMesh;
+  private nemesisGroup!: THREE.Group;
+  private nemesisShieldMesh!: THREE.Mesh;
+  private nemesisShieldMat!: THREE.MeshBasicMaterial;
+  private nemesisTelegraphBeam!: THREE.Mesh;
+  private nirvanaBurstGroup!: THREE.Group;
+  private nirvanaRingOuter!: THREE.Mesh;
+  private nirvanaRingInner!: THREE.Mesh;
+  private nirvanaOuterMat!: THREE.MeshBasicMaterial;
+  private nirvanaInnerMat!: THREE.MeshBasicMaterial;
+  private decalShaderMat!: THREE.ShaderMaterial;
+  public photoModeState: { active: boolean; yaw: number; pitch: number; fov: number; filter: PhotoFilterKind } | null = null;
+  private formationTetherMesh!: THREE.InstancedMesh;
+  private collapseRiftViews = new Map<number, { id: number; group: THREE.Group; rimMat: THREE.MeshBasicMaterial; leapArc: THREE.Mesh; seen: boolean }>();
+  private collapseRiftPool: Array<{ id: number; group: THREE.Group; rimMat: THREE.MeshBasicMaterial; leapArc: THREE.Mesh; seen: boolean }> = [];
+  private highSpireViews = new Map<number, { id: number; group: THREE.Group; dome: THREE.Mesh; domeMat: THREE.MeshBasicMaterial; turret: THREE.Mesh; laser: THREE.Mesh; laserMat: THREE.MeshBasicMaterial; seen: boolean }>();
+  private highSpirePool: Array<{ id: number; group: THREE.Group; dome: THREE.Mesh; domeMat: THREE.MeshBasicMaterial; turret: THREE.Mesh; laser: THREE.Mesh; laserMat: THREE.MeshBasicMaterial; seen: boolean }> = [];
+  private tacticalEventViews = new Map<number, { id: number; kind: string; group: THREE.Group; core: THREE.Mesh; ring: THREE.Mesh; ringMat: THREE.MeshBasicMaterial; seen: boolean }>();
+  private tacticalEventPool: Array<{ id: number; kind: string; group: THREE.Group; core: THREE.Mesh; ring: THREE.Mesh; ringMat: THREE.MeshBasicMaterial; seen: boolean }> = [];
+  private sharedBeaconGeo: THREE.BufferGeometry | null = null;
+  private sharedCartGeo: THREE.BufferGeometry | null = null;
+  private reactorHaloGroup!: THREE.Group;
+  private reactorPrisms: THREE.Mesh[] = [];
+  private reactorWallMesh!: THREE.Mesh;
+  private reactorWallMat!: THREE.MeshBasicMaterial;
+  private coBossGroup!: THREE.Group;
+  private coBossActor: ReturnType<typeof spawnActor> | null = null;
+  private coBossShield!: THREE.Mesh;
+  private coBossHalo!: THREE.Mesh;
+  private codexStageGroup!: THREE.Group;
+  private codexPedestal!: THREE.Mesh;
+  private codexContentGroup!: THREE.Group;
+  public codexPreviewSpec: { tab: string; itemId: string } | null = null;
+  public codexYaw = 0.45;
+  private shakeScale = 1.0;
+  public replayCameraMode: 'chase' | 'tactical_top' | 'action_closeup' = 'chase';
+  private omegaBeamGroup!: THREE.Group;
+  private omegaBeamCore!: THREE.Mesh;
+  private omegaBeamWarn!: THREE.Mesh;
+  private omegaBeamCoreMat!: THREE.MeshBasicMaterial;
+  private omegaBeamWarnMat!: THREE.MeshBasicMaterial;
+  private phaseKinTex!: THREE.CanvasTexture;
+  private phaseEngTex!: THREE.CanvasTexture;
+  private execCamTimer = 0;
+  private execCamDur = 1.35;
+  private frameTimesMs = new Float32Array(48);
+  private frameTimeCursor = 0;
+  private decals!: THREE.InstancedMesh;
+  private decalDataArr = new Float32Array(MAX_DECALS * 4);
+  private decalDataAttr!: THREE.InstancedBufferAttribute;
+  private decalPool: DecalEntry[] = Array.from({ length: MAX_DECALS }, () => ({
+    active: false, x: 0, z: 0, radius: 1, rot: 0, age: 0, maxAge: 12, kind: 0, r: 1, g: 1, b: 1,
+  }));
+  private decalCursor = 0;
+  private lastScrollVal = 0;
+  private holoRing!: THREE.Mesh;
+  private holoRingMat!: THREE.ShaderMaterial;
+  private neonLightsUniform: THREE.Vector4[] = Array.from({ length: 12 }, () => new THREE.Vector4(0, -999, 1, 0));
+  private neonColorsUniform: THREE.Vector3[] = Array.from({ length: 12 }, () => new THREE.Vector3(0, 0, 0));
+  private bossShoulderPods: [THREE.Group, THREE.Group, THREE.Group] | null = null;
+  private bossPodReticles: [THREE.Mesh, THREE.Mesh, THREE.Mesh] | null = null;
+  private squadSkin: SquadSkinId = 'cyan';
+  public qualityScale = 1.0;
+  public emaFrameMs = 16.0;
+  private slowFrameStreak = 0;
+  private fastFrameStreak = 0;
   private mirrorTroopers!: THREE.InstancedMesh;
   private mirrorGlow!: THREE.Mesh;
   private mirrorRing!: THREE.Mesh;
+  private frameTick = 0;
+  private nukeDropGroup!: THREE.Group;
+  private nukeWarhead!: THREE.Group;
+  private nukePlume!: THREE.Mesh;
+  private nukeReticleOuter!: THREE.Mesh;
+  private nukeReticleInner!: THREE.Mesh;
+  private nukeCrosshair!: THREE.Mesh;
+  private nukeLockBeam!: THREE.Mesh;
+  private nukeSweepPillars: THREE.Mesh[] = [];
+  private nukeBlastGroup!: THREE.Group;
+  private nukeFireball!: THREE.Mesh;
+  private nukeFireballMat!: THREE.MeshBasicMaterial;
+  private nukeCoreDome!: THREE.Mesh;
+  private nukeCoreDomeMat!: THREE.MeshBasicMaterial;
+  private nukeShockWall!: THREE.Mesh;
+  private nukeShockWallMat!: THREE.MeshBasicMaterial;
+  private nukeStem!: THREE.Mesh;
+  private nukeStemMat!: THREE.ShaderMaterial;
+  private nukeCap!: THREE.Mesh;
+  private nukeCapMat!: THREE.ShaderMaterial;
+  private nukeCrown!: THREE.Mesh;
+  private nukeCrownMat!: THREE.ShaderMaterial;
+  private nukeVortexLower!: THREE.Mesh;
+  private nukeVortexLowerMat!: THREE.MeshBasicMaterial;
+  private nukeVortexUpper!: THREE.Mesh;
+  private nukeVortexUpperMat!: THREE.MeshBasicMaterial;
+  private nukeMachRing!: THREE.Mesh;
+  private nukeMachRingMat!: THREE.MeshBasicMaterial;
+  private nukeWilsonDome!: THREE.Mesh;
+  private nukeWilsonDomeMat!: THREE.MeshBasicMaterial;
+  private nukeGroundScorch!: THREE.Mesh;
+  private nukeGroundScorchMat!: THREE.MeshBasicMaterial;
+  private nukeCraterRing!: THREE.Mesh;
+  private nukeCraterRingMat!: THREE.MeshBasicMaterial;
+  private nukeJustDetonated = false;
   private jumpTex!: THREE.CanvasTexture;
   private reflectorTex!: THREE.CanvasTexture;
   private bountyTex!: THREE.CanvasTexture;
@@ -436,7 +691,13 @@ export class Renderer {
 
   // camera
   private camX = 0;
+  private prevSquadXForCam = 0;
+  private camBankRoll = 0;
+  private dynFovOffset = 0;
+  private shockwaveAmt = 0;
   private trauma = 0;
+  private camKickZ = 0;
+  private camKickRoll = 0;
   private bossBlend = 0;
   private fov = 58;
 
@@ -447,8 +708,10 @@ export class Renderer {
       antialias: true,
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.24;
     this.scene.add(this.effects.group);
 
     const lensC = makeCanvasTexture(384, 112);
@@ -471,12 +734,34 @@ export class Renderer {
     btyC.tex.needsUpdate = true;
     this.bountyTex = btyC.tex;
 
+    const makePhasePlate = (txt: string, hex: string): THREE.CanvasTexture => {
+      const c = makeCanvasTexture(384, 96);
+      c.ctx.clearRect(0, 0, 384, 96);
+      c.ctx.fillStyle = 'rgba(8, 16, 34, 0.88)';
+      c.ctx.fillRect(10, 10, 364, 76);
+      c.ctx.strokeStyle = hex;
+      c.ctx.lineWidth = 5;
+      c.ctx.strokeRect(10, 10, 364, 76);
+      c.ctx.fillStyle = hex;
+      c.ctx.font = '900 32px system-ui, sans-serif';
+      c.ctx.textAlign = 'center';
+      c.ctx.textBaseline = 'middle';
+      c.ctx.fillText(txt, 192, 50);
+      c.tex.needsUpdate = true;
+      return c.tex;
+    };
+    this.phaseKinTex = makePhasePlate('⚡ 动能相位 · 切实弹/脉冲', '#c99bff');
+    this.phaseEngTex = makePhasePlate('✦ 能量相位 · 切能武/脉冲', '#5ef6ff');
+
     this.buildLights();
     this.buildEnvironment();
     this.buildSquadShell();
     this.buildEnemyShell();
     this.buildProjectiles();
     this.buildHazards();
+    this.buildNukeVisuals();
+    this.buildV22Visuals();
+    this.buildV23Visuals();
     this.initPostProcessing();
     this.setSector(1);
 
@@ -538,13 +823,84 @@ export class Renderer {
       const renderPass = new RenderPass(this.scene, this.camera);
       // High threshold (0.93) keeps cartoon outlines, character faces, and gate numbers razor-sharp
       // while giving HDR projectiles, muzzle flashes, and explosions a crisp neon bloom!
-      const bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.28, 0.35, 0.93);
+      const bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.32, 0.38, 0.91);
+      const impactPass = new ShaderPass({
+        uniforms: {
+          tDiffuse: { value: null },
+          uChroma: { value: 0.0 },
+          uRadialBlur: { value: 0.0 },
+          uSplitTone: { value: 0.0 },
+          uPhotoFilter: { value: 0.0 },
+          uPhotoTime: { value: 0.0 },
+          uCenter: { value: new THREE.Vector2(0.5, 0.5) },
+        },
+        vertexShader: /* glsl */ `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: /* glsl */ `
+          uniform sampler2D tDiffuse;
+          uniform float uChroma;
+          uniform float uRadialBlur;
+          uniform float uSplitTone;
+          uniform float uPhotoFilter;
+          uniform float uPhotoTime;
+          uniform vec2 uCenter;
+          varying vec2 vUv;
+          void main() {
+            vec2 dir = vUv - uCenter;
+            float dist = length(dir);
+            if (uChroma <= 0.0002 && uRadialBlur <= 0.001 && uSplitTone <= 0.001 && uPhotoFilter < 0.5) {
+              gl_FragColor = texture2D(tDiffuse, vUv);
+              return;
+            }
+            vec2 cOff = dir * uChroma * (0.35 + dist * 1.45);
+            vec3 acc = vec3(0.0);
+            const int SAMPLES = 6;
+            for (int i = 0; i < SAMPLES; i++) {
+              float fi = float(i) / float(SAMPLES - 1);
+              float scale = 1.0 - uRadialBlur * 0.16 * fi * smoothstep(0.05, 0.65, dist);
+              vec2 suv = uCenter + dir * scale;
+              float r = texture2D(tDiffuse, clamp(suv + cOff, 0.001, 0.999)).r;
+              float g = texture2D(tDiffuse, clamp(suv, 0.001, 0.999)).g;
+              float b = texture2D(tDiffuse, clamp(suv - cOff, 0.001, 0.999)).b;
+              acc += vec3(r, g, b);
+            }
+            vec3 finalCol = acc / float(SAMPLES);
+            if (uSplitTone > 0.001) {
+              float luma = dot(finalCol, vec3(0.299, 0.587, 0.114));
+              vec3 hiTint = vec3(1.15, 1.08, 0.88);
+              vec3 loTint = vec3(0.90, 1.04, 1.15);
+              finalCol *= mix(loTint, hiTint, smoothstep(0.25, 0.82, luma) * uSplitTone);
+            }
+            if (uPhotoFilter > 0.5 && uPhotoFilter < 1.5) {
+              // Filter 1: Cyber Noir-Gold Matrix (high-contrast obsidian + selective neon gold/cyan)
+              float lum = dot(finalCol, vec3(0.299, 0.587, 0.114));
+              float hi = smoothstep(0.42, 0.92, lum);
+              vec3 noir = mix(vec3(0.05, 0.07, 0.13), vec3(1.08, 0.86, 0.36), hi);
+              finalCol = mix(noir, finalCol * vec3(1.18, 1.02, 0.72), 0.38);
+            } else if (uPhotoFilter >= 1.5) {
+              // Filter 2: Cyber Glitch Scanlines + Holographic RGB Split
+              float scan = 0.90 + 0.10 * sin(vUv.y * 520.0 + uPhotoTime * 18.0);
+              float band = step(0.965, fract(sin(floor(vUv.y * 28.0) * 43.17 + floor(uPhotoTime * 8.0)) * 197.3));
+              vec2 gShift = vec2(0.0045 + band * 0.014, 0.0);
+              float gr = texture2D(tDiffuse, clamp(vUv + gShift, 0.001, 0.999)).r;
+              float gb = texture2D(tDiffuse, clamp(vUv - gShift, 0.001, 0.999)).b;
+              finalCol = vec3(gr, finalCol.g, gb) * scan;
+            }
+            gl_FragColor = vec4(finalCol, 1.0);
+          }`,
+      });
       const outputPass = new OutputPass();
       composer.addPass(renderPass);
       composer.addPass(bloomPass);
+      composer.addPass(impactPass);
       composer.addPass(outputPass);
       this.composer = composer;
       this.bloomPass = bloomPass;
+      this.impactPass = impactPass;
     } catch {
       this.composer = null;
       this.bloomPass = null;
@@ -572,31 +928,79 @@ export class Renderer {
       }
     }
 
-    // 2. Pre-warm monster pools per archetype
+    // 2. Pre-bake 7-pose GPU InstancedMesh batches per monster archetype (zero runtime CPU skinning!)
     const enemyRims: Record<EnemyKind, number> = {
       crawler: 0xff9eb2,
       dasher: 0xffcf70,
       bastion: 0xff8598,
       mitosis: 0xffb3f0,
       siphon: 0xd4a6ff,
+      bomber: 0xc2ff66,
+      phalanx: 0x7df3ff,
+      stalker: 0xf29eff,
+      brood: 0xffcf6e,
+      howler: 0xff7da6,
+      glacier: 0x9bf6ff,
+      beholder: 0xffe07d,
+      burrower: 0xff9f59,
+      necromancer: 0x6dffbe,
     };
-    for (const kind of Object.keys(ENEMY_POOL_SIZE) as EnemyKind[]) {
-      const count = ENEMY_POOL_SIZE[kind];
+    const makeBatch = (
+      pair: BakedPosePair,
+      toonMat: THREE.MeshToonMaterial,
+      outlineMat: THREE.MeshBasicMaterial,
+      cap: number,
+    ): EnemyPoseBatch => {
+      const fxArray = new Float32Array(cap * 4);
+      const fxAttr = new THREE.InstancedBufferAttribute(fxArray, 4);
+      fxAttr.setUsage(THREE.DynamicDrawUsage);
+
+      const bodyGeo = pair.geo.clone();
+      bodyGeo.setAttribute('aInstanceFx', fxAttr);
+      const body = new THREE.InstancedMesh(bodyGeo, toonMat, cap);
+      body.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      body.frustumCulled = false;
+      body.count = 0;
+      body.visible = false;
+
+      const outline = new THREE.InstancedMesh(pair.outlineGeo, outlineMat, cap);
+      outline.instanceMatrix = body.instanceMatrix; // Share exact 4x4 instanceMatrix buffer!
+      outline.frustumCulled = false;
+      outline.count = 0;
+      outline.visible = false;
+
+      this.scene.add(body, outline);
+      return { body, outline, fxAttr, fxArray, count: 0, outlineCount: 0, cap };
+    };
+
+    for (const kind of Object.keys(ENEMY_BATCH_CAP) as EnemyKind[]) {
+      const cap = ENEMY_BATCH_CAP[kind];
       const tmpl = lib.enemies[kind];
-      for (let i = 0; i < count; i++) {
-        const actor = spawnActor(tmpl, {
-          rimColor: enemyRims[kind],
-          rimStrength: 0.28,
-          outlineWidth: kind === 'bastion' ? 0.0035 : 0.003,
-        });
-        actor.root.visible = false;
-        this.scene.add(actor.root);
-        this.enemyPools[kind].push(actor);
-      }
+      const poseSet = bakeEnemyPoseFrames(kind, tmpl);
+      const toonMat = createInstancedEnemyToonMaterial({
+        rimColor: enemyRims[kind],
+        rimStrength: 0.28,
+        vertexColors: !tmpl.textured,
+        map: tmpl.texture,
+      });
+      const outlineMat = getOutlineMaterial(kind === 'bastion' || kind === 'glacier' ? 0.004 : 0.0034);
+      const allFrames = [...poseSet.locomotion, poseSet.action];
+      this.enemyBatches[kind] = allFrames.map((pair) => makeBatch(pair, toonMat, outlineMat, cap));
     }
 
-    // 3. Build the 3 sculpted CC0 sector bosses
+    // 3. Build the 3 sculpted CC0 sector bosses + dedicated Pantheon Dual-Boss Co-Boss clone
     this.buildGltfBosses(lib);
+    if (!this.coBossActor && this.coBossGroup) {
+      const fb = this.coBossGroup.getObjectByName('fallbackCoBoss');
+      if (fb) fb.visible = false;
+      this.coBossActor = spawnActor(lib.bosses.warden, {
+        rimColor: 0xff6289,
+        rimStrength: 0.58,
+        outlineWidth: 0.006,
+      });
+      this.coBossActor.play('Fast_Flying', { timeScale: 1.05 });
+      this.coBossGroup.add(this.coBossActor.root);
+    }
 
     // 4. Refresh any active Reward Vaults to show the 3D Toon weapon + outline
     for (const v of this.vaultViews.values()) {
@@ -743,19 +1147,19 @@ export class Renderer {
 
   // ------------------------------------------------------------------ scene setup
   private buildLights(): void {
-    // Bright commercial cartoon lighting so cel bands & silhouettes pop cleanly
-    this.hemi = new THREE.HemisphereLight(0xdcf0ff, 0x3b2c6e, 0.9);
+    // Sculptural 3-point lighting: deep indigo ground fill + crisp 3/4 directional key + subtle rim kicker
+    this.hemi = new THREE.HemisphereLight(0xcfe8ff, 0x1b1642, 0.56);
     this.scene.add(this.hemi);
-    const dir = new THREE.DirectionalLight(0xffe7ce, 2.2);
-    dir.position.set(-8, 14, 4);
+    const dir = new THREE.DirectionalLight(0xfff0dc, 1.45);
+    dir.position.set(-9, 14, 6);
     this.scene.add(dir);
-    const back = new THREE.DirectionalLight(0x9be8ff, 0.85);
-    back.position.set(-4, 8, -14);
+    const back = new THREE.DirectionalLight(0x6ad8ff, 0.45);
+    back.position.set(5, 7, -14);
     this.scene.add(back);
   }
 
   private buildEnvironment(): void {
-    // Stylized luminous bridge deck so dark cartoon outlines & blob shadows read crisply
+    // AAA Wet Rain-Slick Cyberpunk Bridge Deck with 8-Source Real-Time Anisotropic Neon Puddle Reflections!
     this.trackMat = new THREE.ShaderMaterial({
       uniforms: {
         uScroll: { value: 0 },
@@ -767,6 +1171,8 @@ export class Renderer {
         uHalf: { value: TRACK_HALF_WIDTH },
         uOverdrive: { value: 0 },
         uBoss: { value: 0 },
+        uNeonLights: { value: this.neonLightsUniform },
+        uNeonColors: { value: this.neonColorsUniform },
       },
       vertexShader: /* glsl */ `
         varying vec3 vW;
@@ -778,9 +1184,18 @@ export class Renderer {
       fragmentShader: /* glsl */ `
         uniform float uScroll; uniform float uTime; uniform float uHalf; uniform float uOverdrive; uniform float uBoss;
         uniform vec3 uTrack; uniform vec3 uGrid; uniform vec3 uEdge; uniform vec3 uFog;
+        uniform vec4 uNeonLights[12];
+        uniform vec3 uNeonColors[12];
         varying vec3 vW;
         float line(float v, float w) { float f = abs(fract(v) - 0.5); return smoothstep(w, 0.0, 0.5 - f); }
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float vnoise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+                     mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+        }
         void main() {
           float zz = vW.z - uScroll;
           float ax = abs(vW.x);
@@ -788,41 +1203,69 @@ export class Renderer {
           float plateTone = 0.94 + hash(vec2(plate, floor(ax / 2.5))) * 0.1;
           float brushed = sin(vW.x * 160.0 + sin(zz * 0.3)) * 0.004;
           float centerSheen = pow(max(0.0, 1.0 - ax / uHalf), 2.0);
-          vec3 c = uTrack * (plateTone * 0.72 + centerSheen * 0.24 + brushed);
+          vec3 c = uTrack * (plateTone * 0.74 + centerSheen * 0.25 + brushed);
+
+          // Procedural wet-rain puddle mask + subtle animated raindrop concentric micro-ripples
+          float n1 = vnoise(vec2(vW.x * 0.52, zz * 0.16));
+          float n2 = vnoise(vec2(vW.x * 1.35 + 4.1, zz * 0.42 - 2.3));
+          float puddle = smoothstep(0.38, 0.74, n1 * 0.65 + n2 * 0.35);
+          vec2 rainCell = floor(vec2(vW.x * 2.2, zz * 2.2));
+          vec2 rainUv = fract(vec2(vW.x * 2.2, zz * 2.2)) - 0.5;
+          float rPhase = fract(hash(rainCell) + uTime * 1.35);
+          float rRing = smoothstep(0.06, 0.0, abs(length(rainUv) - rPhase * 0.45)) * (1.0 - rPhase);
+          float wetShimmer = puddle * (0.72 + rRing * 0.85);
+          // PBR Schlick Fresnel wet-metal grazing specular + brushed titanium micro-anisotropy (additive bright parity!)
+          vec3 viewVec = normalize(vec3(-vW.x * 0.25, 10.6, 16.0 - vW.z));
+          float ndv = clamp(viewVec.y, 0.05, 1.0);
+          float f0 = mix(0.06, 0.42, puddle);
+          float fresnel = f0 + (1.0 - f0) * pow(1.0 - ndv, 4.2);
+          c += mix(uGrid, uEdge, 0.48) * (puddle * (0.08 + rRing * 0.13) + fresnel * 0.14);
+
           float px = abs(fract((vW.x + 5.5) / 2.75) - 0.5);
           float seam = smoothstep(0.48 - fwidth(px), 0.49, px);
-          c *= 1.0 - seam * 0.3;
-          // Soft specular pools from the lamps at the edge of the deck.
+          c *= 1.0 - seam * 0.26;
+          // Elongated wet specular pools from edge neon lamps
           float lampZ = abs(fract((zz + 1.5) / 8.0) - 0.5) * 8.0;
-          float reflection = exp(-lampZ * lampZ * 0.3) * pow(ax / uHalf, 7.0);
-          c += uEdge * reflection * 0.11;
-          // Recessed 8m armour panels with a dark seam and a narrow lit bevel.
+          float reflection = exp(-lampZ * lampZ * 0.24) * pow(ax / uHalf, 5.2) * (0.75 + puddle * 0.9);
+          c += uEdge * reflection * 0.16;
+
           float cross = line(zz / 8.0, 0.018);
           float bevel = line((zz + 0.11) / 8.0, 0.008);
-          c *= 1.0 - cross * 0.28;
-          c += uGrid * bevel * 0.16;
+          c *= 1.0 - cross * 0.24;
+          c += uGrid * bevel * 0.18;
           float innerFrame = smoothstep(0.025, 0.0, abs(ax - (uHalf - 0.72)));
-          c += uGrid * innerFrame * 0.16;
-          // Tiny paired fasteners sell the deck as manufactured metal rather than a flat plane.
+          c += uGrid * innerFrame * 0.17;
+
           float rz = min(fract(zz / 8.0), 1.0 - fract(zz / 8.0)) * 8.0;
           float rivet = smoothstep(0.14, 0.035, length(vec2(ax - (uHalf - 0.94), rz)));
           c += mix(uGrid, vec3(0.85), 0.55) * rivet * 0.38;
           float lanes = line((vW.x + uHalf) / (uHalf * 2.0 / 3.0), 0.012) * step(0.52, fract(zz / 5.0));
           c += uGrid * lanes * 0.24;
-          // Forward speed chevrons remain at the outer lane, clear of combat readability.
           float chev = fract((zz + ax * 0.85) / 10.0);
           c += uEdge * smoothstep(0.026, 0.0, abs(chev - 0.5)) * smoothstep(uHalf, uHalf - 1.1, ax) * smoothstep(uHalf - 2.3, uHalf - 1.4, ax) * 0.3;
-          // Pulsing neon data-conduit traces running along the lane dividers
           float lanePos = abs(fract((vW.x + uHalf) / (uHalf * 2.0 / 3.0)) - 0.5);
           float conduit = smoothstep(0.018, 0.003, lanePos);
           float packet = pow(max(0.0, sin((zz + uTime * 22.0) * 0.28)), 8.0);
           c += mix(uGrid, uEdge, 0.5) * conduit * (0.12 + packet * 0.28);
-          // Overdrive golden hyper-warp streaks
+
+          // 12-Source Real-Time Anisotropic Wet-Metal Flowing Neon Reflections!
+          vec2 rippleWarp = rainUv * rRing * 0.35;
+          float flowWave = 0.88 + 0.22 * sin(zz * 1.9 + uTime * 4.8 + vW.x * 1.6);
+          for (int i = 0; i < 12; i++) {
+            vec4 L = uNeonLights[i];
+            if (L.w > 0.01) {
+              float dx = (vW.x + rippleWarp.x) - L.x;
+              float dz = (vW.z + rippleWarp.y - L.y) * 0.29;
+              float d2 = (dx * dx + dz * dz) / max(0.35, L.z * L.z);
+              float spec = exp(-d2 * 1.52) * L.w * (0.38 + wetShimmer * 0.94) * flowWave;
+              c += uNeonColors[i] * spec;
+            }
+          }
+
           if (uOverdrive > 0.01) {
             float warp = pow(max(0.0, sin(vW.x * 14.0) * sin((zz + uTime * 48.0) * 0.35)), 6.0);
             c += vec3(1.0, 0.88, 0.35) * warp * uOverdrive * 0.32;
           }
-          // Boss arena crimson perimeter hazard ticks
           if (uBoss > 0.01) {
             float bossBand = smoothstep(uHalf - 0.85, uHalf - 0.32, ax) * step(0.5, fract((zz - uTime * 6.0) / 2.4));
             c += vec3(1.0, 0.18, 0.32) * bossBand * uBoss * 0.26;
@@ -830,8 +1273,8 @@ export class Renderer {
           float scan = exp(-900.0 * pow(fract((zz + uTime * 4.0) / 32.0) - 0.5, 2.0));
           c += uEdge * scan * smoothstep(uHalf, 0.0, ax) * 0.065;
           float edge = smoothstep(uHalf - 0.32, uHalf, ax);
-          c = mix(c, uEdge * 0.92, edge * 0.85);
-          float fog = smoothstep(22.0, 96.0, -vW.z);
+          c = mix(c, uEdge * 0.95, edge * 0.88);
+          float fog = smoothstep(64.0, 162.0, -vW.z);
           c = mix(c, uFog, fog);
           gl_FragColor = vec4(c, 1.0);
         }`,
@@ -862,7 +1305,7 @@ export class Renderer {
           vec2 g = abs(fract(p) - 0.5);
           float l = smoothstep(0.47, 0.5, max(g.x, g.y));
           vec3 c = uBase + uGrid * l * 0.16;
-          float fog = smoothstep(12.0, 90.0, -vW.z + abs(vW.x) * 0.4);
+          float fog = smoothstep(38.0, 152.0, -vW.z + abs(vW.x) * 0.4);
           gl_FragColor = vec4(mix(c, uFog, fog), 1.0);
         }`,
     });
@@ -937,8 +1380,12 @@ export class Renderer {
           } else {
             c = uWinA * 0.22;
           }
-          float fog = smoothstep(26.0, 108.0, -vW.z) * 0.88 + 0.12;
-          gl_FragColor = vec4(mix(c, uFog, fog), 1.0);
+          // Dual-band volumetric cyber haze + sweeping horizon searchlight shafts
+          float depthFog = smoothstep(46.0, 158.0, -vW.z) * 0.86 + 0.10;
+          float lowHaze = exp(-max(0.0, vL.y) * 0.16) * smoothstep(24.0, 130.0, -vW.z);
+          float shaft = pow(max(0.0, sin(vW.x * 0.11 + vW.y * 0.07 + uTime * 0.35)), 8.0) * smoothstep(55.0, 145.0, -vW.z);
+          vec3 volFog = uFog + uWinB * lowHaze * 0.14 + uWinA * shaft * 0.18;
+          gl_FragColor = vec4(mix(c, volFog, depthFog), 1.0);
         }`,
     });
     const n = 72;
@@ -988,11 +1435,184 @@ export class Renderer {
     this.squadGlow.position.y = 0.03;
     this.scene.add(this.squadGlow);
 
-    this.squadRingMat = additive(0x3ef3ff, 0.52, this.hexTex);
+    this.squadRingMat = additive(0x3ef3ff, 0.42, this.hexTex);
     this.squadRing = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.squadRingMat);
     this.squadRing.rotation.x = -Math.PI / 2;
-    this.squadRing.position.y = 0.038;
+    this.squadRing.position.y = 0.036;
     this.scene.add(this.squadRing);
+
+    // 3D Diegetic Holographic Tactical Ring (projects Resonance Overdrive, Aegis Shield, and Tactical Nuke arcs!)
+    this.holoRingMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+      uniforms: {
+        uTime: { value: 0 },
+        uResonance: { value: 0 },
+        uAegis: { value: 1 },
+        uNuke: { value: 1 },
+        uStreams: { value: 6 },
+        uColor: { value: new THREE.Color(0x3ef3ff) },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv * 2.0 - 1.0;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uTime;
+        uniform float uResonance;
+        uniform float uAegis;
+        uniform float uNuke;
+        uniform float uStreams;
+        uniform vec3 uColor;
+        varying vec2 vUv;
+        void main() {
+          float r = length(vUv);
+          if (r < 0.58 || r > 1.0) discard;
+          float ang = atan(vUv.x, -vUv.y); // -PI..PI, 0 = forward (-Z)
+          float normA = (ang + 3.14159265) / 6.2831853;
+
+          vec3 col = vec3(0.0);
+          float alpha = 0.0;
+
+          // 1) Inner Rotating Tactical Compass & Stream Ticks (r in 0.66..0.72)
+          float innerBand = smoothstep(0.65, 0.675, r) * (1.0 - smoothstep(0.70, 0.725, r));
+          float tick = step(0.55, fract(normA * max(6.0, uStreams * 2.0) - uTime * 0.45));
+          col += uColor * innerBand * (0.28 + 0.52 * tick);
+          alpha += innerBand * (0.22 + 0.35 * tick);
+
+          // 2) Middle 360° Resonance Overdrive Arc (r in 0.76..0.84)
+          float midBand = smoothstep(0.755, 0.78, r) * (1.0 - smoothstep(0.82, 0.845, r));
+          float resoFill = step(normA, clamp(uResonance, 0.0, 1.0));
+          vec3 resoCol = uResonance >= 0.99 ? vec3(1.0, 0.92, 0.42) : mix(uColor, vec3(1.0, 0.84, 0.32), 0.72);
+          col += mix(vec3(0.12, 0.22, 0.36), resoCol, resoFill) * midBand;
+          alpha += midBand * (0.16 + 0.68 * resoFill);
+
+          // 3) Outer Split Tactical Arcs: Left = Phase Aegis [E] (Cyan), Right = Tactical Nuke [Q] (Amber-Gold)
+          float outerBand = smoothstep(0.88, 0.905, r) * (1.0 - smoothstep(0.945, 0.97, r));
+          if (vUv.x < -0.12) {
+            float spanL = clamp((-vUv.y + 0.75) / 1.5, 0.0, 1.0);
+            float fillL = step(spanL, clamp(uAegis, 0.0, 1.0));
+            col += vec3(0.32, 0.96, 1.0) * outerBand * (0.18 + 0.78 * fillL);
+            alpha += outerBand * (0.15 + 0.62 * fillL);
+          } else if (vUv.x > 0.12) {
+            float spanR = clamp((-vUv.y + 0.75) / 1.5, 0.0, 1.0);
+            float fillR = step(spanR, clamp(uNuke, 0.0, 1.0));
+            col += vec3(1.0, 0.68, 0.22) * outerBand * (0.18 + 0.78 * fillR);
+            alpha += outerBand * (0.15 + 0.62 * fillR);
+          }
+
+          gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.92));
+        }
+      `,
+    });
+    this.holoRing = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), this.holoRingMat);
+    this.holoRing.position.y = 0.052;
+    this.holoRing.renderOrder = 2;
+    this.scene.add(this.holoRing);
+
+    // 1024-Slot GPU-Instanced Battlefield Decal Pool (Blast Craters, Bio-Acid, Cryo Frost, Armor Slashes!)
+    const decalGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    this.decalDataAttr = new THREE.InstancedBufferAttribute(this.decalDataArr, 4);
+    this.decalDataAttr.setUsage(THREE.DynamicDrawUsage);
+    decalGeo.setAttribute('aDecalData', this.decalDataAttr);
+    const decalMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 } },
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      toneMapped: false,
+      vertexShader: /* glsl */ `
+        attribute vec4 aDecalData;
+        varying vec2 vUv;
+        varying vec4 vDecal;
+        varying vec3 vCol;
+        void main() {
+          vUv = uv * 2.0 - 1.0;
+          vDecal = aDecalData;
+          #ifdef USE_INSTANCING_COLOR
+            vCol = instanceColor;
+          #else
+            vCol = vec3(1.0, 0.7, 0.3);
+          #endif
+          vec4 mv = vec4(position, 1.0);
+          #ifdef USE_INSTANCING
+            mv = instanceMatrix * mv;
+          #endif
+          gl_Position = projectionMatrix * modelViewMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uTime;
+        varying vec2 vUv;
+        varying vec4 vDecal;
+        varying vec3 vCol;
+        void main() {
+          float r = length(vUv);
+          if (r > 1.0) discard;
+          float kind = vDecal.x;
+          float alpha = vDecal.y;
+          float seed = vDecal.z;
+          float ang = atan(vUv.y, vUv.x) + seed * 6.2831;
+
+          vec3 col = vCol;
+          float mask = 0.0;
+          if (kind < 0.5) {
+            // 0: Scorched Blast Crater + Glowing Radial Ember Fissures
+            float darkPit = smoothstep(0.95, 0.2, r);
+            float rimRing = smoothstep(0.18, 0.0, abs(r - 0.62));
+            float rays = pow(max(0.0, cos(ang * 7.0 + sin(r * 10.0))), 6.0) * smoothstep(0.95, 0.15, r);
+            float glow = rimRing * 0.65 + rays * 0.85;
+            col = mix(vec3(0.04, 0.06, 0.14), vCol * 1.25, clamp(glow, 0.0, 1.0));
+            mask = clamp(darkPit * 0.52 + glow * 0.72, 0.0, 1.0);
+          } else if (kind < 1.5) {
+            // 1: Bioluminescent Acid / Plasma Ichor Splatter
+            float lobes = 0.58 + 0.28 * sin(ang * 5.0 + seed * 9.0) + 0.14 * cos(ang * 9.0 - seed * 4.0);
+            float blob = smoothstep(lobes, lobes - 0.22, r);
+            float edgeGlow = smoothstep(lobes, lobes - 0.08, r) * (1.0 - smoothstep(lobes - 0.1, lobes - 0.28, r));
+            col = vCol * (0.78 + edgeGlow * 0.65);
+            mask = blob * 0.64;
+          } else if (kind < 2.5) {
+            // 2: Crystalline Permafrost Fracture Star
+            float star = pow(abs(cos(ang * 3.0)), 2.2) * 0.85 + 0.15;
+            float shard = smoothstep(star, star - 0.25, r);
+            col = mix(vCol, vec3(0.92, 0.98, 1.0), smoothstep(0.55, 0.0, r) * 0.55);
+            mask = shard * 0.72;
+          } else if (kind < 3.5) {
+            // 3: Shattered Armor Scorch & Diagonal Plasma Slash
+            float slash = smoothstep(0.16, 0.02, abs(vUv.y + sin(vUv.x * 3.0) * 0.08)) * smoothstep(0.96, 0.3, abs(vUv.x));
+            col = vCol * 1.25;
+            mask = slash * 0.82;
+          } else if (kind < 4.5) {
+            // 4: Molten Magma Fissure Veins (Omega Execution / Supernova / Nuke)
+            float veins = pow(max(0.0, cos(ang * 5.0 + sin(r * 13.0 - seed * 6.0) * 1.8)), 8.0) * smoothstep(0.98, 0.08, r);
+            float corePool = smoothstep(0.42, 0.05, r);
+            float pulse = 0.86 + 0.14 * sin(uTime * 7.0 + seed * 12.0);
+            col = mix(vec3(0.22, 0.14, 0.28), mix(vCol, vec3(1.0, 0.96, 0.68), corePool * 0.72) * 1.68 * pulse, clamp(veins * 1.15 + corePool, 0.0, 1.0));
+            mask = clamp(veins * 0.86 + corePool * 0.68, 0.0, 0.88);
+          } else {
+            // 5: Magnetic Storm Tidal Ripple & Electro-Field Scar
+            float rings = smoothstep(0.085, 0.0, abs(fract(r * 3.2 - uTime * 0.9 + seed) - 0.5) - 0.36) * smoothstep(0.98, 0.12, r);
+            float arc = pow(max(0.0, cos(ang * 6.0 + r * 8.0)), 7.0) * smoothstep(0.92, 0.2, r);
+            col = mix(vCol, vec3(0.82, 0.98, 1.0), 0.45) * 1.28;
+            mask = clamp(rings * 0.65 + arc * 0.55, 0.0, 0.88);
+          }
+          gl_FragColor = vec4(col, mask * alpha);
+        }
+      `,
+    });
+    this.decalShaderMat = decalMat;
+    this.decals = new THREE.InstancedMesh(decalGeo, decalMat, MAX_DECALS);
+    this.decals.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_DECALS * 3), 3);
+    this.decals.count = 0;
+    this.decals.frustumCulled = false;
+    this.decals.renderOrder = 1;
+    this.scene.add(this.decals);
 
     // 3D Geodesic Phase Aegis Force-Dome
     this.aegisGroup = new THREE.Group();
@@ -1067,14 +1687,32 @@ export class Renderer {
       .add(oct(0.46), 0xc29bff, 1.9, { p: [0, 0.52, 0.15] })
       .add(tor(0.64, 0.07, 5, 16), 0x3ef3ff, 2.0, { r: [Math.PI / 2, 0, 0] })
       .build();
+    const retL = new THREE.Mesh(new THREE.RingGeometry(0.95, 1.24, 28), additive(0xff3b5c, 0.85));
+    retL.position.set(0, 0.15, 0.82);
+    retL.visible = false;
     const podL = new THREE.Group();
-    podL.add(new THREE.Mesh(leftPodGeo, this.propMat));
+    podL.add(new THREE.Mesh(leftPodGeo, this.propMat), retL);
     podL.visible = false;
+    const retR = new THREE.Mesh(new THREE.RingGeometry(0.95, 1.24, 28), additive(0xc29bff, 0.85));
+    retR.position.set(0, 0.15, 0.82);
+    retR.visible = false;
     const podR = new THREE.Group();
-    podR.add(new THREE.Mesh(rightPodGeo, this.propMat));
+    podR.add(new THREE.Mesh(rightPodGeo, this.propMat), retR);
     podR.visible = false;
-    this.scene.add(podL, podR);
-    this.bossShoulderPods = [podL, podR];
+    const reactorPodGeo = new GeoBuilder()
+      .add(oct(0.62), 0x3ef3ff, 2.2)
+      .add(tor(0.76, 0.08, 6, 20), 0xffd84a, 2.4, { r: [Math.PI / 3, 0.4, 0] })
+      .add(tor(0.76, 0.08, 6, 20), 0xff5ce0, 2.1, { r: [-Math.PI / 3, -0.4, 0] })
+      .build();
+    const retC = new THREE.Mesh(new THREE.RingGeometry(0.98, 1.28, 32), additive(0xffd84a, 0.9));
+    retC.position.set(0, 0.12, 0.85);
+    retC.visible = false;
+    const podReactor = new THREE.Group();
+    podReactor.add(new THREE.Mesh(reactorPodGeo, this.propMat), retC);
+    podReactor.visible = false;
+    this.scene.add(podL, podR, podReactor);
+    this.bossShoulderPods = [podL, podR, podReactor];
+    this.bossPodReticles = [retL, retR, retC];
 
     this.flashMat = additive(0xffffff, 0.95, this.glowTex);
     this.flashes = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), this.flashMat, MAX_RENDER_SQUAD);
@@ -1089,20 +1727,64 @@ export class Renderer {
   }
 
   private buildEnemyShell(): void {
-    const barGeo = new THREE.PlaneGeometry(1, 0.17);
-    const fgGeo = new THREE.PlaneGeometry(1, 0.17).translate(0.5, 0, 0);
+    const barGeo = new THREE.PlaneGeometry(1, 0.2);
+    const fgGeo = new THREE.PlaneGeometry(1, 0.15).translate(0.5, 0, 0);
+    const barInfoArr = new Float32Array(192 * 4);
+    const barInfoAttr = new THREE.InstancedBufferAttribute(barInfoArr, 4);
+    barInfoAttr.setUsage(THREE.DynamicDrawUsage);
+    fgGeo.setAttribute('aBarInfo', barInfoAttr);
+
     this.hpBg = new THREE.InstancedMesh(
       barGeo,
-      new THREE.MeshBasicMaterial({ color: 0x060814, transparent: true, opacity: 0.78, depthWrite: false }),
-      128,
+      new THREE.MeshBasicMaterial({
+        color: 0x060a18,
+        transparent: true,
+        opacity: 0.86,
+        depthTest: false,
+        depthWrite: false,
+      }),
+      192,
     );
-    this.hpFg = new THREE.InstancedMesh(
-      fgGeo,
-      new THREE.MeshBasicMaterial({ color: 0xff3b5c, toneMapped: false, depthWrite: false }),
-      128,
-    );
-    this.hpBg.renderOrder = 5;
-    this.hpFg.renderOrder = 6;
+    const hpFgMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+      vertexShader: /* glsl */ `
+        attribute vec4 aBarInfo;
+        varying vec2 vUvBar;
+        varying vec4 vBarInfo;
+        void main() {
+          vUvBar = uv;
+          vBarInfo = aBarInfo;
+          vec4 mvPosition = vec4(position, 1.0);
+          #ifdef USE_INSTANCING
+            mvPosition = instanceMatrix * mvPosition;
+          #endif
+          mvPosition = modelViewMatrix * mvPosition;
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec2 vUvBar;
+        varying vec4 vBarInfo;
+        void main() {
+          vec3 col = vBarInfo.rgb;
+          float segs = max(1.0, vBarInfo.w);
+          // Crisp ARPG-style HP tick dividers + glossy top bevel highlight
+          float cell = fract(vUvBar.x * segs);
+          float tick = segs > 1.5 ? smoothstep(0.0, 0.09, cell) * smoothstep(1.0, 0.91, cell) : 1.0;
+          float topGloss = smoothstep(0.52, 0.95, vUvBar.y) * 0.28;
+          vec3 finalCol = col * (0.72 + 0.28 * tick) + vec3(topGloss);
+          gl_FragColor = vec4(finalCol, 0.96);
+        }
+      `,
+    });
+    this.hpFg = new THREE.InstancedMesh(fgGeo, hpFgMat, 192);
+    this.hpFg.userData.barInfoAttr = barInfoAttr;
+    this.hpFg.userData.barInfoArr = barInfoArr;
+    this.hpBg.renderOrder = 12;
+    this.hpFg.renderOrder = 13;
     this.hpBg.frustumCulled = this.hpFg.frustumCulled = false;
     this.hpBg.count = this.hpFg.count = 0;
     this.scene.add(this.hpBg, this.hpFg);
@@ -1121,6 +1803,260 @@ export class Renderer {
       this.tethers.push(t);
       this.scene.add(t);
     }
+
+    // V20 Stage 5: Single-Draw-Call InstancedMesh batching for Phalanx shields, Howler war-auras, Juggernaut halos, Core Shards & Dynamic Weather!
+    const pShieldGeo = new THREE.CircleGeometry(0.76, 6);
+    this.shieldInstMesh = new THREE.InstancedMesh(pShieldGeo, additive(0x3ef3ff, 0.48, this.hexTex), 32);
+    this.shieldInstMesh.count = 0;
+    this.shieldInstMesh.visible = false;
+    this.shieldInstMesh.frustumCulled = false;
+    this.shieldInstMesh.renderOrder = 4;
+    this.scene.add(this.shieldInstMesh);
+
+    const auraGeo = new THREE.RingGeometry(3.25, 3.85, 32).rotateX(-Math.PI / 2);
+    this.auraInstMesh = new THREE.InstancedMesh(auraGeo, additive(0xff2a6d, 0.34), 24);
+    this.auraInstMesh.count = 0;
+    this.auraInstMesh.visible = false;
+    this.auraInstMesh.frustumCulled = false;
+    this.auraInstMesh.renderOrder = 2;
+    this.scene.add(this.auraInstMesh);
+
+    const jugGeo = new THREE.RingGeometry(1.18, 1.52, 28).rotateX(-Math.PI / 2);
+    const jugMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.48,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+    });
+    this.jugHaloInstMesh = new THREE.InstancedMesh(jugGeo, jugMat, 24);
+    this.jugHaloInstMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(24 * 3), 3);
+    this.jugHaloInstMesh.count = 0;
+    this.jugHaloInstMesh.visible = false;
+    this.jugHaloInstMesh.frustumCulled = false;
+    this.jugHaloInstMesh.renderOrder = 2;
+    this.scene.add(this.jugHaloInstMesh);
+
+    // 3D Magnetized Core Shard Drops (single InstancedMesh, 160 capacity, zero GC!)
+    const shardGeo = new THREE.OctahedronGeometry(0.32, 0);
+    const shardMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.94,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.shardDropInstMesh = new THREE.InstancedMesh(shardGeo, shardMat, 160);
+    this.shardDropInstMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(160 * 3), 3);
+    this.shardDropInstMesh.count = 0;
+    this.shardDropInstMesh.visible = false;
+    this.shardDropInstMesh.frustumCulled = false;
+    this.shardDropInstMesh.renderOrder = 5;
+    this.scene.add(this.shardDropInstMesh);
+
+    // Sector Dynamic Weather Particles (solar_emp / prism_tide / cryo_blizzard — single InstancedMesh, 220 capacity!)
+    const weatherGeo = new THREE.BoxGeometry(0.08, 0.08, 1.35);
+    const weatherMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.weatherMesh = new THREE.InstancedMesh(weatherGeo, weatherMat, 220);
+    this.weatherMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(220 * 3), 3);
+    this.weatherMesh.count = 0;
+    this.weatherMesh.visible = false;
+    this.weatherMesh.frustumCulled = false;
+    this.weatherMesh.renderOrder = 6;
+    this.scene.add(this.weatherMesh);
+
+    // V23 RGB 3-Band Chromatic Dispersion Refraction Ribbons (45° Reflectors, Golden Lenses, Wingman Mirrors — single InstancedMesh, 56 cap!)
+    const ribbonGeo = new THREE.PlaneGeometry(0.52, 1.0).rotateX(-Math.PI / 2);
+    this.ribbonDispersionMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 } },
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+      side: THREE.DoubleSide,
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        varying vec3 vCol;
+        void main() {
+          vUv = uv;
+          #ifdef USE_INSTANCING_COLOR
+            vCol = instanceColor;
+          #else
+            vCol = vec3(0.45, 0.96, 1.0);
+          #endif
+          vec4 mv = vec4(position, 1.0);
+          #ifdef USE_INSTANCING
+            mv = instanceMatrix * mv;
+          #endif
+          gl_Position = projectionMatrix * modelViewMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uTime;
+        varying vec2 vUv;
+        varying vec3 vCol;
+        void main() {
+          float cx = vUv.x * 2.0 - 1.0;
+          // RGB 3-Band Prismatic Spectral Dispersion across ribbon width
+          float rBand = exp(-pow((cx + 0.34) * 2.25, 2.0));
+          float gBand = exp(-pow(cx * 2.05, 2.0));
+          float bBand = exp(-pow((cx - 0.34) * 2.25, 2.0));
+          vec3 prismSpec = vec3(rBand * 1.28 + gBand * 0.52, gBand * 1.24 + bBand * 0.44, bBand * 1.36 + rBand * 0.32);
+          float flow = 0.84 + 0.16 * sin(vUv.y * 22.0 - uTime * 16.0);
+          float endFade = smoothstep(0.0, 0.10, vUv.y) * smoothstep(1.0, 0.86, vUv.y);
+          vec3 col = mix(vCol, prismSpec, 0.68) * flow * 1.48;
+          float alpha = max(max(rBand, gBand), bBand) * endFade * 0.92;
+          if (alpha < 0.01) discard;
+          gl_FragColor = vec4(col, alpha);
+        }
+      `,
+    });
+    this.refractRibbonMesh = new THREE.InstancedMesh(ribbonGeo, this.ribbonDispersionMat, 56);
+    this.refractRibbonMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(56 * 3), 3);
+    // V23 Screen-Space Anamorphic Lens Flare Streaks (single InstancedMesh, 32 cap!)
+    const flareGeo = new THREE.PlaneGeometry(1.0, 1.0);
+    const flareMat = new THREE.ShaderMaterial({
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        varying vec3 vCol;
+        void main() {
+          vUv = uv * 2.0 - 1.0;
+          #ifdef USE_INSTANCING_COLOR
+            vCol = instanceColor;
+          #else
+            vCol = vec3(0.5, 0.95, 1.0);
+          #endif
+          vec4 mv = vec4(position, 1.0);
+          #ifdef USE_INSTANCING
+            mv = instanceMatrix * mv;
+          #endif
+          gl_Position = projectionMatrix * modelViewMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec2 vUv;
+        varying vec3 vCol;
+        void main() {
+          float core = exp(-dot(vUv * vec2(2.6, 5.5), vUv * vec2(2.6, 5.5)));
+          float hStreak = exp(-abs(vUv.y) * 15.0) * smoothstep(1.0, 0.0, abs(vUv.x));
+          vec3 spec = mix(vCol, vec3(0.95, 0.98, 1.0), core * 0.65);
+          spec.r += hStreak * 0.22 * smoothstep(0.0, 0.8, -vUv.x);
+          spec.b += hStreak * 0.28 * smoothstep(0.0, 0.8, vUv.x);
+          float a = clamp(core * 0.92 + hStreak * 0.68, 0.0, 1.0);
+          if (a < 0.01) discard;
+          gl_FragColor = vec4(spec * 1.45, a * 0.88);
+        }
+      `,
+    });
+    this.anamorphicFlareMesh = new THREE.InstancedMesh(flareGeo, flareMat, 32);
+    this.anamorphicFlareMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(32 * 3), 3);
+    this.anamorphicFlareMesh.count = 0;
+    this.anamorphicFlareMesh.visible = false;
+    this.anamorphicFlareMesh.frustumCulled = false;
+    this.anamorphicFlareMesh.renderOrder = 8;
+    this.scene.add(this.anamorphicFlareMesh);
+    this.refractRibbonMesh.count = 0;
+    this.refractRibbonMesh.visible = false;
+    this.refractRibbonMesh.frustumCulled = false;
+    this.refractRibbonMesh.renderOrder = 4;
+    this.scene.add(this.refractRibbonMesh);
+
+    // V21 Tactical Squad Formation Command Tethers (single InstancedMesh, 24 cap!)
+    const fTetherGeo = new THREE.BoxGeometry(0.11, 0.08, 1.0);
+    const fTetherMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.formationTetherMesh = new THREE.InstancedMesh(fTetherGeo, fTetherMat, 24);
+    this.formationTetherMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(24 * 3), 3);
+    this.formationTetherMesh.count = 0;
+    this.formationTetherMesh.visible = false;
+    this.formationTetherMesh.frustumCulled = false;
+    this.scene.add(this.formationTetherMesh);
+
+    // V21 Core Reactor 3-Tier Awakening Orbiting Prism Halo + Sweeping EMP Wall
+    this.reactorHaloGroup = new THREE.Group();
+    this.reactorHaloGroup.visible = false;
+    const prismCrystalGeo = new THREE.OctahedronGeometry(0.24, 0);
+    for (let i = 0; i < 6; i++) {
+      const pm = new THREE.Mesh(prismCrystalGeo, additive(i % 2 === 0 ? 0x62f4ff : 0xffdf58, 0.92));
+      this.reactorPrisms.push(pm);
+      this.reactorHaloGroup.add(pm);
+    }
+    const haloTrack = new THREE.Mesh(new THREE.RingGeometry(1.65, 1.78, 36).rotateX(-Math.PI / 2), additive(0x62f4ff, 0.42));
+    haloTrack.position.y = 0.25;
+    this.reactorHaloGroup.add(haloTrack);
+    this.scene.add(this.reactorHaloGroup);
+
+    this.reactorWallMat = additive(0x62f4ff, 0.85, this.stripeTex);
+    this.reactorWallMesh = new THREE.Mesh(new THREE.BoxGeometry(TRACK_HALF_WIDTH * 2.05, 2.35, 0.65), this.reactorWallMat);
+    this.reactorWallMesh.visible = false;
+    this.scene.add(this.reactorWallMesh);
+
+    // V21 Pantheon Stage-4 Simultaneous Co-Boss Root
+    this.coBossGroup = new THREE.Group();
+    this.coBossGroup.visible = false;
+    this.coBossShield = this.makeShield(2.85);
+    this.coBossShield.position.y = 2.45;
+    this.coBossHalo = new THREE.Mesh(new THREE.RingGeometry(1.95, 2.42, 36).rotateX(-Math.PI / 2), additive(0xff3864, 0.68));
+    this.coBossHalo.position.y = 0.07;
+    const fallbackCoBoss = new THREE.Mesh(
+      new GeoBuilder()
+        .add(new THREE.OctahedronGeometry(1.35, 1), 0xff4b6e, 0.65, { p: [0, 2.35, 0], s: [1.15, 1.45, 1.0] })
+        .add(tor(1.85, 0.11, 6, 28), 0xffd84a, 2.2, { p: [0, 2.35, 0], r: [0.5, 0, 0] })
+        .build(),
+      this.propMat,
+    );
+    fallbackCoBoss.name = 'fallbackCoBoss';
+    this.coBossGroup.add(fallbackCoBoss, this.coBossShield, this.coBossHalo);
+    this.scene.add(this.coBossGroup);
+
+    // V21 360° Interactive 3D Holographic Codex Turntable Stage
+    this.codexStageGroup = new THREE.Group();
+    this.codexStageGroup.visible = false;
+    const pedGeo = new GeoBuilder()
+      .add(cyl(1.65, 1.88, 0.18, 32), 0x102342, 0.35, { p: [0, -0.09, 0] })
+      .add(tor(1.72, 0.055, 6, 36), 0x3ef3ff, 2.6, { p: [0, 0.02, 0], r: [Math.PI / 2, 0, 0] })
+      .add(tor(1.22, 0.035, 6, 32), 0xffd84a, 2.2, { p: [0, 0.04, 0], r: [Math.PI / 2, 0, 0] })
+      .build();
+    this.codexPedestal = new THREE.Mesh(pedGeo, this.propMat);
+    const holoBeam = new THREE.Mesh(new THREE.CylinderGeometry(1.45, 1.68, 2.6, 28, 1, true), additive(0x38d8ff, 0.14));
+    holoBeam.position.y = 1.3;
+    this.codexContentGroup = new THREE.Group();
+    this.codexStageGroup.add(this.codexPedestal, holoBeam, this.codexContentGroup);
+    this.scene.add(this.codexStageGroup);
+
+    this.hemi.intensity = 1.02;
+
+    // Boss Phase-3 Omega Ultimate Beam visual assembly
+    this.omegaBeamGroup = new THREE.Group();
+    this.omegaBeamGroup.visible = false;
+    this.omegaBeamWarnMat = additive(0xff2a55, 0.52, this.stripeTex);
+    this.omegaBeamWarn = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 36).rotateX(-Math.PI / 2), this.omegaBeamWarnMat);
+    this.omegaBeamWarn.position.set(0, 0.075, 18);
+    this.omegaBeamCoreMat = additive(0xffdf6e, 0.92);
+    this.omegaBeamCore = new THREE.Mesh(new THREE.CylinderGeometry(0.95, 1.25, 36, 16, 1, true).rotateX(Math.PI / 2), this.omegaBeamCoreMat);
+    this.omegaBeamCore.position.set(0, 1.25, 18);
+    this.omegaBeamGroup.add(this.omegaBeamWarn, this.omegaBeamCore);
+    this.scene.add(this.omegaBeamGroup);
   }
 
   private buildProjectiles(): void {
@@ -1220,6 +2156,10 @@ export class Renderer {
   }
 
   // ------------------------------------------------------------------ public API
+  setSquadSkin(skin: SquadSkinId): void {
+    this.squadSkin = skin;
+  }
+
   setSector(sector: SectorId): void {
     this.sector = sector;
     const pal = SECTOR_META[sector].palette;
@@ -1229,7 +2169,7 @@ export class Renderer {
       this.skyTextures.set(sector, sky);
     }
     this.scene.background = sky;
-    this.scene.fog = new THREE.Fog(pal.fog, 42, 118);
+    this.scene.fog = new THREE.Fog(pal.fog, 68, 172);
     (this.trackMat.uniforms.uTrack!.value as THREE.Color).set(pal.track);
     (this.trackMat.uniforms.uGrid!.value as THREE.Color).set(pal.grid);
     (this.trackMat.uniforms.uEdge!.value as THREE.Color).set(pal.edge);
@@ -1292,8 +2232,235 @@ export class Renderer {
     };
   }
 
+  setAccessibility(cfg: AccessibilityConfig): void {
+    this.shakeScale = THREE.MathUtils.clamp(cfg.shakeScale ?? 1.0, 0, 1.5);
+    setGateColorblindMode(cfg.colorblindMode ?? 'none');
+  }
+
+  setReplayCameraMode(mode: 'chase' | 'tactical_top' | 'action_closeup'): void {
+    this.replayCameraMode = mode;
+  }
+
+  rotateCodexTurntable(deltaRad: number): void {
+    this.codexYaw += deltaRad;
+  }
+
+  setCodexPreview(spec: { tab: string; itemId: string } | null): void {
+    this.codexPreviewSpec = spec;
+    if (!this.codexStageGroup) return;
+    if (!spec) {
+      this.codexStageGroup.visible = false;
+      return;
+    }
+    this.codexStageGroup.visible = true;
+    while (this.codexContentGroup.children.length > 0) {
+      const ch = this.codexContentGroup.children[0]!;
+      this.codexContentGroup.remove(ch);
+      ch.traverse((obj) => {
+        const m = obj as THREE.Mesh;
+        if (m.isMesh) {
+          if (m.geometry && !m.userData.sharedGeo) m.geometry.dispose();
+          if (m.material && m.material !== this.propMat && m.material !== this.vaultToonMat && !Array.isArray(m.material)) {
+            (m.material as THREE.Material).dispose();
+          }
+        }
+      });
+    }
+    const id = spec.itemId;
+    if (spec.tab === 'bestiary' && (id === 'warden_01' || id === 'hydra_02' || id === 'omega_zero')) {
+      const lib = this.gltfLib;
+      if (lib) {
+        const tmpl = id === 'warden_01' ? lib.bosses.warden : id === 'hydra_02' ? lib.bosses.hydraA : lib.bosses.omega;
+        const actor = spawnActor(tmpl, { rimColor: 0x62f4ff, rimStrength: 0.58, outlineWidth: 0.0055 });
+        actor.play(id === 'omega_zero' ? 'Idle' : 'Fast_Flying', { timeScale: 0.9 });
+        actor.root.scale.setScalar(0.54);
+        actor.root.traverse((o) => { o.userData.sharedGeo = true; });
+        this.codexContentGroup.add(actor.root);
+      } else {
+        const bossSculpt = new THREE.Mesh(
+          new GeoBuilder()
+            .add(new THREE.OctahedronGeometry(0.85, 1), id === 'warden_01' ? 0xff4b6e : id === 'hydra_02' ? 0xd96bff : 0xffd84a, 0.55, { p: [0, 1.05, 0], s: [1.1, 1.35, 0.95] })
+            .build(),
+          this.propMat,
+        );
+        this.codexContentGroup.add(bossSculpt);
+      }
+      // Highlight 3 destructible tactical weak-point pods on the 3D Boss anatomy!
+      const podPositions: Array<[number, number, number, number]> = [
+        [-0.95, 1.15, 0.25, 0xff3b5c],
+        [0.95, 1.15, 0.25, 0x3ef3ff],
+        [0, 1.72, 0.15, 0xffdf58],
+      ];
+      for (const [px, py, pz, hex] of podPositions) {
+        const wp = new THREE.Mesh(new THREE.OctahedronGeometry(0.22, 0), additive(hex, 0.92));
+        wp.position.set(px, py, pz);
+        const ring = new THREE.Mesh(new THREE.RingGeometry(0.28, 0.35, 20), additive(hex, 0.85));
+        ring.position.set(px, py, pz + 0.08);
+        this.codexContentGroup.add(wp, ring);
+      }
+    } else if (spec.tab === 'setpieces') {
+      const spire = new THREE.Mesh(
+        new GeoBuilder()
+          .add(cyl(0.32, 0.48, 1.55, 6), 0x1f365c, 0.3, { p: [-0.65, 0.78, 0] })
+          .add(new THREE.OctahedronGeometry(0.32, 0), 0xff4b78, 2.2, { p: [-0.65, 1.78, 0] })
+          .add(box(0.85, 0.95, 0.08), 0x7dff6b, 2.1, { p: [0.68, 0.55, 0.15], r: [0, -0.65, 0] })
+          .add(box(1.9, 0.08, 0.42), 0x3ef3ff, 2.0, { p: [0, 0.06, 0.55] })
+          .build(),
+        this.propMat,
+      );
+      const dome = this.makeShield(0.62);
+      dome.position.set(-0.65, 1.72, 0);
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 1.45), additive(0x7dff6b, 0.88));
+      beam.position.set(0.05, 0.65, 0.08);
+      beam.rotation.y = 0.72;
+      this.codexContentGroup.add(spire, dome, beam);
+    } else {
+      const pairWeapons: [WeaponId, WeaponId] = id.includes('scatter')
+        ? ['scatter', 'rail']
+        : id.includes('plasma')
+          ? ['plasma', 'cryo']
+          : ['pulse', 'rail'];
+      const g1 = buildRewardDisplayGeo(pairWeapons[0]);
+      const g2 = buildRewardDisplayGeo(pairWeapons[1]);
+      const m1 = new THREE.Mesh(g1, this.vaultToonMat);
+      m1.position.set(-0.62, 0.98, 0);
+      m1.scale.setScalar(0.95);
+      const m2 = new THREE.Mesh(g2, this.vaultToonMat);
+      m2.position.set(0.62, 0.98, 0);
+      m2.scale.setScalar(0.95);
+      const coreOrb = new THREE.Mesh(new THREE.OctahedronGeometry(0.36, 1), additive(0xffdf58, 0.92));
+      coreOrb.position.set(0, 1.05, 0);
+      const ringA = new THREE.Mesh(new THREE.TorusGeometry(1.08, 0.035, 8, 36), additive(0x62f4ff, 0.78));
+      ringA.position.y = 1.02;
+      ringA.rotation.x = 0.65;
+      const ringB = new THREE.Mesh(new THREE.TorusGeometry(1.08, 0.035, 8, 36), additive(0xff66c4, 0.72));
+      ringB.position.y = 1.02;
+      ringB.rotation.x = -0.65;
+      this.codexContentGroup.add(m1, m2, coreOrb, ringA, ringB);
+    }
+    if (spec.itemId === 'wingman_prism') {
+      this.codexContentGroup.clear();
+      const wmGeo = new GeoBuilder()
+        .add(oct(0.44), 0x5ef6ff, 2.6, { p: [0, 1.05, 0] })
+        .add(box(1.65, 0.08, 0.42), 0x26487a, 0.5, { p: [0, 1.05, 0.1] })
+        .add(tor(0.68, 0.045, 6, 24).rotateX(Math.PI / 2), 0xffe26a, 2.4, { p: [0, 1.05, 0] })
+        .build();
+      const drone = new THREE.Mesh(wmGeo, this.propMat);
+      const pane = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.72, 0.06), additive(0x62f4ff, 0.78));
+      pane.position.set(0, 1.05, -0.75);
+      pane.rotation.y = 0.62;
+      this.codexContentGroup.add(drone, pane);
+    }
+  }
+
   shake(amount: number): void {
-    this.trauma = Math.min(1, this.trauma + amount);
+    this.trauma = Math.min(1, this.trauma + amount * this.shakeScale);
+  }
+
+  /** Directional ballistic camera punch (pushes lens along Z + subtle roll snap) */
+  kickCamera(punchZ: number, dirX = 0): void {
+    this.camKickZ = Math.min(0.65, this.camKickZ + punchZ);
+    this.camKickRoll = THREE.MathUtils.clamp(this.camKickRoll + dirX * 0.014, -0.045, 0.045);
+  }
+
+  /** Triggers radial edge chromatic dispersion shockwave on monumental impacts */
+  triggerShockwave(strength = 0.65): void {
+    this.shockwaveAmt = Math.min(1.2, Math.max(this.shockwaveAmt, strength));
+    this.chromaAmt = Math.max(this.chromaAmt, strength * 0.0095);
+    this.radialBlurAmt = Math.max(this.radialBlurAmt, strength * 0.18);
+  }
+
+  /** Triggers focused screen-space Chromatic Aberration + Radial Motion Blur around a 3D world event */
+  triggerCinematicImpact(chroma: number, radialBlur: number, worldX = 0, worldZ = -6): void {
+    const sc = this.shakeScale;
+    this.chromaAmt = Math.min(0.022, Math.max(this.chromaAmt, chroma * sc));
+    this.radialBlurAmt = Math.min(0.42, Math.max(this.radialBlurAmt, radialBlur * sc));
+    this.tmpV.set(worldX, 1.2, worldZ).project(this.camera);
+    this.impactCenter.set(
+      THREE.MathUtils.clamp(this.tmpV.x * 0.5 + 0.5, 0.15, 0.85),
+      THREE.MathUtils.clamp(this.tmpV.y * 0.5 + 0.5, 0.15, 0.85),
+    );
+  }
+
+  /** Triggers a 1.15s cinematic Boss Phase-Break close-up camera push-in */
+  triggerPhaseCamZoom(durationSec = 1.15): void {
+    this.phaseCamDur = Math.max(0.4, durationSec);
+    this.phaseCamTimer = this.phaseCamDur;
+  }
+
+  /** Triggers a 0.85s Core Reactor Tier-3 Awakening orbital push-in + holographic mandala + split-tone peak */
+  triggerReactorAwakenCam(durationSec = 0.85): void {
+    this.awakenCamDur = Math.max(0.45, durationSec);
+    this.awakenCamTimer = this.awakenCamDur;
+    this.splitToneAmt = 0.85;
+    this.triggerCinematicImpact(0.014, 0.26, 0, PLAYER_Z - 1.5);
+  }
+
+  /** Triggers a 1.35s cinematic Boss Omega Execution close-up camera push-in + dramatic FOV focus */
+  triggerExecutionCam(durationSec = 1.35): void {
+    this.execCamDur = Math.max(0.6, durationSec);
+    this.execCamTimer = this.execCamDur;
+    this.triggerCinematicImpact(0.018, 0.36, 0, -15);
+  }
+
+  getFrameTimeHistory(): Float32Array {
+    return this.frameTimesMs;
+  }
+
+  getPerfStats(): { drawCalls: number; triangles: number; geometries: number; textures: number; fps: number; instances: number } {
+    const info = this.renderer.info;
+    const extR = this.renderer as unknown as { _lastSceneCalls?: number; _lastSceneTriangles?: number };
+    const inst =
+      (this.projMesh?.count ?? 0) +
+      (this.orbMesh?.count ?? 0) +
+      (this.shieldInstMesh?.count ?? 0) +
+      (this.auraInstMesh?.count ?? 0) +
+      (this.jugHaloInstMesh?.count ?? 0) +
+      (this.shardDropInstMesh?.count ?? 0) +
+      (this.weatherMesh?.count ?? 0);
+    return {
+      drawCalls: extR._lastSceneCalls ?? info.render.calls,
+      triangles: extR._lastSceneTriangles ?? info.render.triangles,
+      geometries: info.memory.geometries,
+      textures: info.memory.textures,
+      fps: Math.min(120, Math.round(1000 / Math.max(8.33, this.emaFrameMs))),
+      instances: inst,
+    };
+  }
+
+  dispose(): void {
+    this.resetRun();
+    this.effects.dispose();
+    this.glowTex.dispose();
+    this.hexTex.dispose();
+    this.stripeTex.dispose();
+    this.lensTex.dispose();
+    this.jumpTex.dispose();
+    this.reflectorTex.dispose();
+    this.bountyTex.dispose();
+    this.phaseKinTex.dispose();
+    this.phaseEngTex.dispose();
+    this.composer?.dispose?.();
+    this.renderer.dispose();
+  }
+
+  /** Stamps a persistent GPU-instanced battlefield decal onto the highway deck */
+  spawnDecal(x: number, z: number, radius: number, colorHex: number, kind: 0 | 1 | 2 | 3 | 4 | 5 = 0, maxAge = 13.5): void {
+    if (z < -125 || z > PLAYER_Z + 4) return;
+    const d = this.decalPool[this.decalCursor]!;
+    this.decalCursor = (this.decalCursor + 1) % MAX_DECALS;
+    d.active = true;
+    d.x = THREE.MathUtils.clamp(x, -TRACK_HALF_WIDTH + 0.45, TRACK_HALF_WIDTH - 0.45);
+    d.z = z;
+    d.radius = radius;
+    d.rot = Math.random() * Math.PI * 2;
+    d.age = 0;
+    d.maxAge = maxAge;
+    d.kind = kind;
+    this.tmpColor.setHex(colorHex);
+    d.r = this.tmpColor.r;
+    d.g = this.tmpColor.g;
+    d.b = this.tmpColor.b;
   }
 
   flashMuzzle(): void {
@@ -1315,21 +2482,25 @@ export class Renderer {
     this.bossDeathT = -1;
     this.bossHidden = false;
     this.trauma = 0;
+    this.camKickZ = 0;
+    this.camKickRoll = 0;
 
     for (const slot of this.squadSlots) {
       this.releaseSquadSlot(slot);
     }
-    for (const entry of this.activeEnemies.values()) {
-      entry.actor.root.visible = false;
-      this.enemyPools[entry.kind].push(entry.actor);
-    }
     this.activeEnemies.clear();
-
-    for (const dying of this.dyingEnemies) {
-      dying.actor.root.visible = false;
-      this.enemyPools[dying.kind].push(dying.actor);
-    }
     this.dyingEnemies.length = 0;
+    for (const list of Object.values(this.enemyBatches)) {
+      if (!list) continue;
+      for (const b of list) {
+        b.count = 0;
+        b.outlineCount = 0;
+        b.body.count = 0;
+        b.outline.count = 0;
+        b.body.visible = false;
+        b.outline.visible = false;
+      }
+    }
 
     for (const view of this.bossViews.values()) {
       view.root.visible = false;
@@ -1357,9 +2528,55 @@ export class Renderer {
     this.contractViews.clear();
     for (const v of this.doomOrbViews.values()) { v.group.visible = false; v.key = ''; this.doomOrbPool.push(v); }
     this.doomOrbViews.clear();
+    for (const v of this.skyCargoViews.values()) { v.group.visible = false; this.skyCargoPool.push(v); }
+    this.skyCargoViews.clear();
+    for (const v of this.maglevViews.values()) { v.group.visible = false; this.maglevPool.push(v); }
+    this.maglevViews.clear();
+    for (const v of this.magRailViews.values()) { v.group.visible = false; this.magRailPool.push(v); }
+    this.magRailViews.clear();
+    for (const v of this.capTowerViews.values()) { v.group.visible = false; this.capTowerPool.push(v); }
+    this.capTowerViews.clear();
+    for (const v of this.phaseGateViews.values()) { v.group.visible = false; this.phaseGatePool.push(v); }
+    this.phaseGateViews.clear();
+    if (this.omegaBeamGroup) this.omegaBeamGroup.visible = false;
+    if (this.shieldInstMesh) { this.shieldInstMesh.count = 0; this.shieldInstMesh.visible = false; }
+    if (this.auraInstMesh) { this.auraInstMesh.count = 0; this.auraInstMesh.visible = false; }
+    if (this.jugHaloInstMesh) { this.jugHaloInstMesh.count = 0; this.jugHaloInstMesh.visible = false; }
+    if (this.shardDropInstMesh) { this.shardDropInstMesh.count = 0; this.shardDropInstMesh.visible = false; }
+    if (this.weatherMesh) { this.weatherMesh.count = 0; this.weatherMesh.visible = false; }
+    if (this.refractRibbonMesh) { this.refractRibbonMesh.count = 0; this.refractRibbonMesh.visible = false; }
+    if (this.formationTetherMesh) { this.formationTetherMesh.count = 0; this.formationTetherMesh.visible = false; }
+    if (this.reactorHaloGroup) this.reactorHaloGroup.visible = false;
+    if (this.reactorWallMesh) this.reactorWallMesh.visible = false;
+    if (this.coBossGroup) this.coBossGroup.visible = false;
+    for (const v of this.collapseRiftViews.values()) { v.group.visible = false; this.collapseRiftPool.push(v); }
+    this.collapseRiftViews.clear();
+    for (const v of this.highSpireViews.values()) { v.group.visible = false; this.highSpirePool.push(v); }
+    this.highSpireViews.clear();
+    for (const v of this.tacticalEventViews.values()) { v.group.visible = false; this.tacticalEventPool.push(v); }
+    this.tacticalEventViews.clear();
+    for (let i = 0; i < this.decalPool.length; i++) this.decalPool[i]!.active = false;
+    if (this.decals) { this.decals.count = 0; this.decals.visible = false; }
+    this.lastScrollVal = 0;
+    this.shockwaveAmt = 0;
+    this.chromaAmt = 0;
+    this.radialBlurAmt = 0;
+    this.phaseCamTimer = 0;
+    this.execCamTimer = 0;
+    this.awakenCamTimer = 0;
+    this.splitToneAmt = 0;
+    if (this.wingmanLeftGroup) this.wingmanLeftGroup.visible = false;
+    if (this.wingmanRightGroup) this.wingmanRightGroup.visible = false;
+    if (this.reactorMandalaGroup) this.reactorMandalaGroup.visible = false;
+    if (this.bossApexGroup) this.bossApexGroup.visible = false;
+    if (this.ghostGroup) this.ghostGroup.visible = false;
+    if (this.anamorphicFlareMesh) { this.anamorphicFlareMesh.count = 0; this.anamorphicFlareMesh.visible = false; }
+    if (this.triPrismLatticeMesh) { this.triPrismLatticeMesh.count = 0; this.triPrismLatticeMesh.visible = false; }
+    if (this.nemesisGroup) this.nemesisGroup.visible = false;
+    if (this.nirvanaBurstGroup) this.nirvanaBurstGroup.visible = false;
+    this.photoModeState = null;
     if (this.bossShoulderPods) {
-      this.bossShoulderPods[0].visible = false;
-      this.bossShoulderPods[1].visible = false;
+      for (const pod of this.bossShoulderPods) pod.visible = false;
     }
     this.mirrorTroopers.count = 0;
     this.mirrorGlow.visible = false;
@@ -1411,6 +2628,28 @@ export class Renderer {
 
   // ------------------------------------------------------------------ per-frame
   render(snap: SimSnapshot, dt: number, cinematic = false): void {
+    // Adaptive 60fps Quality Scaler: smoothly scales decal cap & pixelRatio on sustained mobile load while keeping sRGB Bloom 100% intact!
+    if (dt > 0.001 && dt < 0.095) {
+      const frameMs = dt * 1000;
+      this.frameTimesMs[this.frameTimeCursor] = frameMs;
+      this.frameTimeCursor = (this.frameTimeCursor + 1) % this.frameTimesMs.length;
+      this.emaFrameMs = this.emaFrameMs * 0.9 + frameMs * 0.1;
+      if (this.emaFrameMs > 23.0) {
+        this.slowFrameStreak += 1;
+        this.fastFrameStreak = 0;
+        if (this.slowFrameStreak >= 24 && this.qualityScale > 0.7) {
+          this.qualityScale = 0.65;
+          this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.15));
+        }
+      } else if (this.emaFrameMs < 14.5) {
+        this.fastFrameStreak += 1;
+        this.slowFrameStreak = 0;
+        if (this.fastFrameStreak >= 48 && this.qualityScale < 0.95) {
+          this.qualityScale = 1.0;
+          this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+        }
+      }
+    }
     this.time += dt;
     const t = this.time;
     const sectorCfg = SECTORS[snap.sector];
@@ -1431,14 +2670,40 @@ export class Renderer {
     this.updateVaults(snap, t);
     this.updateBarrels(snap, t);
     this.updateLenses(snap, t);
+    const deltaScroll = scroll >= this.lastScrollVal && scroll - this.lastScrollVal < 4.0 ? scroll - this.lastScrollVal : 0;
+    this.lastScrollVal = scroll;
     this.updateCompetitionProps(snap, t);
+    this.updateV20PropsAndWeather(snap, t);
+    this.updateV21World(snap, dt, t);
+    if (this.decalShaderMat) this.decalShaderMat.uniforms.uTime!.value = t;
+    if (this.ribbonDispersionMat) this.ribbonDispersionMat.uniforms.uTime!.value = t;
+    this.updateV22Visuals(snap, dt, t);
+    this.updateV23Visuals(snap, dt, t);
     this.updateBoss(snap, dt, t);
+    this.updateNukeVisuals(snap, dt, t);
+    this.updateDecalsAndWetLights(snap, dt, deltaScroll);
     this.shadows.count = this.shadowCount;
     this.shadows.instanceMatrix.needsUpdate = true;
 
     this.effects.update(dt);
     this.updateCamera(snap, dt, cinematic);
+    this.updateCodexStageAfterCamera(dt, t);
 
+    if (this.impactPass) {
+      const pf = this.photoModeState?.active
+        ? this.photoModeState.filter === 'noir_gold'
+          ? 1.0
+          : this.photoModeState.filter === 'glitch_scan'
+            ? 2.0
+            : 0.0
+        : 0.0;
+      this.impactPass.uniforms.uChroma!.value = this.chromaAmt;
+      this.impactPass.uniforms.uRadialBlur!.value = this.radialBlurAmt;
+      this.impactPass.uniforms.uSplitTone!.value = this.splitToneAmt;
+      this.impactPass.uniforms.uPhotoFilter!.value = pf;
+      this.impactPass.uniforms.uPhotoTime!.value = t;
+      (this.impactPass.uniforms.uCenter!.value as THREE.Vector2).copy(this.impactCenter);
+    }
     if (this.composer) {
       this.composer.render();
     } else {
@@ -1448,10 +2713,10 @@ export class Renderer {
 
   private updateEnvironment(scroll: number, time: number): void {
     const d = this.dummy;
-    const span = 130;
+    const span = 175;
     for (let i = 0; i < this.towerData.length; i++) {
       const tw = this.towerData[i]!;
-      const z = -112 + ((((tw.z + scroll * 0.9) % span) + span) % span);
+      const z = -162 + ((((tw.z * 1.34 + scroll * 0.9) % span) + span) % span);
       d.position.set(tw.x, -0.6, z);
       d.rotation.set(0, 0, 0);
       d.scale.set(tw.w, tw.h, tw.d);
@@ -1468,7 +2733,7 @@ export class Renderer {
     const step = 6;
     let k = 0;
     for (let i = 0; i < 32; i++) {
-      const z = -125 + ((((i * step + scroll) % (32 * step)) + 32 * step) % (32 * step));
+      const z = -176 + ((((i * step + scroll) % (32 * step)) + 32 * step) % (32 * step));
       for (const s of [-1, 1]) {
         d.position.set(s * (TRACK_HALF_WIDTH + 0.25), 0.35, z);
         d.scale.set(1, 1, 1);
@@ -1511,7 +2776,8 @@ export class Renderer {
     const total = Math.min(maxSlots, Math.max(n3 + n2, totalVisible));
     const n1 = Math.max(0, total - n3 - n2);
 
-    const out: Array<{ x: number; z: number; tier: 1 | 2 | 3 }> = [];
+    const out = this.visualSquadScratch;
+    out.length = 0;
     const overdrive = snap.overdriveTimer > 0;
     const maxTrackX = TRACK_HALF_WIDTH - 0.58;
 
@@ -1677,7 +2943,8 @@ export class Renderer {
       const airY = snap.squadAirY ?? 0;
       const fl = this.muzzleFlash * (0.55 + 0.45 * Math.sin(i * 7.3 + t * 37));
       const recoilZ = fl * 0.06;
-      const sc = slot.s * (overdrive ? 1.08 : 1);
+      const heroBoost = isMech ? 1.08 : 1.18;
+      const sc = slot.s * heroBoost * (overdrive ? 1.08 : 1);
       actor.root.position.set(slot.x, airY, slot.z + recoilZ);
       const yaw = THREE.MathUtils.clamp(-slot.vx * 0.028, -0.35, 0.35);
       const bank = THREE.MathUtils.clamp(-slot.vx * 0.014, -0.1, 0.1);
@@ -1728,7 +2995,19 @@ export class Renderer {
     d.rotation.set(0, 0, 0);
 
     const aegisActive = (snap.aegisTimer ?? 0) > 0;
-    this.squadGlowMat.color.setHex(overdrive ? 0xffea75 : aegisActive ? 0x62f4ff : wc);
+    const skinEntry = SQUAD_SKINS.find((sk) => sk.id === this.squadSkin);
+    let baseTrimHex = this.squadSkin !== 'cyan' && skinEntry ? skinEntry.hex : wc;
+    if (this.squadSkin === 'abyss_violet') {
+      this.tmpColor.setHex(0xc44dff).lerp(this.v22SkinColorB.setHex(0x4ef6ff), 0.5 + 0.5 * Math.sin(t * 4.2));
+      baseTrimHex = this.tmpColor.getHex();
+    } else if (this.squadSkin === 'solar_prism') {
+      this.tmpColor.setHex(0xffe259).lerp(this.v22SkinColorB.setHex(0xff5e3a), 0.5 + 0.5 * Math.sin(t * 4.8));
+      baseTrimHex = this.tmpColor.getHex();
+    } else if (this.squadSkin === 'void_aurora') {
+      this.tmpColor.setHex(0x2af598).lerp(this.v22SkinColorB.setHex(0x00c6ff), 0.5 + 0.5 * Math.sin(t * 3.8));
+      baseTrimHex = this.tmpColor.getHex();
+    }
+    this.squadGlowMat.color.setHex(overdrive ? 0xffea75 : aegisActive ? 0x62f4ff : baseTrimHex);
     const gs = snap.formationRadius * 2.5 + 1.5 + (overdrive ? 0.8 : 0);
     this.squadGlow.scale.set(gs, gs, 1);
     this.squadGlow.position.set(snap.squadX, 0.03, PLAYER_Z - 0.05);
@@ -1737,11 +3016,24 @@ export class Renderer {
 
     const ringScale = snap.formationRadius * 2.15 + 1.05 + Math.sin(t * 4) * 0.04;
     this.squadRing.scale.set(ringScale, ringScale, 1);
-    this.squadRing.position.set(snap.squadX, 0.038, PLAYER_Z);
+    this.squadRing.position.set(snap.squadX, 0.036, PLAYER_Z);
     this.squadRing.rotation.z = t * (overdrive ? 1.6 : 0.48);
     this.squadRing.visible = snap.squadCount > 0;
-    this.squadRingMat.color.setHex(overdrive ? 0xffe46b : aegisActive ? 0x62f4ff : wc);
-    this.squadRingMat.opacity = 0.38 + (overdrive ? 0.28 : 0);
+    this.squadRingMat.color.setHex(overdrive ? 0xffe46b : aegisActive ? 0x62f4ff : baseTrimHex);
+    this.squadRingMat.opacity = 0.28 + (overdrive ? 0.22 : 0);
+
+    // Update 3D Diegetic Holographic Tactical Ring around the squad
+    const holoScale = ringScale * 1.28;
+    this.holoRing.visible = snap.squadCount > 0;
+    this.holoRing.position.set(snap.squadX, 0.052 + (snap.squadAirY ?? 0) * 0.85, PLAYER_Z);
+    this.holoRing.scale.set(holoScale, holoScale, 1);
+    this.holoRingMat.uniforms.uTime!.value = t;
+    this.holoRingMat.uniforms.uResonance!.value = overdrive ? 1.0 : snap.resonance;
+    const aegisProg = aegisActive ? 1.0 : 1.0 - THREE.MathUtils.clamp(snap.aegisCooldown / Math.max(1, snap.aegisMaxCooldown), 0, 1);
+    this.holoRingMat.uniforms.uAegis!.value = aegisProg;
+    this.holoRingMat.uniforms.uNuke!.value = THREE.MathUtils.clamp(snap.nukeCharge ?? 0, 0, 1);
+    this.holoRingMat.uniforms.uStreams!.value = Math.min(20, Math.max(4, Math.round(snap.squadCount * 0.35 + snap.weaponLevel * 2)));
+    (this.holoRingMat.uniforms.uColor!.value as THREE.Color).setHex(overdrive ? 0xffe46b : baseTrimHex);
 
     const squadAir = snap.squadAirY ?? 0;
     if (aegisActive && snap.squadCount > 0) {
@@ -1825,33 +3117,77 @@ export class Renderer {
     }
   }
 
+  private sortedEnemiesScratch: SimSnapshot['enemies'][number][] = [];
+
+  private pushEnemyInstance(
+    kind: EnemyKind,
+    poseIdx: number,
+    matrix: THREE.Matrix4,
+    hitFlash: number,
+    frost: number,
+    tintMode: number,
+    withOutline: boolean,
+    subVariant = 0,
+  ): void {
+    const list = this.enemyBatches[kind];
+    if (!list) return;
+    const batch = list[poseIdx] ?? list[0];
+    if (!batch || batch.count >= batch.cap) return;
+    const idx = batch.count++;
+    if (withOutline) batch.outlineCount = idx + 1;
+    batch.body.setMatrixAt(idx, matrix);
+    const i4 = idx * 4;
+    batch.fxArray[i4] = hitFlash;
+    batch.fxArray[i4 + 1] = frost;
+    batch.fxArray[i4 + 2] = tintMode;
+    batch.fxArray[i4 + 3] = subVariant;
+  }
+
   private updateEnemies(snap: SimSnapshot, dt: number, t: number): void {
+    this.frameTick = (this.frameTick + 1) & 0xffff;
     const lib = this.gltfLib;
     const d = this.dummy;
     const camQuat = this.camera.quaternion;
     let bars = 0;
     let tels = 0;
     let tetherIdx = 0;
+    let shieldIdx = 0;
+    let auraIdx = 0;
+    let jugIdx = 0;
+
+    for (const list of Object.values(this.enemyBatches)) {
+      if (!list) continue;
+      for (let i = 0; i < list.length; i++) {
+        list[i]!.count = 0;
+        list[i]!.outlineCount = 0;
+      }
+    }
 
     for (const entry of this.activeEnemies.values()) entry.seen = false;
+    const springDecay = Math.exp(-Math.max(dt, 0.001) * 18);
 
     if (lib) {
-      for (const e of snap.enemies) {
+      // Sort front-to-back so near/mid enemies (z > -46) occupy indices [0..outlineCount-1] with crisp cartoon outlines,
+      // while distant horizon columns (z <= -46) skip sub-pixel outline triangles (-45% GPU vertex load, cleaner horizon!)
+      const ordered = this.sortedEnemiesScratch;
+      ordered.length = snap.enemies.length;
+      for (let i = 0; i < snap.enemies.length; i++) ordered[i] = snap.enemies[i]!;
+      ordered.sort((a, b) => b.z - a.z);
+
+      for (let idx = 0; idx < ordered.length; idx++) {
+        const e = ordered[idx]!;
         let entry = this.activeEnemies.get(e.id);
         if (!entry) {
-          const pool = this.enemyPools[e.kind];
-          const actor = pool.pop();
-          if (!actor) continue;
-          actor.root.visible = true;
-          actor.resetAnimation();
           entry = {
             kind: e.kind,
-            actor,
             x: e.x,
             z: e.z,
             scale: 1,
+            animTime: (e.id * 0.29) % 1.0,
             recoilZ: 0,
+            recoilX: 0,
             recoilTilt: 0,
+            recoilRoll: 0,
             prevHit: 0,
             seen: true,
           };
@@ -1862,109 +3198,203 @@ export class Renderer {
         entry.z = e.z;
 
         const tmpl = lib.enemies[e.kind];
-        const sc = e.radius / tmpl.refRadius;
+        const radRatio = Math.max(0.86, e.radius / tmpl.refRadius);
+        const depthPresence = 1 + THREE.MathUtils.clamp((-e.z - 8) / 90, 0, 0.22);
+        // Gentle near-lens framing taper when a giant steps right up to/past PLAYER_Z so it never blocks half the viewport
+        const nearTaper = e.z > PLAYER_Z - 4.2 ? THREE.MathUtils.clamp(1 - (e.z - (PLAYER_Z - 4.2)) * 0.052, 0.68, 1) : 1;
+        const sc = radRatio * ENEMY_VISUAL_SCALE[e.kind] * depthPresence * nearTaper;
         entry.scale = sc;
 
         const hit = e.hitPulse;
         const slowed = e.slowTimer > 0;
-        const tele = e.kind === 'dasher' && e.telegraphTimer > 0;
-        const speedMod = slowed ? 0.45 : 1;
+        const tele = (e.kind === 'dasher' || e.kind === 'beholder') && e.telegraphTimer > 0;
+        const speedMod = (slowed ? 0.45 : 1) * (e.frenzyBuffed ? 1.24 : 1);
 
-        // Pick dynamic skeletal animation clip per monster archetype & combat state
-        const phaseOffset = (e.id * 0.23) % 0.8;
+        let cycleRate = 1.65;
+        let useActionPose = false;
         switch (e.kind) {
-          case 'crawler': {
-            const near = e.z > PLAYER_Z - 3.8;
-            entry.actor.play(near ? 'Bite_Front' : 'Walk', {
-              timeScale: (near ? 1.35 : 1.5) * speedMod,
-              startOffset: phaseOffset,
-            });
+          case 'crawler':
+            cycleRate = 1.95;
+            useActionPose = e.z > PLAYER_Z - 3.8;
             break;
-          }
-          case 'dasher': {
-            if (tele) {
-              entry.actor.play('Duck', { timeScale: 1.2 * speedMod, fade: 0.08 });
-            } else {
-              const dashing = e.z > -34;
-              entry.actor.play('Run', {
-                timeScale: (dashing ? 2.15 : 1.3) * speedMod,
-                fade: 0.08,
-                startOffset: phaseOffset,
-              });
-            }
+          case 'dasher':
+            cycleRate = e.z > -34 ? 2.75 : 1.75;
+            useActionPose = tele;
             break;
-          }
-          case 'bastion': {
-            const swinging = e.z > PLAYER_Z - 5.2;
-            entry.actor.play(swinging ? 'Weapon' : 'Walk', {
-              timeScale: (swinging ? 1.15 : 1.05) * speedMod,
-              startOffset: phaseOffset,
-            });
+          case 'bastion':
+            cycleRate = 1.25;
+            useActionPose = e.z > PLAYER_Z - 5.2;
             break;
-          }
-          case 'mitosis': {
-            entry.actor.play('Walk', {
-              timeScale: 1.25 * speedMod,
-              startOffset: phaseOffset,
-            });
+          case 'mitosis':
+            cycleRate = 1.55;
             break;
-          }
-          case 'siphon': {
-            const draining = e.linkedGateId !== null;
-            entry.actor.play(draining ? 'Fast_Flying' : 'Flying_Idle', {
-              timeScale: 1.15 * speedMod,
-              startOffset: phaseOffset,
-            });
+          case 'siphon':
+            cycleRate = 1.45;
+            useActionPose = e.linkedGateId !== null;
             break;
-          }
+          case 'bomber':
+            cycleRate = 2.05;
+            useActionPose = e.z > PLAYER_Z - 9.0 || e.hp < e.maxHp * 0.55;
+            break;
+          case 'phalanx':
+            cycleRate = 1.32;
+            useActionPose = e.z > PLAYER_Z - 4.8;
+            break;
+          case 'stalker':
+            cycleRate = 1.95;
+            useActionPose = e.z > PLAYER_Z - 5.2;
+            break;
+          case 'brood':
+            cycleRate = 1.38;
+            useActionPose = Math.sin(t * 2.2 + e.id) > 0.62;
+            break;
+          case 'howler':
+            cycleRate = 1.42;
+            useActionPose = Math.sin(t * 2.6 + e.id * 0.7) > 0.35;
+            break;
+          case 'glacier':
+            cycleRate = 1.18;
+            useActionPose = e.z > PLAYER_Z - 5.4;
+            break;
+          case 'beholder':
+            cycleRate = 1.52;
+            useActionPose = tele || Math.sin(t * 2.4 + e.id) > 0.55;
+            break;
+          case 'burrower':
+            cycleRate = e.z > -28 ? 2.65 : 1.85;
+            useActionPose = e.z > -28;
+            break;
+          case 'necromancer':
+            cycleRate = 1.36;
+            useActionPose = Math.sin(t * 2.5 + e.id * 0.9) > 0.42;
+            break;
         }
-        entry.actor.update(dt);
+        entry.animTime = (entry.animTime + dt * cycleRate * speedMod) % 1.0;
+        const poseIdx = useActionPose ? 6 : Math.min(5, Math.floor(entry.animTime * 6));
 
-        // Physical bullet knockback impulse & spring recovery!
+        const tier = e.tier ?? ENEMY_CONFIGS[e.kind].tier;
         if (hit > entry.prevHit + 0.04 || hit > 0.92) {
-          const knock = e.kind === 'bastion' ? 0.11 : e.kind === 'mitosis' ? 0.18 : 0.26;
-          entry.recoilZ = Math.min(0.42, entry.recoilZ + knock);
-          entry.recoilTilt = Math.max(-0.34, entry.recoilTilt - (e.kind === 'bastion' ? 0.12 : 0.24));
+          // Authentic 4-Tier Poise ("霸体韧性"): Tier 4 Juggernauts barely flinch; Tier 1 minions stagger back!
+          const knock = tier === 4 ? 0.045 : tier === 3 ? 0.11 : tier === 2 ? 0.21 : 0.34;
+          const tiltAmt = tier === 4 ? 0.06 : tier === 3 ? 0.14 : tier === 2 ? 0.24 : 0.34;
+          const sideSign = ((e.id * 7 + this.frameTick) % 2 === 0 ? 1 : -1);
+          entry.recoilZ = Math.min(tier === 4 ? 0.14 : 0.54, entry.recoilZ + knock);
+          entry.recoilX = THREE.MathUtils.clamp(entry.recoilX + sideSign * knock * 0.32, -0.22, 0.22);
+          entry.recoilTilt = Math.max(-0.46, entry.recoilTilt - tiltAmt);
+          entry.recoilRoll = THREE.MathUtils.clamp(entry.recoilRoll + sideSign * tiltAmt * 0.7, -0.3, 0.3);
         }
         entry.prevHit = hit;
-        const springDecay = Math.exp(-Math.max(dt, 0.001) * 18);
         entry.recoilZ *= springDecay;
+        entry.recoilX *= springDecay;
         entry.recoilTilt *= springDecay;
+        entry.recoilRoll *= springDecay;
 
-        const yaw = THREE.MathUtils.clamp(Math.atan2(snap.squadX - e.x, PLAYER_Z - e.z), -0.65, 0.65);
-        const jitter = tele ? (Math.random() - 0.5) * 0.08 : hit > 0.5 ? (Math.random() - 0.5) * 0.05 : 0;
-        entry.actor.root.position.set(e.x + jitter, entry.recoilZ * 0.22, e.z - entry.recoilZ);
-        entry.actor.root.rotation.set(entry.recoilTilt, yaw, 0);
+        const yaw = THREE.MathUtils.clamp(Math.atan2(snap.squadX - e.x, PLAYER_Z - e.z), -0.62, 0.62);
+        const jitter = tele ? Math.sin(t * 60 + e.id) * 0.04 : hit > 0.45 ? Math.sin(t * 88 + e.id) * 0.045 : 0;
+        const strideBob = useActionPose ? 0 : Math.abs(Math.sin(entry.animTime * Math.PI * 2)) * 0.055 * sc;
+        d.position.set(e.x + entry.recoilX + jitter, strideBob + entry.recoilZ * 0.3, e.z - entry.recoilZ);
+        d.rotation.set(entry.recoilTilt, yaw, entry.recoilRoll);
 
-        // Meaty cartoon squash-and-stretch + bright white rim punch on impact
-        const squashXZ = sc * (1 + hit * 0.26);
-        const squashY = sc * Math.max(0.72, 1 - hit * 0.18);
-        entry.actor.root.scale.set(squashXZ, squashY, squashXZ);
+        // Rhythmic elastic impact snap (oscillates crisply under sustained rapid fire instead of locking into a wide pancake!)
+        const snapPulse = hit > 0.25 ? Math.max(0, Math.sin(t * 46 + e.id * 1.7)) * hit : hit;
+        const squashXZ = sc * (1 + snapPulse * 0.11);
+        const squashY = sc * (1 - snapPulse * 0.08);
+        d.scale.set(squashXZ, squashY, squashXZ);
+        d.updateMatrix();
 
-        const hitFlash = hit > 0.55 ? 0.52 + 0.34 * Math.sin(t * 52 + e.id) : hit * 0.55;
-        if (e.isBountyElite) {
-          entry.actor.setVisuals(hitFlash + 0.16 + 0.08 * Math.sin(t * 9), 1.36, 1.15, 0.52, slowed ? 0.5 : 0);
-          if (Math.random() < dt * 12) {
-            this.effects.burst(e.x, 1.4, e.z, 0xffd84a, 1, { speed: 2.5, size: 0.24, life: 0.25, up: 1.0 });
-          }
-        } else {
-          entry.actor.setVisuals(hitFlash, 1, 1, 1, slowed ? 0.78 : 0);
+        const bomberPulse =
+          e.kind === 'bomber' && e.z > PLAYER_Z - 11 ? Math.max(0, Math.sin(t * 24 + e.id)) * 0.32 : 0;
+        const hitFlash = snapPulse * 0.78 + bomberPulse;
+        const frost = slowed ? (e.isBountyElite ? 0.5 : 0.78) : 0;
+        const tintMode = e.isBountyElite ? 2 : e.armorBroken ? 4 : e.frenzyBuffed ? 1 : 0;
+        const subVariant = e.kind === 'crawler' ? e.id % 4 : 0;
+        this.pushEnemyInstance(
+          e.kind,
+          poseIdx,
+          d.matrix,
+          e.isBountyElite ? hitFlash + 0.16 + 0.08 * Math.sin(t * 9) : e.frenzyBuffed ? hitFlash + 0.08 : hitFlash,
+          frost,
+          tintMode,
+          e.z > -46,
+          subVariant,
+        );
+
+        if (e.isBountyElite && Math.random() < dt * 8) {
+          this.effects.burst(e.x, 1.4, e.z, 0xffd84a, 1, { speed: 2.5, size: 0.24, life: 0.25, up: 1.0 });
         }
 
-        this.pushShadow(e.x, e.z, e.radius * (e.kind === 'siphon' ? 0.75 : 1.08));
+        if (e.z > -108) {
+          this.pushShadow(e.x, e.z, e.radius * ENEMY_VISUAL_SCALE[e.kind] * (e.kind === 'siphon' ? 0.82 : 1.15));
+        }
 
-        if (((e.maxHp >= 40 && e.hp < e.maxHp) || e.isBountyElite) && bars < 128) {
-          const w = Math.max(0.95, e.radius * 2);
-          const y = ENEMY_BAR_H[e.kind] * sc + 0.15;
+        // Tier-4 Juggernaut glowing ground command ring (batched into 1 InstancedMesh draw call)
+        if (tier === 4 && e.z > -78 && jugIdx < 24) {
+          const ringScale = e.radius * 1.45 * (0.95 + 0.07 * Math.sin(t * 5.5 + e.id));
+          d.position.set(e.x, 0.048, e.z);
+          d.rotation.set(0, 0, 0);
+          d.scale.setScalar(ringScale);
+          d.updateMatrix();
+          this.jugHaloInstMesh.setMatrixAt(jugIdx, d.matrix);
+          this.tmpColor.setHex(e.kind === 'glacier' ? 0x5ceeff : e.kind === 'brood' ? 0xff9f1c : 0xff3b5c);
+          this.jugHaloInstMesh.setColorAt(jugIdx, this.tmpColor);
+          jugIdx++;
+        }
+
+        // Color-coded 4-Tier Overhead Health Bars:
+        //  - Tier 4 Juggernaut: wide Gold-Crimson bar shown proactively from z > -66!
+        //  - Tier 3 Elite: Neon-Violet bar when damaged (or within z > -38)
+        //  - Tier 2 Raider: Amber-Orange bar when damaged
+        //  - Tier 1 Minion: Compact Coral-Red bar when wounded in close/mid range (z > -44)
+        const showBar =
+          e.isBountyElite ||
+          (tier === 4 && e.z > -66) ||
+          (tier === 3 && (e.hp < e.maxHp || e.z > -34) && e.z > -68) ||
+          (tier === 2 && e.hp < e.maxHp && e.z > -60) ||
+          (tier === 1 && e.hp < e.maxHp && e.z > -44);
+
+        if (showBar && bars < 192) {
+          const w =
+            tier === 4
+              ? Math.max(1.9, e.radius * 2.4)
+              : tier === 3
+                ? Math.max(1.38, e.radius * 2.1)
+                : tier === 2
+                  ? Math.max(1.06, e.radius * 1.85)
+                  : 0.8;
+          const barThick = tier === 4 ? 1.65 : tier === 3 ? 1.32 : tier === 2 ? 1.1 : 0.88;
+          const y = ENEMY_BAR_H[e.kind] * sc + (tier === 4 ? 0.3 : 0.18);
           d.position.set(e.x, y, e.z);
           d.quaternion.copy(camQuat);
-          d.scale.set(w + 0.1, 1.4, 1);
+          d.scale.set(w + 0.14, barThick, 1);
           d.updateMatrix();
           this.hpBg.setMatrixAt(bars, d.matrix);
-          d.position.set(e.x - w / 2, y, e.z + 0.01);
-          d.scale.set(Math.max(0.001, (w * e.hp) / e.maxHp), 1, 1);
+
+          // Offset left edge along camera local X so rotated billboard aligns cleanly at every lane X!
+          this.tmpA.set(-w * 0.5, 0, 0.02).applyQuaternion(camQuat);
+          d.position.set(e.x + this.tmpA.x, y + this.tmpA.y, e.z + this.tmpA.z);
+          const hpRatio = THREE.MathUtils.clamp(e.hp / Math.max(1, e.maxHp), 0.001, 1);
+          d.scale.set(w * hpRatio, barThick, 1);
           d.updateMatrix();
           this.hpFg.setMatrixAt(bars, d.matrix);
+
+          if (e.isBountyElite) {
+            this.tmpColor.setHex(0xffe048);
+          } else if (tier === 4) {
+            this.tmpColor.setHex(0xff3355);
+          } else if (tier === 3) {
+            this.tmpColor.setHex(0xd966ff);
+          } else if (tier === 2) {
+            this.tmpColor.setHex(0xffa42b);
+          } else {
+            this.tmpColor.setHex(0x4ef5a8);
+          }
+          const infoArr = this.hpFg.userData.barInfoArr as Float32Array;
+          const b4 = bars * 4;
+          infoArr[b4] = this.tmpColor.r;
+          infoArr[b4 + 1] = this.tmpColor.g;
+          infoArr[b4 + 2] = this.tmpColor.b;
+          const totalSegs = tier === 4 ? 10 : tier === 3 ? 6 : tier === 2 ? 4 : 2;
+          infoArr[b4 + 3] = Math.max(1, totalSegs * hpRatio);
           bars++;
           d.rotation.set(0, 0, 0);
         }
@@ -1972,11 +3402,15 @@ export class Renderer {
         if (tele && tels < 24) {
           d.rotation.set(0, 0, 0);
           d.position.set(e.x, 0.06, e.z);
-          d.scale.set(e.radius * 2.2, 1, Math.max(1, PLAYER_Z + 3 - e.z));
+          d.scale.set(e.kind === 'beholder' ? 0.55 : e.radius * 2.2, 1, Math.max(1, PLAYER_Z + 3 - e.z));
           d.updateMatrix();
           this.telegraphs.setMatrixAt(tels, d.matrix);
           const pulse = 0.5 + 0.5 * Math.sin(t * 30);
-          this.tmpColor.setRGB(1, 0.15 + pulse * 0.2, 0.2).multiplyScalar(0.7 + pulse * 0.45);
+          if (e.kind === 'beholder') {
+            this.tmpColor.setRGB(1.0, 0.72 + pulse * 0.2, 0.18).multiplyScalar(0.75 + pulse * 0.45);
+          } else {
+            this.tmpColor.setRGB(1, 0.15 + pulse * 0.2, 0.2).multiplyScalar(0.7 + pulse * 0.45);
+          }
           this.telegraphs.setColorAt(tels, this.tmpColor);
           tels++;
         }
@@ -1994,48 +3428,74 @@ export class Renderer {
             tm.visible = true;
           }
         }
-      }
-    }
 
-    // Blast killed monsters backward into an airborne ragdoll somersault!
-    for (const [id, entry] of this.activeEnemies) {
-      if (!entry.seen) {
-        this.activeEnemies.delete(id);
-        if (entry.z < PLAYER_Z - 0.35 && this.dyingEnemies.length < 64) {
-          entry.actor.play('Death', { loop: false, fade: 0.04, timeScale: 1.5 });
-          entry.actor.setVisuals(0.88, 1, 1, 1);
-          const heavy = entry.kind === 'bastion';
-          this.dyingEnemies.push({
-            kind: entry.kind,
-            actor: entry.actor,
-            x: entry.x,
-            y: 0.14,
-            z: entry.z,
-            vx: (Math.random() - 0.5) * (heavy ? 2.6 : 5.2),
-            vy: (heavy ? 3.8 : 5.6) + Math.random() * 2.4,
-            vz: -((heavy ? 6.2 : 9.8) + Math.random() * 4.5),
-            spinX: -((heavy ? 4.2 : 8.5) + Math.random() * 5.0),
-            spinZ: (Math.random() - 0.5) * 6.0,
-            scale: entry.scale,
-            age: 0,
-            duration: 0.52,
-          });
-        } else {
-          entry.actor.root.rotation.set(0, 0, 0);
-          entry.actor.root.visible = false;
-          this.enemyPools[entry.kind].push(entry.actor);
+        if (e.kind === 'phalanx' && !e.armorBroken && (e.shieldRatio ?? 0) > 0 && shieldIdx < 32) {
+          d.position.set(e.x, 0.96 * sc, e.z + 0.64 * sc);
+          d.rotation.set(-0.08, yaw, t * 1.4 + e.id);
+          const pulse = 1 + hit * 0.16 + Math.sin(t * 12 + e.id) * 0.04;
+          d.scale.set(sc * pulse * 1.15, sc * pulse, 1);
+          d.updateMatrix();
+          this.shieldInstMesh.setMatrixAt(shieldIdx++, d.matrix);
+        }
+
+        if (e.kind === 'howler' && auraIdx < 24) {
+          const wave = 0.94 + Math.sin(t * 6.5 + e.id) * 0.08;
+          d.position.set(e.x, 0.045, e.z);
+          d.rotation.set(0, 0, 0);
+          d.scale.setScalar(wave);
+          d.updateMatrix();
+          this.auraInstMesh.setMatrixAt(auraIdx++, d.matrix);
         }
       }
     }
 
-    // Advance airborne knockback launch & ground bounce tumble
+    const nukeBlastActive = this.nukeJustDetonated || (snap.nukeBlastTimer ?? 0) > 2.85;
+    this.nukeJustDetonated = false;
+    const maxRagdolls = nukeBlastActive ? 96 : 64;
+    for (const [id, entry] of this.activeEnemies) {
+      if (!entry.seen) {
+        this.activeEnemies.delete(id);
+        if (entry.z < PLAYER_Z - 0.35 && entry.z > -95 && this.dyingEnemies.length < maxRagdolls) {
+          const heavy =
+            entry.kind === 'bastion' ||
+            entry.kind === 'brood' ||
+            entry.kind === 'phalanx' ||
+            entry.kind === 'glacier';
+          const rdx = entry.x - (snap.nukeTargetX ?? 0);
+          const rdz = entry.z - (snap.nukeTargetZ ?? -19.5);
+          const rLen = Math.max(0.6, Math.hypot(rdx, rdz));
+          const vx = nukeBlastActive
+            ? (rdx / rLen) * (12.5 + Math.random() * 8.5) + (Math.random() - 0.5) * 4.0
+            : (Math.random() - 0.5) * (heavy ? 3.8 : 7.2);
+          const vy = nukeBlastActive
+            ? 12.0 + Math.random() * 9.5
+            : (heavy ? 4.8 : 7.2) + Math.random() * 2.8;
+          const vz = nukeBlastActive
+            ? (rdz / rLen) * (11.0 + Math.random() * 7.5) - 5.0
+            : -((heavy ? 8.2 : 12.8) + Math.random() * 5.2);
+          this.dyingEnemies.push({
+            kind: entry.kind,
+            x: entry.x,
+            y: 0.14,
+            z: entry.z,
+            vx,
+            vy,
+            vz,
+            spinX: -((heavy ? 4.2 : 8.5) + Math.random() * (nukeBlastActive ? 12.0 : 5.0)),
+            spinZ: (Math.random() - 0.5) * (nukeBlastActive ? 13.0 : 6.0),
+            scale: entry.scale,
+            age: 0,
+            duration: nukeBlastActive ? 0.92 : 0.48,
+            nukeScorched: nukeBlastActive,
+          });
+        }
+      }
+    }
+
     for (let i = this.dyingEnemies.length - 1; i >= 0; i--) {
       const dm = this.dyingEnemies[i]!;
       dm.age += dt;
       if (dm.age >= dm.duration) {
-        dm.actor.root.rotation.set(0, 0, 0);
-        dm.actor.root.visible = false;
-        this.enemyPools[dm.kind].push(dm.actor);
         this.dyingEnemies.splice(i, 1);
         continue;
       }
@@ -2043,27 +3503,79 @@ export class Renderer {
       dm.x = THREE.MathUtils.clamp(dm.x + dm.vx * dt, -TRACK_HALF_WIDTH + 0.3, TRACK_HALF_WIDTH - 0.3);
       dm.y += dm.vy * dt;
       if (dm.y < 0) {
+        if (dm.vy < -3.2 && dm.z > -48) {
+          this.effects.streaks(dm.x, 0.08, dm.z, 0xffd87a, 3, { speed: 7.5, len: 0.7, life: 0.16, coneBiasZ: -0.3 });
+        }
         dm.y = 0;
-        dm.vy = Math.abs(dm.vy) * 0.35;
-        dm.vx *= 0.7;
-        dm.vz *= 0.72;
+        dm.vy = Math.abs(dm.vy) * 0.38;
+        dm.vx *= 0.72;
+        dm.vz *= 0.74;
       }
       dm.z += dm.vz * dt;
       const p = dm.age / dm.duration;
       const shrink = p > 0.62 ? Math.max(0.05, 1 - (p - 0.62) / 0.38) : 1.06;
-      dm.actor.root.position.set(dm.x, dm.y, dm.z);
-      dm.actor.root.rotation.set(dm.spinX * dm.age, 0, dm.spinZ * dm.age);
-      dm.actor.root.scale.setScalar(dm.scale * shrink);
-      dm.actor.setVisuals(Math.max(0, (1 - p * 2.4) * 0.85), 1, 1, 1);
-      dm.actor.update(dt);
+      d.position.set(dm.x, dm.y, dm.z);
+      d.rotation.set(dm.spinX * dm.age, 0, dm.spinZ * dm.age);
+      d.scale.setScalar(dm.scale * shrink);
+      d.updateMatrix();
+      this.pushEnemyInstance(
+        dm.kind,
+        6,
+        d.matrix,
+        Math.max(0, (1 - p * 2.0) * (dm.nukeScorched ? 0.92 : 0.78)),
+        0,
+        dm.nukeScorched ? 3 : 0,
+        dm.z > -44,
+      );
+    }
+
+    for (const list of Object.values(this.enemyBatches)) {
+      if (!list) continue;
+      for (let i = 0; i < list.length; i++) {
+        const b = list[i]!;
+        b.body.count = b.count;
+        b.outline.count = b.outlineCount;
+        if (b.count > 0) {
+          b.body.visible = true;
+          b.outline.visible = b.outlineCount > 0;
+          b.body.instanceMatrix.needsUpdate = true;
+          b.fxAttr.needsUpdate = true;
+        } else {
+          b.body.visible = false;
+          b.outline.visible = false;
+        }
+      }
     }
 
     this.hpBg.count = this.hpFg.count = bars;
-    this.hpBg.instanceMatrix.needsUpdate = this.hpFg.instanceMatrix.needsUpdate = true;
+    this.hpBg.visible = this.hpFg.visible = bars > 0;
+    if (bars > 0) {
+      this.hpBg.instanceMatrix.needsUpdate = this.hpFg.instanceMatrix.needsUpdate = true;
+      const barAttr = this.hpFg.userData.barInfoAttr as THREE.InstancedBufferAttribute | undefined;
+      if (barAttr) barAttr.needsUpdate = true;
+    }
     this.telegraphs.count = tels;
-    this.telegraphs.instanceMatrix.needsUpdate = true;
-    if (this.telegraphs.instanceColor) this.telegraphs.instanceColor.needsUpdate = true;
+    this.telegraphs.visible = tels > 0;
+    if (tels > 0) {
+      this.telegraphs.instanceMatrix.needsUpdate = true;
+      if (this.telegraphs.instanceColor) this.telegraphs.instanceColor.needsUpdate = true;
+    }
     for (let i = tetherIdx; i < this.tethers.length; i++) this.tethers[i]!.visible = false;
+
+    this.shieldInstMesh.count = shieldIdx;
+    this.shieldInstMesh.visible = shieldIdx > 0;
+    if (shieldIdx > 0) this.shieldInstMesh.instanceMatrix.needsUpdate = true;
+
+    this.auraInstMesh.count = auraIdx;
+    this.auraInstMesh.visible = auraIdx > 0;
+    if (auraIdx > 0) this.auraInstMesh.instanceMatrix.needsUpdate = true;
+
+    this.jugHaloInstMesh.count = jugIdx;
+    this.jugHaloInstMesh.visible = jugIdx > 0;
+    if (jugIdx > 0) {
+      this.jugHaloInstMesh.instanceMatrix.needsUpdate = true;
+      if (this.jugHaloInstMesh.instanceColor) this.jugHaloInstMesh.instanceColor.needsUpdate = true;
+    }
   }
 
   private updateProjectiles(snap: SimSnapshot): void {
@@ -2078,9 +3590,10 @@ export class Renderer {
         d.scale.setScalar(1 + Math.sin(this.time * 20 + p.id) * 0.12);
         d.updateMatrix();
         this.orbMesh.setMatrixAt(orbs, d.matrix);
-        d.position.set(p.x, 0.05, p.z);
+        d.position.set(p.x, 0.055, p.z);
         d.rotation.set(0, 0, 0);
-        d.scale.set(1.6, 1, 1.6);
+        const warnScale = 2.05 + Math.sin(this.time * 18 + p.id) * 0.24;
+        d.scale.set(warnScale, 1, warnScale);
         d.updateMatrix();
         this.orbMarks.setMatrixAt(orbs, d.matrix);
         orbs++;
@@ -2088,13 +3601,13 @@ export class Renderer {
       }
       if (n >= MAX_PROJ) continue;
       const ps = 0.88 + Math.min(0.45, (p.powerScale - 1) * 0.42);
-      let sx = 0.145;
-      let sz = 1.32;
+      let sx = 0.172;
+      let sz = 1.48;
       switch (p.weapon) {
-        case 'scatter': sx = 0.155; sz = 0.92; break;
-        case 'rail': sx = 0.19; sz = 2.95; break;
-        case 'plasma': sx = 0.46; sz = 0.56; break;
-        case 'cryo': sx = 0.155; sz = 1.48; break;
+        case 'scatter': sx = 0.178; sz = 1.04; break;
+        case 'rail': sx = 0.215; sz = 3.15; break;
+        case 'plasma': sx = 0.48; sz = 0.62; break;
+        case 'cryo': sx = 0.178; sz = 1.62; break;
         default: break;
       }
       const yaw = Math.atan2(p.vx, p.vz);
@@ -2113,7 +3626,8 @@ export class Renderer {
       this.projCoreMesh.setMatrixAt(n, d.matrix);
 
       const boltHex = p.amplified ? 0xffe27a : WEAPON_COLOR[p.weapon];
-      this.tmpColor.setHex(boltHex).multiplyScalar(1.42);
+      const glowGain = snap.projectiles.length > 55 ? 1.38 : 1.72;
+      this.tmpColor.setHex(boltHex).multiplyScalar(glowGain);
       this.projMesh.setColorAt(n, this.tmpColor);
       if ((p.amplified || p.weapon === 'plasma' || p.weapon === 'rail') && Math.random() < 0.16) {
         this.effects.burst(p.x, 0.66, p.z + 0.3, boltHex, 1, { speed: 1.4, size: p.weapon === 'plasma' ? 0.26 : 0.18, life: 0.15, gravity: 0 });
@@ -2122,13 +3636,21 @@ export class Renderer {
     }
     this.projMesh.count = n;
     this.projCoreMesh.count = n;
-    this.projMesh.instanceMatrix.needsUpdate = true;
-    this.projCoreMesh.instanceMatrix.needsUpdate = true;
-    if (this.projMesh.instanceColor) this.projMesh.instanceColor.needsUpdate = true;
+    this.projMesh.visible = n > 0;
+    this.projCoreMesh.visible = n > 0;
+    if (n > 0) {
+      this.projMesh.instanceMatrix.needsUpdate = true;
+      this.projCoreMesh.instanceMatrix.needsUpdate = true;
+      if (this.projMesh.instanceColor) this.projMesh.instanceColor.needsUpdate = true;
+    }
     this.orbMesh.count = orbs;
     this.orbMarks.count = orbs;
-    this.orbMesh.instanceMatrix.needsUpdate = true;
-    this.orbMarks.instanceMatrix.needsUpdate = true;
+    this.orbMesh.visible = orbs > 0;
+    this.orbMarks.visible = orbs > 0;
+    if (orbs > 0) {
+      this.orbMesh.instanceMatrix.needsUpdate = true;
+      this.orbMarks.instanceMatrix.needsUpdate = true;
+    }
   }
 
   // ---------------------------------------------------------------- gates
@@ -2345,7 +3867,7 @@ export class Renderer {
         this.vaultViews.set(s.id, v);
       }
       v.seen = true;
-      this.layoutVault(v, s, t);
+      this.layoutVault(v, s, snap, t);
     }
     for (const [id, v] of this.vaultViews) {
       if (!v.seen) {
@@ -2355,13 +3877,21 @@ export class Renderer {
     }
   }
 
-  private layoutVault(v: VaultView, s: VaultSnapshot, t: number): void {
+  private layoutVault(v: VaultView, s: VaultSnapshot, snap: SimSnapshot, t: number): void {
     const meta = REWARD_META[s.rewardWeapon];
     v.group.position.set(s.x, 0, s.z);
-    const key = `${s.rewardWeapon}|${s.displayHp}`;
+    const rel = describeVaultRelation(
+      s.rewardWeapon,
+      snap.activeLoadout ?? [],
+      snap.arsenal,
+      snap.bladesCount,
+      snap.activeFusions ?? [],
+      snap.pendingSwapWeapon ?? null,
+    );
+    const key = `${s.rewardWeapon}|${s.displayHp}|${rel.tag}`;
     if (key !== v.key) {
       v.key = key;
-      paintVaultPlate(v.ctx, 384, 192, s.rewardWeapon, s.displayHp, s.maxHp);
+      paintVaultPlate(v.ctx, 384, 192, s.rewardWeapon, s.displayHp, s.maxHp, rel.tag, rel.color);
       v.tex.needsUpdate = true;
     }
     const rewardKey = `${s.rewardWeapon}:${Boolean(this.gltfLib)}`;
@@ -2471,10 +4001,17 @@ export class Renderer {
     v.fill.scale.set(b.blastRadius, 1, b.blastRadius);
     v.ringMat.opacity = 0.32 + Math.sin(t * 6 + b.id) * 0.12;
     const dmg = 1 - b.hp / 15;
-    v.bodyMat.emissive.setRGB(1, 0.55, 0.1).multiplyScalar(b.hitPulse * 0.65 + dmg * 0.22);
-    const blink = Math.sin(t * (6 + dmg * 18) + b.id) > 0 ? 1.2 : 0.25;
-    v.lightMat.color.setRGB(blink + b.hitPulse, 0.23 * blink + b.hitPulse, 0.23 * blink + b.hitPulse);
-    const s = 1 + b.hitPulse * 0.15;
+    const oh = b.overheat ?? 0;
+    v.bodyMat.emissive.setRGB(1, oh > 0.2 ? 0.18 : 0.55, oh > 0.2 ? 0.28 : 0.1).multiplyScalar(b.hitPulse * 0.65 + dmg * 0.22 + oh * 0.95);
+    const blink = Math.sin(t * (6 + dmg * 18 + oh * 28) + b.id) > 0 ? 1.35 : 0.25;
+    v.lightMat.color.setRGB(blink + b.hitPulse + oh, 0.23 * blink + b.hitPulse, 0.23 * blink + b.hitPulse);
+    if (oh > 0.05) {
+      v.ringMat.color.setHex(oh > 0.6 ? 0xff2a55 : 0xff9a1a);
+      v.ringMat.opacity = Math.min(0.92, 0.42 + oh * 0.48);
+    } else {
+      v.ringMat.color.setHex(0xff9a1a);
+    }
+    const s = 1 + b.hitPulse * 0.15 + oh * 0.2 * (0.5 + 0.5 * Math.sin(t * 26));
     v.body.scale.set(s, s, s);
     v.light.position.y = 1.52 * s;
   }
@@ -2609,7 +4146,25 @@ export class Renderer {
     sign.position.set(0, 2.05, 0);
     sign.rotation.x = -0.3;
     sign.renderOrder = 4;
-    group.add(glow, mesh, sign);
+    // Projected Landing-Zone Payoff Ring (~16.2m ahead on bridge) so player sees exact Sky-Slam zone!
+    const landRingMat = additive(0xffd84a, 0.52);
+    const landRing = new THREE.Mesh(
+      new THREE.RingGeometry(2.6, 3.25, 28).rotateX(-Math.PI / 2),
+      landRingMat,
+    );
+    landRing.position.set(0, 0.06, -16.2);
+    landRing.name = 'landRing';
+    const landCore = new THREE.Mesh(
+      new THREE.RingGeometry(0.55, 0.95, 20).rotateX(-Math.PI / 2),
+      additive(0x3ef3ff, 0.46),
+    );
+    landCore.position.set(0, 0.07, -16.2);
+    const arcGuide = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.28, 15.2).rotateX(-Math.PI / 2),
+      additive(0x62f4ff, 0.28),
+    );
+    arcGuide.position.set(0, 0.05, -8.1);
+    group.add(glow, mesh, sign, arcGuide, landRing, landCore);
     this.scene.add(group);
     return { id: -1, group, stripMat, seen: false };
   }
@@ -2639,7 +4194,19 @@ export class Renderer {
     sign.position.set(0, 2.85, 0);
     sign.rotation.x = -0.3;
     sign.renderOrder = 4;
-    group.add(mirrorPivot, sign);
+    // Deflected Bank-Shot Trajectory Laser Preview (shows exact 36° bounce line toward rear barrels!)
+    const aimPivot = new THREE.Group();
+    aimPivot.name = 'aimPivot';
+    const aimBeam = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.26, 15.5).rotateX(-Math.PI / 2).translate(0, 0.12, -7.75),
+      additive(0x7dff6b, 0.46),
+    );
+    const inBeam = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.18, 6.5).rotateX(-Math.PI / 2).translate(0, 0.1, 3.25),
+      additive(0x3ef3ff, 0.28),
+    );
+    aimPivot.add(aimBeam);
+    group.add(mirrorPivot, sign, inBeam, aimPivot);
     this.scene.add(group);
     return { id: -1, group, paneMat, seen: false };
   }
@@ -2665,7 +4232,17 @@ export class Renderer {
     );
     sign.rotation.x = -0.3;
     sign.renderOrder = 4;
-    group.add(postBack, postFront, beam, sign);
+    const bountyStrip = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.4, 5.5).rotateX(-Math.PI / 2),
+      additive(0xffc531, 0.26),
+    );
+    bountyStrip.name = 'bountyStrip';
+    const safeStrip = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.4, 5.5).rotateX(-Math.PI / 2),
+      additive(0x19f5a8, 0.18),
+    );
+    safeStrip.name = 'safeStrip';
+    group.add(postBack, postFront, beam, sign, bountyStrip, safeStrip);
     this.scene.add(group);
     return { id: -1, group, beam, beamMat, postBack, postFront, sign, seen: false };
   }
@@ -2752,7 +4329,10 @@ export class Renderer {
       }
       v.seen = true;
       v.group.position.set(jp.x, 0, jp.z);
-      v.stripMat.opacity = 0.38 + 0.18 * Math.sin(t * 9 + jp.id);
+      const alignedJp = jp.z < PLAYER_Z && Math.abs(snap.squadX - jp.x) <= 1.85;
+      v.stripMat.opacity = (alignedJp ? 0.72 : 0.38) + 0.18 * Math.sin(t * (alignedJp ? 16 : 9) + jp.id);
+      const landRing = v.group.getObjectByName('landRing');
+      if (landRing) landRing.scale.setScalar(alignedJp ? 1.14 + 0.06 * Math.sin(t * 14) : 1.0);
     }
     for (const [id, v] of this.jumpPadViews) {
       if (!v.seen) {
@@ -2773,9 +4353,17 @@ export class Renderer {
       }
       v.seen = true;
       v.group.position.set(rf.x, 0, rf.z);
+      const deg = rf.angleDeg !== undefined ? rf.angleDeg : rf.lean * 36;
+      const rad = (deg * Math.PI) / 180;
       const pivot = v.group.getObjectByName('pivot')!;
-      pivot.rotation.y = rf.lean * 0.64;
-      v.paneMat.opacity = 0.28 + rf.pulse * 0.48 + 0.06 * Math.sin(t * 7);
+      pivot.rotation.y = rad * 0.95;
+      const alignedRf = rf.z < PLAYER_Z && Math.abs(snap.squadX - rf.x) <= 1.95;
+      const aimPivot = v.group.getObjectByName('aimPivot');
+      if (aimPivot) {
+        aimPivot.rotation.y = -rad;
+        aimPivot.scale.setScalar(alignedRf ? 1.22 : 1.0);
+      }
+      v.paneMat.opacity = (alignedRf ? 0.58 : 0.28) + rf.pulse * 0.48 + 0.06 * Math.sin(t * (alignedRf ? 14 : 7));
     }
     for (const [id, v] of this.reflectorViews) {
       if (!v.seen) {
@@ -2803,7 +4391,12 @@ export class Renderer {
       v.beam.position.set(0, 0.95, midZ);
       v.beam.scale.set(1, 1, len);
       v.beamMat.opacity = 0.34 + 0.12 * Math.sin(t * 14);
-      v.sign.position.set(cw.bountySide === 'left' ? -2.35 : 2.35, 2.75, Math.min(cw.zFront - 1.5, PLAYER_Z - 6));
+      const bSideX = cw.bountySide === 'left' ? -2.35 : 2.35;
+      v.sign.position.set(bSideX, 2.75, Math.min(cw.zFront + 1.2, PLAYER_Z - 5.5));
+      const bStrip = v.group.getObjectByName('bountyStrip');
+      const sStrip = v.group.getObjectByName('safeStrip');
+      if (bStrip) bStrip.position.set(bSideX, 0.05, cw.zFront + 2.4);
+      if (sStrip) sStrip.position.set(-bSideX, 0.05, cw.zFront + 2.4);
     }
     for (const [id, v] of this.contractViews) {
       if (!v.seen) {
@@ -2837,7 +4430,7 @@ export class Renderer {
       v.cageMat.color.setHex(orb.reflected ? 0xffd84a : 0xff85a2);
       v.haloMat.color.setHex(hex);
       v.cage.rotation.set(t * 3.2, -t * 4.5, 0);
-      const sc = 1 + orb.hitPulse * 0.16 + 0.06 * Math.sin(t * 12);
+      const sc = 1.15 + orb.hitPulse * 0.18 + 0.07 * Math.sin(t * 12);
       v.cage.scale.setScalar(sc);
     }
     for (const [id, v] of this.doomOrbViews) {
@@ -2847,6 +4440,462 @@ export class Renderer {
         this.doomOrbPool.push(v);
         this.doomOrbViews.delete(id);
       }
+    }
+
+    // 6. Shootable Sky-Drop Plasma Cargo Cranes
+    for (const v of this.skyCargoViews.values()) v.seen = false;
+    for (const c of snap.skyCargos ?? []) {
+      let v = this.skyCargoViews.get(c.id);
+      if (!v) {
+        v = this.acquireSkyCargo();
+        v.id = c.id;
+        this.skyCargoViews.set(c.id, v);
+      }
+      v.seen = true;
+      v.group.visible = c.state !== 'slammed';
+      v.group.position.set(c.x, 0, c.z);
+      const bob = c.state === 'hanging' ? Math.sin(t * 5.2 + c.id) * 0.14 : 0;
+      const cy = c.y + bob;
+      v.crate.position.set(0, cy + 0.72, 0);
+      v.crate.rotation.set(c.hitPulse * 0.18, t * (c.state === 'falling' ? 6.0 : 0.9), c.hitPulse * 0.15);
+      v.crate.scale.setScalar(1 + c.hitPulse * 0.14);
+      v.drone.position.set(0, 7.6 + Math.sin(t * 4.0) * 0.18, 0);
+      v.drone.rotation.y = t * 2.4;
+      v.tether.visible = c.state === 'hanging';
+      const tLen = Math.max(0.2, 7.4 - (cy + 1.2));
+      v.tether.position.set(0, cy + 1.2 + tLen * 0.5, 0);
+      v.tether.scale.set(1 + c.hitPulse * 0.8, tLen, 1 + c.hitPulse * 0.8);
+      v.reticle.position.set(0, 0.05, 0);
+      v.reticle.rotation.z = -t * 2.2;
+      v.reticle.scale.setScalar(c.state === 'falling' ? 6.2 : 5.2 + Math.sin(t * 7) * 0.22);
+      const hpFrac = THREE.MathUtils.clamp(c.hp / Math.max(1, c.maxHp), 0.02, 1);
+      v.hpFill.visible = c.state === 'hanging';
+      v.hpFill.position.set(-1.1 * (1 - hpFrac), cy + 1.85, 0);
+      v.hpFill.scale.set(hpFrac, 1, 1);
+    }
+    for (const [id, v] of this.skyCargoViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.skyCargoPool.push(v);
+        this.skyCargoViews.delete(id);
+      }
+    }
+
+    // 7. Supersonic Elevated Maglev Express Bullet Train Sweep
+    for (const v of this.maglevViews.values()) v.seen = false;
+    for (const tr of snap.maglevTrains ?? []) {
+      let v = this.maglevViews.get(tr.id);
+      if (!v) {
+        v = this.acquireMaglev();
+        v.id = tr.id;
+        this.maglevViews.set(tr.id, v);
+      }
+      v.seen = true;
+      v.group.visible = true;
+      v.group.position.set(0, 0, tr.z);
+      v.railWarn.visible = true;
+      const blink = 0.5 + 0.5 * Math.sin(t * (tr.state === 'warning' ? 22 : 36));
+      v.railMat.opacity = tr.state === 'warning' ? 0.24 + tr.warningProgress * 0.45 + blink * 0.18 : 0.55;
+      v.railMat.color.setHex(tr.state === 'warning' ? 0xff2a55 : 0x3ef3ff);
+      if (tr.state === 'crossing') {
+        v.train.visible = true;
+        v.train.position.set(tr.trainX, 1.25, 0);
+        v.train.scale.set(tr.dir, 1, 1);
+        if (Math.abs(tr.trainX) < 12 && Math.random() < 0.7) {
+          this.effects.streaks(tr.trainX, 0.9, tr.z, 0x62f4ff, 4, { speed: 18, len: 2.2, life: 0.2, coneBiasZ: 0 });
+        }
+      } else {
+        v.train.visible = false;
+      }
+    }
+    for (const [id, v] of this.maglevViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.maglevPool.push(v);
+        this.maglevViews.delete(id);
+      }
+    }
+  }
+
+  private updateV20PropsAndWeather(snap: SimSnapshot, t: number): void {
+    const d = this.dummy;
+
+    // 1. Polarity Mag-Rails (极性电磁滑轨)
+    for (const v of this.magRailViews.values()) v.seen = false;
+    for (const mr of snap.magRails ?? []) {
+      let v = this.magRailViews.get(mr.id);
+      if (!v) {
+        const pooled = this.magRailPool.pop();
+        if (pooled) {
+          pooled.group.visible = true;
+          v = pooled;
+        } else {
+          const group = new THREE.Group();
+          const stripMat = additive(0x3ef3ff, 0.72, this.stripeTex);
+          const deck = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), stripMat);
+          deck.position.y = 0.048;
+          const railGeo = new GeoBuilder()
+            .add(box(0.14, 0.18, 1), 0x62f4ff, 2.8, { p: [-0.48, 0.1, 0] })
+            .add(box(0.14, 0.18, 1), 0xb98cff, 2.8, { p: [0.48, 0.1, 0] })
+            .build();
+          const rails = new THREE.Mesh(railGeo, this.propMat);
+          rails.name = 'rails';
+          group.add(deck, rails);
+          this.scene.add(group);
+          v = { id: mr.id, group, stripMat, seen: true };
+        }
+        v.id = mr.id;
+        this.magRailViews.set(mr.id, v);
+      }
+      v.seen = true;
+      const len = Math.max(1.5, mr.length);
+      const activeOnRail = Math.abs(snap.squadX - mr.x) <= mr.halfWidth + 0.5 && Math.abs(PLAYER_Z - mr.z) <= len * 0.5;
+      v.group.position.set(mr.x, 0, mr.z);
+      v.group.children[0]!.scale.set(mr.halfWidth * 2, len, 1);
+      v.group.children[1]!.scale.set(mr.halfWidth * 2, 1, len);
+      v.stripMat.opacity = (activeOnRail ? 0.82 : 0.44) + 0.16 * Math.sin(t * 16 + mr.id);
+      if (v.stripMat.map) v.stripMat.map.offset.y = -t * 3.8;
+    }
+    for (const [id, v] of this.magRailViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.magRailPool.push(v);
+        this.magRailViews.delete(id);
+      }
+    }
+
+    // 2. Overload Capacitor Towers (过载电容塔)
+    for (const v of this.capTowerViews.values()) v.seen = false;
+    for (const ct of snap.capTowers ?? []) {
+      let v = this.capTowerViews.get(ct.id);
+      if (!v) {
+        const pooled = this.capTowerPool.pop();
+        if (pooled) {
+          pooled.group.visible = true;
+          v = pooled;
+        } else {
+          const group = new THREE.Group();
+          const pylonGeo = new GeoBuilder()
+            .add(cyl(0.62, 0.85, 2.35, 6), 0x1c2b48, 0.2, { p: [0, 1.18, 0] })
+            .add(tor(0.76, 0.08, 6, 18).rotateX(Math.PI / 2), 0x62f4ff, 2.6, { p: [0, 1.65, 0] })
+            .add(tor(0.92, 0.07, 6, 18).rotateX(Math.PI / 2), 0xffd84a, 2.6, { p: [0, 0.85, 0] })
+            .build();
+          const pylon = new THREE.Mesh(pylonGeo, this.propMat);
+          const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.46, 0), additive(0x62f4ff, 0.95));
+          core.position.y = 2.68;
+          const fillMat = additive(0x62f4ff, 0.65);
+          const ring = new THREE.Mesh(new THREE.RingGeometry(1.15, 1.42, 32).rotateX(-Math.PI / 2), fillMat);
+          ring.position.y = 0.06;
+          group.add(pylon, core, ring);
+          this.scene.add(group);
+          v = { id: ct.id, group, core, ring, fillMat, seen: true };
+        }
+        v.id = ct.id;
+        this.capTowerViews.set(ct.id, v);
+      }
+      v.seen = true;
+      v.group.visible = true;
+      v.group.position.set(ct.x, 0, ct.z);
+      const ratio = THREE.MathUtils.clamp(ct.charge / Math.max(1, ct.maxCharge), 0, 1);
+      v.core.rotation.set(t * 2.5, t * 4.2, 0);
+      v.core.scale.setScalar(0.85 + ratio * 0.72 + ct.hitPulse * 0.22);
+      v.ring.scale.setScalar(0.95 + ratio * 0.65);
+      v.fillMat.color.setHex(ratio > 0.75 ? 0xffdf58 : 0x62f4ff);
+      v.fillMat.opacity = 0.35 + ratio * 0.55;
+    }
+    for (const [id, v] of this.capTowerViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.capTowerPool.push(v);
+        this.capTowerViews.delete(id);
+      }
+    }
+
+    // 3. Dual-Color Phase Barrier Gates (双色相位屏障门)
+    for (const v of this.phaseGateViews.values()) v.seen = false;
+    for (const pg of snap.phaseGates ?? []) {
+      let v = this.phaseGateViews.get(pg.id);
+      if (!v) {
+        const pooled = this.phaseGatePool.pop();
+        if (pooled) {
+          pooled.group.visible = true;
+          v = pooled;
+        } else {
+          const group = new THREE.Group();
+          const frameGeo = new GeoBuilder()
+            .add(cyl(0.14, 0.18, 2.7, 8), 0x243456, 0.2, { p: [-2.15, 1.35, 0] })
+            .add(cyl(0.14, 0.18, 2.7, 8), 0x243456, 0.2, { p: [2.15, 1.35, 0] })
+            .add(box(4.5, 0.18, 0.22), 0x62f4ff, 2.4, { p: [0, 2.68, 0] })
+            .build();
+          const frame = new THREE.Mesh(frameGeo, this.propMat);
+          const curtainMat = additive(0x3ef3ff, 0.44, this.stripeTex);
+          const curtain = new THREE.Mesh(new THREE.PlaneGeometry(4.15, 2.45), curtainMat);
+          curtain.position.y = 1.32;
+          const signMat = new THREE.MeshBasicMaterial({ map: this.phaseEngTex, transparent: true, toneMapped: false, depthWrite: false });
+          const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.7, 0.88), signMat);
+          sign.position.set(0, 3.22, 0.05);
+          group.add(frame, curtain, sign);
+          this.scene.add(group);
+          v = { id: pg.id, group, curtainMat, signMat, polarity: '', seen: true };
+        }
+        v.id = pg.id;
+        this.phaseGateViews.set(pg.id, v);
+      }
+      v.seen = true;
+      v.group.position.set(pg.x, 0, pg.z);
+      if (v.polarity !== pg.attune) {
+        v.polarity = pg.attune;
+        v.curtainMat.color.setHex(pg.attune === 'kinetic' ? 0xb98cff : 0x3ef3ff);
+        v.signMat.map = pg.attune === 'kinetic' ? this.phaseKinTex : this.phaseEngTex;
+        v.signMat.needsUpdate = true;
+      }
+      v.curtainMat.opacity = 0.34 + 0.14 * Math.sin(t * 12 + pg.id);
+    }
+    for (const [id, v] of this.phaseGateViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.phaseGatePool.push(v);
+        this.phaseGateViews.delete(id);
+      }
+    }
+
+    // 4. 3D Magnetized Core Shards (single InstancedMesh draw call)
+    let shardCount = 0;
+    for (const cs of snap.coreShards ?? []) {
+      if (shardCount >= 160) break;
+      const bob = 0.52 + 0.14 * Math.sin(t * 9 + cs.id);
+      d.position.set(cs.x, bob, cs.z);
+      d.rotation.set(t * 3.6 + cs.id, t * 5.2, 0);
+      const magnetized = Math.hypot(snap.squadX - cs.x, PLAYER_Z - cs.z) <= 4.2;
+      d.scale.setScalar(magnetized ? 1.24 : 0.95);
+      d.updateMatrix();
+      this.shardDropInstMesh.setMatrixAt(shardCount, d.matrix);
+      this.tmpColor.setHex(cs.value >= 2 ? 0xffe26a : 0x5ef6ff);
+      this.shardDropInstMesh.setColorAt(shardCount, this.tmpColor);
+      shardCount++;
+    }
+    this.shardDropInstMesh.count = shardCount;
+    this.shardDropInstMesh.visible = shardCount > 0;
+    if (shardCount > 0) {
+      this.shardDropInstMesh.instanceMatrix.needsUpdate = true;
+      if (this.shardDropInstMesh.instanceColor) this.shardDropInstMesh.instanceColor.needsUpdate = true;
+    }
+
+    // 5. Sector Dynamic Weather Anomaly (solar_emp / prism_tide / cryo_blizzard — single InstancedMesh draw call!)
+    const weather = snap.weatherState ?? 'none';
+    if (weather === 'none') {
+      this.weatherMesh.count = 0;
+      this.weatherMesh.visible = false;
+    } else {
+      const cap = this.qualityScale < 0.85 ? 120 : 200;
+      const hexA = weather === 'solar_emp' ? 0xff9a2e : weather === 'prism_tide' ? 0xd875ff : 0x8ef4ff;
+      const hexB = weather === 'solar_emp' ? 0xff3b5c : weather === 'prism_tide' ? 0x3ef3ff : 0xffffff;
+      for (let i = 0; i < cap; i++) {
+        const seed = (i * 73.137) % 1;
+        const seed2 = (i * 31.719) % 1;
+        const speedZ = weather === 'cryo_blizzard' ? 42 : weather === 'prism_tide' ? 28 : 22;
+        const z = PLAYER_Z + 4 - (((t * speedZ + seed * 68) % 68));
+        const sway = weather === 'cryo_blizzard' ? Math.sin(t * 3.5 + i) * 2.2 : Math.sin(t * 2.0 + i) * 0.9;
+        const x = (seed2 - 0.5) * 22 + sway;
+        const y = weather === 'solar_emp'
+          ? 0.4 + ((t * 5.5 + seed * 9) % 8.5)
+          : 0.6 + ((1 - ((t * 3.2 + seed2 * 8) % 8) / 8) * 8.2);
+        d.position.set(x, y, z);
+        d.rotation.set(weather === 'solar_emp' ? -Math.PI * 0.35 : 0.18, weather === 'cryo_blizzard' ? 0.28 : 0, 0);
+        d.scale.set(1, 1, weather === 'cryo_blizzard' ? 1.45 : 0.95);
+        d.updateMatrix();
+        this.weatherMesh.setMatrixAt(i, d.matrix);
+        this.tmpColor.setHex(i % 2 === 0 ? hexA : hexB);
+        this.weatherMesh.setColorAt(i, this.tmpColor);
+      }
+      this.weatherMesh.count = cap;
+      this.weatherMesh.visible = true;
+      this.weatherMesh.instanceMatrix.needsUpdate = true;
+      if (this.weatherMesh.instanceColor) this.weatherMesh.instanceColor.needsUpdate = true;
+    }
+  }
+
+  private acquireSkyCargo(): SkyCargoView {
+    const pooled = this.skyCargoPool.pop();
+    if (pooled) {
+      pooled.group.visible = true;
+      return pooled;
+    }
+    const group = new THREE.Group();
+    // Hexagonal glowing plasma cargo reactor container
+    const crateGeo = new GeoBuilder()
+      .add(cyl(0.95, 0.95, 1.38, 6), 0x1e2c4a, 0)
+      .add(cyl(0.82, 0.82, 1.05, 6), 0x3ef3ff, 2.8)
+      .add(tor(0.98, 0.08, 6, 6).rotateX(Math.PI / 2), 0xffc531, 2.4, { p: [0, 0.42, 0] })
+      .add(tor(0.98, 0.08, 6, 6).rotateX(Math.PI / 2), 0xffc531, 2.4, { p: [0, -0.42, 0] })
+      .add(oct(0.34), 0xffffff, 3.0, { p: [0, 0.82, 0] })
+      .build();
+    const crate = new THREE.Mesh(crateGeo, this.propMat);
+    const droneGeo = new GeoBuilder()
+      .add(box(2.2, 0.24, 2.2), 0x263859, 0)
+      .add(oct(0.32), 0x3ef3ff, 2.8)
+      .add(tor(0.55, 0.06, 5, 12).rotateX(Math.PI / 2), 0x62f4ff, 2.6, { p: [1.05, 0, 1.05] })
+      .add(tor(0.55, 0.06, 5, 12).rotateX(Math.PI / 2), 0x62f4ff, 2.6, { p: [-1.05, 0, 1.05] })
+      .add(tor(0.55, 0.06, 5, 12).rotateX(Math.PI / 2), 0x62f4ff, 2.6, { p: [1.05, 0, -1.05] })
+      .add(tor(0.55, 0.06, 5, 12).rotateX(Math.PI / 2), 0x62f4ff, 2.6, { p: [-1.05, 0, -1.05] })
+      .build();
+    const drone = new THREE.Group();
+    drone.add(new THREE.Mesh(droneGeo, this.propMat));
+    const tether = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1, 8), additive(0x62f4ff, 0.85));
+    const reticle = new THREE.Mesh(new THREE.RingGeometry(0.88, 1.0, 36).rotateX(-Math.PI / 2), additive(0xffc531, 0.68));
+    const hpFill = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.2, 0.22),
+      new THREE.MeshBasicMaterial({ color: 0xffd84a, depthTest: false, toneMapped: false }),
+    );
+    hpFill.renderOrder = 14;
+    group.add(crate, drone, tether, reticle, hpFill);
+    this.scene.add(group);
+    return { id: 0, group, drone, crate, tether, reticle, hpFill, seen: true };
+  }
+
+  private acquireMaglev(): MaglevView {
+    const pooled = this.maglevPool.pop();
+    if (pooled) {
+      pooled.group.visible = true;
+      return pooled;
+    }
+    const group = new THREE.Group();
+    const railMat = additive(0xff2a55, 0.55, this.stripeTex);
+    const railWarn = new THREE.Mesh(new THREE.PlaneGeometry(34, 5.4).rotateX(-Math.PI / 2), railMat);
+    railWarn.position.y = 0.06;
+
+    // Sleek 3-Car Cyberpunk Maglev Bullet Train (+X nose direction)
+    const trainGeo = new GeoBuilder()
+      // Aerodynamic Lead Car + Glowing Cyan Cockpit Visor
+      .add(box(7.8, 1.75, 2.35), 0xeaf6ff, 0, { p: [5.2, 0, 0] })
+      .add(cone(1.22, 3.6, 6).rotateZ(-Math.PI / 2), 0x3ef3ff, 2.6, { p: [10.8, -0.08, 0] })
+      .add(box(7.4, 0.36, 2.45), 0x3ef3ff, 2.9, { p: [5.2, 0.28, 0] })
+      // Center Reactor Car
+      .add(box(7.6, 1.72, 2.32), 0x22365e, 0, { p: [-3.1, 0, 0] })
+      .add(box(7.2, 0.34, 2.44), 0xffc531, 2.8, { p: [-3.1, 0.28, 0] })
+      // Tail Car + Twin Plasma Slipstream Thrusters
+      .add(box(6.8, 1.68, 2.28), 0xeaf6ff, 0, { p: [-10.9, 0, 0] })
+      .add(box(6.4, 0.34, 2.42), 0xff3b5c, 2.8, { p: [-10.9, 0.28, 0] })
+      .build();
+    const train = new THREE.Group();
+    train.add(new THREE.Mesh(trainGeo, this.propMat));
+    group.add(railWarn, train);
+    this.scene.add(group);
+    return { id: 0, group, railWarn, railMat, train, seen: true };
+  }
+
+  private updateDecalsAndWetLights(snap: SimSnapshot, dt: number, deltaScroll: number): void {
+    // 1. Update scrolling & fading GPU-instanced battlefield decals
+    const d = this.dummy;
+    const decalCap = this.qualityScale < 0.85 ? 384 : MAX_DECALS;
+    let count = 0;
+    for (let i = 0; i < MAX_DECALS; i++) {
+      if (count >= decalCap) break;
+      const dec = this.decalPool[i]!;
+      if (!dec.active) continue;
+      dec.age += dt;
+      dec.z += deltaScroll;
+      if (dec.age >= dec.maxAge || dec.z > PLAYER_Z + 8) {
+        dec.active = false;
+        continue;
+      }
+      const lifeRatio = dec.age / dec.maxAge;
+      const fade = lifeRatio > 0.65 ? (1 - lifeRatio) / 0.35 : 1.0;
+      d.position.set(dec.x, 0.032, dec.z);
+      d.rotation.set(0, dec.rot, 0);
+      d.scale.set(dec.radius * 2, 1, dec.radius * 2);
+      d.updateMatrix();
+      this.decals.setMatrixAt(count, d.matrix);
+      this.tmpColor.setRGB(dec.r, dec.g, dec.b);
+      this.decals.setColorAt(count, this.tmpColor);
+      const c4 = count * 4;
+      this.decalDataArr[c4] = dec.kind;
+      this.decalDataArr[c4 + 1] = fade;
+      this.decalDataArr[c4 + 2] = (i % 17) / 17;
+      this.decalDataArr[c4 + 3] = 0;
+      count++;
+    }
+    this.decals.count = count;
+    this.decals.visible = count > 0;
+    if (count > 0) {
+      this.decals.instanceMatrix.needsUpdate = true;
+      this.decalDataAttr.needsUpdate = true;
+      if (this.decals.instanceColor) this.decals.instanceColor.needsUpdate = true;
+    }
+
+    // 2. Populate 8 brightest real-time neon light sources for wet-bridge specular reflections!
+    let li = 0;
+    const pushLight = (x: number, z: number, radius: number, intensity: number, hex: number): void => {
+      if (li >= 12) return;
+      this.neonLightsUniform[li]!.set(x, z, radius, intensity);
+      this.tmpColor.setHex(hex);
+      this.neonColorsUniform[li]!.set(this.tmpColor.r, this.tmpColor.g, this.tmpColor.b);
+      li++;
+    };
+
+    // Slot 0: Player Squad / Muzzle / Overdrive core reflection
+    if (snap.squadCount > 0) {
+      const sqHex = snap.overdriveTimer > 0 ? 0xffdf58 : WEAPON_COLOR[snap.weapon];
+      pushLight(snap.squadX, PLAYER_Z - 0.8, 3.2, 0.42 + this.muzzleFlash * 0.36 + (snap.overdriveTimer > 0 ? 0.25 : 0), sqHex);
+    }
+    // Active Nuke Fireball reflection
+    if ((snap.nukeBlastTimer ?? 0) > 0) {
+      pushLight(snap.nukeTargetX ?? 0, snap.nukeTargetZ ?? -19.5, 14.0, 0.95, 0xffaa32);
+    }
+    // Active Maglev Crossing reflection
+    for (const tr of snap.maglevTrains ?? []) {
+      pushLight(tr.state === 'crossing' ? THREE.MathUtils.clamp(tr.trainX, -5, 5) : 0, tr.z, 5.5, tr.state === 'crossing' ? 0.72 : 0.42, tr.state === 'crossing' ? 0x3ef3ff : 0xff2a55);
+    }
+    // Active Sky-Cargo drop-zone reflection
+    for (const c of snap.skyCargos ?? []) {
+      if (c.z > -58 && c.z < PLAYER_Z + 2) pushLight(c.x, c.z, 4.2, 0.46, 0xffc531);
+    }
+    // Closest Gates (cast vivid emerald/crimson/gold neon reflections onto the wet deck!)
+    for (const g of snap.gates) {
+      if (li >= 12) break;
+      if (!g.triggered && !g.dimmed && g.z > -62 && g.z < PLAYER_Z + 1) {
+        const gHex = g.mutable ? 0xffc531 : g.polarity === 'positive' ? 0x19f5a8 : 0xff3b5c;
+        pushLight(g.x, g.z, 3.8, 0.48, gHex);
+      }
+    }
+    // Singularities or Vaults fill remaining slots
+    for (const s of snap.singularities ?? []) {
+      if (li >= 12) break;
+      pushLight(s.x, s.z, 4.4, 0.55, 0xb98cff);
+    }
+    for (const v of snap.vaults) {
+      if (li >= 12) break;
+      if (!v.broken && v.z > -56 && v.z < PLAYER_Z) {
+        pushLight(v.x, v.z, 3.0, 0.36, 0x62f4ff);
+      }
+    }
+    if (snap.wingmanState) {
+      const wmHex = snap.wingmanState.id === 'prism_mirror' ? 0x5ef6ff : snap.wingmanState.id === 'gravity_anchor' ? 0xc47dff : 0xffe26a;
+      pushLight(snap.wingmanState.leftX, snap.wingmanState.leftZ, 3.6, 0.54, wmHex);
+      pushLight(snap.wingmanState.rightX, snap.wingmanState.rightZ, 3.6, 0.54, wmHex);
+    }
+    for (const rf of snap.collapseRifts ?? []) {
+      if (li >= 12) break;
+      if (rf.z > -68 && rf.z < PLAYER_Z + 3) {
+        pushLight(rf.x, rf.z, 4.8, 0.56, rf.kind === 'bridge_gap' ? 0x4ef6ff : 0xff4b78);
+      }
+    }
+    for (const mr of snap.magRails ?? []) {
+      if (li >= 12) break;
+      if ((mr.z + mr.length * 0.5) > -68 && (mr.z - mr.length * 0.5) < PLAYER_Z + 3) {
+        pushLight(mr.x, mr.z, 4.4, Math.abs(snap.squadX - mr.x) <= mr.halfWidth && Math.abs(PLAYER_Z - mr.z) <= mr.length * 0.5 ? 0.72 : 0.48, 0x3ef3ff);
+      }
+    }
+    for (const ct of snap.capTowers ?? []) {
+      if (li >= 12) break;
+      if (ct.z > -68 && ct.z < PLAYER_Z + 3) {
+        pushLight(ct.x, ct.z, 4.6, 0.48 + ct.charge * 0.42, ct.charge > 0.5 ? 0xffe26a : 0x62f4ff);
+      }
+    }
+    this.activePointLightsCount = li;
+    while (li < 12) {
+      this.neonLightsUniform[li]!.set(0, -999, 1, 0);
+      li++;
     }
   }
 
@@ -2863,14 +4912,43 @@ export class Renderer {
     }
     for (const h of this.hazardViews) h.group.visible = false;
     if (!b) {
+      if (this.omegaBeamGroup) this.omegaBeamGroup.visible = false;
       if (this.bossShoulderPods) {
-        this.bossShoulderPods[0].visible = false;
-        this.bossShoulderPods[1].visible = false;
+        for (const pod of this.bossShoulderPods) pod.visible = false;
       }
-      this.bossBlend = Math.max(0, this.bossBlend - dt);
+      if (this.bossBlend > 0) {
+        this.bossBlend = Math.max(0, this.bossBlend - dt);
+        const pal = SECTOR_META[this.sector].palette;
+        (this.trackMat.uniforms.uEdge!.value as THREE.Color).set(pal.edge);
+        this.railMat.color.set(pal.edge);
+      }
       return;
     }
     this.bossBlend = Math.min(1, this.bossBlend + dt * 0.8);
+    // Boss Phase & Break Visual Highway Shift: Phase 2/3 intensifies crimson-gold edge rails, Break window flashes cyan-gold!
+    {
+      const pal = SECTOR_META[this.sector].palette;
+      const brk = (b.breakTimer ?? 0) > 0;
+      const targetHex = brk ? 0x62f4ff : b.omegaOverdrive ? 0xffe052 : b.phase >= 3 ? 0xffcf40 : b.phase >= 2 ? 0xff4b78 : pal.edge;
+      (this.trackMat.uniforms.uEdge!.value as THREE.Color).lerp(this.tmpColor.setHex(targetHex), Math.min(1, dt * 6));
+      this.railMat.color.copy(this.trackMat.uniforms.uEdge!.value as THREE.Color);
+    }
+    if (this.omegaBeamGroup) {
+      const bState = b.omegaBeamState ?? 'idle';
+      if (b.active && (bState === 'charging' || bState === 'firing')) {
+        this.omegaBeamGroup.visible = true;
+        this.omegaBeamGroup.position.set(b.omegaBeamX ?? b.x, 0, b.z);
+        this.omegaBeamWarn.visible = true;
+        this.omegaBeamWarnMat.opacity = bState === 'charging' ? 0.35 + 0.35 * Math.sin(t * 28) : 0.72;
+        if (this.omegaBeamWarnMat.map) this.omegaBeamWarnMat.map.offset.y = -t * 5.2;
+        this.omegaBeamCore.visible = bState === 'firing' || (bState === 'charging' && (b.omegaBeamProgress ?? 0) > 0.78);
+        const pulseW = bState === 'firing' ? 1.05 + 0.22 * Math.sin(t * 48) : 0.28;
+        this.omegaBeamCore.scale.set(pulseW, 1, pulseW);
+        this.omegaBeamCoreMat.color.setHex(bState === 'firing' ? 0xfff08a : 0xff4b78);
+      } else {
+        this.omegaBeamGroup.visible = false;
+      }
+    }
 
     const view = this.bossViews.get(b.id);
     if (view) {
@@ -2883,7 +4961,9 @@ export class Renderer {
       const intro = b.introProgress;
       const rise = -(1 - intro) * 4.5;
       const deathK = dying ? Math.max(0.25, 1 - this.bossDeathT * 0.25) : 1;
-      const scale = (0.78 + 0.22 * intro) * deathK;
+      const baseScale = (0.78 + 0.22 * intro) * deathK;
+      const titanScale = b.titanScale ?? 1;
+      const scale = baseScale * titanScale;
 
       view.root.position.set(b.x + jitter, rise, b.z + jitter);
       const squash = 1 + b.hitPulse * 0.07;
@@ -2937,18 +5017,33 @@ export class Renderer {
       const flashVal = bossHitFlash + breakFlicker + (dying ? Math.random() * 0.35 : 0);
       view.primary.setVisuals(flashVal, heatTintR, breakActive ? 1.18 : 1, breakActive ? 1.32 : 1);
 
-      // Render Destructible Shoulder Weapon Pods (Left Cannon & Right Hive)
+      // Render Destructible Tactical Subsystems (Left Cannon, Right Hive & Phase-2 Shield/Overload Reactor!)
       if (this.bossShoulderPods) {
         const parts = b.parts ?? [];
-        for (let pi = 0; pi < 2; pi++) {
+        for (let pi = 0; pi < this.bossShoulderPods.length; pi++) {
           const pod = this.bossShoulderPods[pi]!;
           const pt = parts[pi];
           if (pt && !pt.destroyed && show && !dying) {
             pod.visible = true;
-            pod.position.set(pt.x, rise + 2.15 * scale + Math.sin(t * 3.5 + pi * 2) * 0.12, pt.z);
-            pod.rotation.set(0, Math.sin(t * 2 + pi) * 0.15, (pi === 0 ? -0.12 : 0.12));
-            const pScale = scale * (1 + pt.hitPulse * 0.18);
+            const podScaleK = baseScale * (1 + (titanScale - 1) * 0.52);
+            const yOff = pt.slot === 'reactor' ? 3.15 : 2.15;
+            pod.position.set(pt.x, rise + yOff * podScaleK + Math.sin(t * 3.8 + pi * 2) * 0.14, pt.z);
+            pod.rotation.set(pt.slot === 'reactor' ? t * 1.8 : 0, pt.slot === 'reactor' ? t * 2.6 : Math.sin(t * 2 + pi) * 0.15, (pi === 0 ? -0.12 : pi === 1 ? 0.12 : 0));
+            const tele = pt.telegraph ?? 0;
+            const pScale = podScaleK * (1 + pt.hitPulse * 0.18 + tele * 0.12);
             pod.scale.setScalar(pScale);
+            const ret = this.bossPodReticles?.[pi];
+            if (ret) {
+              ret.visible = tele > 0.06;
+              if (ret.visible) {
+                ret.rotation.z = t * (pi === 0 ? 5.5 : -5.5);
+                const rPulse = 0.92 + tele * 0.36 + Math.sin(t * 20) * 0.08;
+                ret.scale.setScalar(rPulse);
+                const rMat = ret.material as THREE.MeshBasicMaterial;
+                rMat.opacity = Math.min(0.95, 0.35 + tele * 0.6);
+                rMat.color.setHex(tele > 0.65 ? 0xffd84a : pi === 0 ? 0xff3b5c : 0x3ef3ff);
+              }
+            }
           } else {
             pod.visible = false;
           }
@@ -3025,15 +5120,15 @@ export class Renderer {
       const w = hz.halfWidth * 2;
       hv.group.position.set(hz.x, 0, hz.z);
       hv.fill.scale.set(w, 1, hz.depth);
-      hv.fillMat.opacity = hz.firing ? 0.24 : 0.1 + hz.warningProgress * 0.14;
+      hv.fillMat.opacity = hz.firing ? 0.36 : 0.16 + hz.warningProgress * 0.22;
       const pz = Math.max(0.001, hz.warningProgress);
       hv.progress.scale.set(w, 1, hz.depth * pz);
       hv.progress.position.z = -hz.depth / 2 + (hz.depth * pz) / 2;
-      hv.progressMat.opacity = hz.firing ? 0.48 : 0.3 + hz.warningProgress * 0.25;
+      hv.progressMat.opacity = hz.firing ? 0.68 : 0.4 + hz.warningProgress * 0.34;
       const map = hv.progressMat.map;
-      if (map) map.offset.y = -t * 2;
-      hv.edgeL.scale.set(0.1, 1, hz.depth);
-      hv.edgeR.scale.set(0.1, 1, hz.depth);
+      if (map) map.offset.y = -t * 2.4;
+      hv.edgeL.scale.set(0.16, 1, hz.depth);
+      hv.edgeR.scale.set(0.16, 1, hz.depth);
       hv.edgeL.position.x = -hz.halfWidth;
       hv.edgeR.position.x = hz.halfWidth;
       hv.column.visible = hz.firing;
@@ -3045,17 +5140,1229 @@ export class Renderer {
     }
   }
 
-  // ---------------------------------------------------------------- camera
+  // ---------------------------------------------------------------- 3D Volumetric GLSL Tactical Nuke & Mushroom Cloud
+  private createNukeCloudShader(scrollSpeedY: number, heatBias: number): THREE.ShaderMaterial {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uProgress: { value: 0 },
+        uOpacity: { value: 1 },
+        uScrollY: { value: scrollSpeedY },
+        uHeatBias: { value: heatBias },
+      },
+      vertexShader: /* glsl */ `
+        uniform float uTime;
+        uniform float uProgress;
+        uniform float uScrollY;
+        varying vec3 vLocalPos;
+        varying vec3 vViewN;
+        varying vec3 vViewDir;
+        varying float vDisplace;
+
+        float gyroid(vec3 p) {
+          return dot(sin(p), cos(p.yzx));
+        }
+
+        void main() {
+          vLocalPos = position;
+          vec3 np = position * 1.65 + vec3(0.0, -uTime * uScrollY, uTime * 0.85);
+          float n1 = gyroid(np);
+          float n2 = gyroid(np * 2.35 + vec3(1.7, -uTime * uScrollY * 1.4, -1.2));
+          float billow = (n1 * 0.58 + n2 * 0.32) * 0.5 + 0.5;
+          vDisplace = clamp(billow, 0.0, 1.0);
+          vec3 displaced = position + normal * ((billow - 0.35) * (0.24 + uProgress * 0.16));
+          vec4 mv = modelViewMatrix * vec4(displaced, 1.0);
+          vViewN = normalize(normalMatrix * normal);
+          vViewDir = normalize(-mv.xyz);
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform float uTime;
+        uniform float uProgress;
+        uniform float uOpacity;
+        uniform float uScrollY;
+        uniform float uHeatBias;
+        varying vec3 vLocalPos;
+        varying vec3 vViewN;
+        varying vec3 vViewDir;
+        varying float vDisplace;
+
+        float gyroid(vec3 p) {
+          return dot(sin(p), cos(p.yzx));
+        }
+
+        void main() {
+          vec3 p = vLocalPos * 2.4 + vec3(0.0, -uTime * uScrollY * 1.35, uTime * 1.1);
+          float f1 = gyroid(p) * 0.5 + 0.5;
+          float f2 = gyroid(p * 2.6 - vec3(uTime * 0.9, uTime * uScrollY * 1.8, 0.0)) * 0.5 + 0.5;
+          float f3 = gyroid(p * 5.2 + vec3(2.1, -uTime * 2.2, 1.4)) * 0.5 + 0.5;
+          float turb = clamp(f1 * 0.50 + f2 * 0.32 + f3 * 0.18, 0.0, 1.0);
+
+          float fresnel = 1.0 - clamp(dot(normalize(vViewN), normalize(vViewDir)), 0.0, 1.0);
+          float coolFactor = clamp(uProgress * 0.58 + fresnel * 0.42 - uHeatBias, 0.0, 0.95);
+          float heat = clamp(turb * 0.72 + (1.0 - vDisplace) * 0.42 - coolFactor * 0.52 + 0.22, 0.0, 1.0);
+
+          vec3 darkAsh = vec3(0.14, 0.05, 0.11);
+          vec3 crimsonMagma = vec3(0.92, 0.16, 0.08);
+          vec3 solarOrange = vec3(1.15, 0.52, 0.09);
+          vec3 whitePlasma = vec3(1.45, 1.32, 0.86);
+
+          vec3 col = mix(darkAsh, crimsonMagma, smoothstep(0.10, 0.42, heat));
+          col = mix(col, solarOrange, smoothstep(0.38, 0.70, heat));
+          col = mix(col, whitePlasma, smoothstep(0.68, 0.95, heat));
+          col += vec3(1.0, 0.42, 0.12) * pow(fresnel, 2.2) * (0.55 - uProgress * 0.25);
+
+          gl_FragColor = vec4(col, uOpacity);
+        }
+      `,
+      transparent: true,
+      depthWrite: true,
+      toneMapped: false,
+    });
+  }
+
+  private buildNukeVisuals(): void {
+    this.nukeDropGroup = new THREE.Group();
+    this.nukeDropGroup.visible = false;
+
+    this.nukeReticleOuter = new THREE.Mesh(
+      new THREE.RingGeometry(8.2, 9.1, 56).rotateX(-Math.PI / 2),
+      additive(0xff2a55, 0.82),
+    );
+    this.nukeReticleOuter.position.y = 0.06;
+
+    this.nukeReticleInner = new THREE.Mesh(
+      new THREE.RingGeometry(3.1, 3.85, 6).rotateX(-Math.PI / 2),
+      additive(0xffd84a, 0.9),
+    );
+    this.nukeReticleInner.position.y = 0.08;
+
+    const crossGeo = new GeoBuilder()
+      .add(box(17.5, 0.04, 0.22), 0xff4b3a, 1.8)
+      .add(box(0.22, 0.04, 17.5), 0xffd84a, 1.8)
+      .build();
+    this.nukeCrosshair = new THREE.Mesh(crossGeo, additive(0xffaa38, 0.65));
+    this.nukeCrosshair.position.y = 0.07;
+
+    const fillDisc = new THREE.Mesh(
+      new THREE.CircleGeometry(8.2, 40).rotateX(-Math.PI / 2),
+      additive(0xff3020, 0.18),
+    );
+    fillDisc.position.y = 0.04;
+
+    this.nukeLockBeam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.24, 1.45, 32, 18, 1, true),
+      additive(0xff7828, 0.34),
+    );
+    this.nukeLockBeam.position.y = 16;
+
+    const pillarGeo = new THREE.CylinderGeometry(0.11, 0.22, 28, 8, 1, true);
+    this.nukeSweepPillars = [];
+    for (let i = 0; i < 4; i++) {
+      const pil = new THREE.Mesh(pillarGeo, additive(i % 2 === 0 ? 0xff2a55 : 0xffd84a, 0.52));
+      pil.position.y = 14;
+      this.nukeSweepPillars.push(pil);
+      this.nukeDropGroup.add(pil);
+    }
+
+    const warheadGeo = new GeoBuilder()
+      .add(cyl(0.92, 1.02, 3.6, 16), 0x222938, 0.22, { p: [0, 0.45, 0] })
+      .add(cone(1.02, 1.9, 16), 0xe02438, 0.65, { p: [0, -2.28, 0], r: [Math.PI, 0, 0] })
+      .add(sph(0.36, 12, 10), 0xfff6b8, 2.8, { p: [0, -3.12, 0] })
+      .add(cyl(1.06, 1.06, 0.44, 16), 0xffcf38, 1.95, { p: [0, -0.58, 0] })
+      .add(cyl(1.01, 1.01, 0.38, 16), 0xff5522, 2.05, { p: [0, 1.02, 0] })
+      .add(tor(1.08, 0.09, 6, 18), 0x62f4ff, 2.1, { r: [Math.PI / 2, 0, 0], p: [0, 0.22, 0] })
+      .add(cyl(0.72, 0.92, 0.92, 14), 0x181d2c, 0.15, { p: [0, 2.62, 0] })
+      .add(box(3.55, 1.58, 0.18), 0xe02438, 0.55, { p: [0, 2.52, 0] })
+      .add(box(0.18, 1.58, 3.55), 0xffb830, 0.55, { p: [0, 2.52, 0] })
+      .build();
+
+    const warheadMesh = new THREE.Mesh(warheadGeo, this.propMat);
+    const warheadOutline = new THREE.Mesh(warheadGeo, getOutlineMaterial(0.045));
+    this.nukePlume = new THREE.Mesh(
+      new THREE.ConeGeometry(1.08, 5.4, 16),
+      additive(0xffa828, 0.88),
+    );
+    this.nukePlume.position.y = 5.4;
+
+    const plumeCore = new THREE.Mesh(
+      new THREE.ConeGeometry(0.58, 3.5, 14),
+      additive(0xffffff, 0.95),
+    );
+    plumeCore.position.y = 4.4;
+
+    const machCone = new THREE.Mesh(
+      new THREE.ConeGeometry(2.15, 2.8, 20, 1, true),
+      additive(0xfff0b8, 0.28),
+    );
+    machCone.position.y = -0.9;
+
+    this.nukeWarhead = new THREE.Group();
+    this.nukeWarhead.add(warheadMesh, warheadOutline, this.nukePlume, plumeCore, machCone);
+    this.nukeDropGroup.add(
+      fillDisc,
+      this.nukeReticleOuter,
+      this.nukeReticleInner,
+      this.nukeCrosshair,
+      this.nukeLockBeam,
+      this.nukeWarhead,
+    );
+    this.scene.add(this.nukeDropGroup);
+
+    this.nukeBlastGroup = new THREE.Group();
+    this.nukeBlastGroup.visible = false;
+
+    this.nukeGroundScorchMat = additive(0xff7a1a, 0.85, this.glowTex);
+    this.nukeGroundScorch = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      this.nukeGroundScorchMat,
+    );
+    this.nukeGroundScorch.position.y = 0.065;
+
+    this.nukeCraterRingMat = additive(0xffd84a, 0.78);
+    this.nukeCraterRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.72, 1.0, 48).rotateX(-Math.PI / 2),
+      this.nukeCraterRingMat,
+    );
+    this.nukeCraterRing.position.y = 0.08;
+
+    this.nukeShockWallMat = additive(0xffcf58, 0.85);
+    this.nukeShockWall = new THREE.Mesh(
+      new THREE.CylinderGeometry(1, 1, 2.6, 48, 1, true),
+      this.nukeShockWallMat,
+    );
+    this.nukeShockWall.position.y = 1.3;
+
+    this.nukeFireballMat = additive(0xffb838, 0.85);
+    this.nukeFireball = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 28, 20, 0, Math.PI * 2, 0, Math.PI * 0.72),
+      this.nukeFireballMat,
+    );
+
+    this.nukeCoreDomeMat = additive(0xffffff, 0.95);
+    this.nukeCoreDome = new THREE.Mesh(
+      new THREE.SphereGeometry(0.72, 20, 14),
+      this.nukeCoreDomeMat,
+    );
+
+    this.nukeStemMat = this.createNukeCloudShader(3.2, 0.18);
+    this.nukeStem = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.18, 2.65, 1, 26, 14, false),
+      this.nukeStemMat,
+    );
+
+    this.nukeCapMat = this.createNukeCloudShader(1.85, 0.22);
+    this.nukeCap = new THREE.Mesh(
+      new THREE.TorusGeometry(2.75, 1.42, 22, 36).rotateX(Math.PI / 2),
+      this.nukeCapMat,
+    );
+
+    this.nukeCrownMat = this.createNukeCloudShader(1.45, 0.30);
+    this.nukeCrown = new THREE.Mesh(
+      new THREE.SphereGeometry(2.35, 28, 20),
+      this.nukeCrownMat,
+    );
+
+    this.nukeVortexLowerMat = additive(0xff8c24, 0.78);
+    this.nukeVortexLower = new THREE.Mesh(
+      new THREE.TorusGeometry(1.65, 0.24, 10, 32).rotateX(Math.PI / 2),
+      this.nukeVortexLowerMat,
+    );
+
+    this.nukeVortexUpperMat = additive(0xffe066, 0.82);
+    this.nukeVortexUpper = new THREE.Mesh(
+      new THREE.TorusGeometry(3.55, 0.28, 12, 40).rotateX(Math.PI / 2),
+      this.nukeVortexUpperMat,
+    );
+
+    this.nukeMachRingMat = additive(0xffffff, 0.82);
+    this.nukeMachRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.86, 1.0, 56).rotateX(-Math.PI / 2),
+      this.nukeMachRingMat,
+    );
+
+    this.nukeWilsonDomeMat = additive(0xd8f4ff, 0.36);
+    this.nukeWilsonDome = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.52),
+      this.nukeWilsonDomeMat,
+    );
+
+    this.nukeBlastGroup.add(
+      this.nukeGroundScorch,
+      this.nukeCraterRing,
+      this.nukeShockWall,
+      this.nukeFireball,
+      this.nukeCoreDome,
+      this.nukeStem,
+      this.nukeCap,
+      this.nukeCrown,
+      this.nukeVortexLower,
+      this.nukeVortexUpper,
+      this.nukeMachRing,
+      this.nukeWilsonDome,
+    );
+    this.scene.add(this.nukeBlastGroup);
+  }
+
+  triggerNukeDetonationVfx(x: number, z: number): void {
+    this.nukeJustDetonated = true;
+    this.shake(1.65);
+    const fx = this.effects;
+    fx.ring(x, z, 0xffffff, 34, 0.72);
+    fx.ring(x, z, 0xffd84a, 24, 1.02);
+    fx.ring(x, z, 0xff4820, 17, 1.38);
+    fx.after(0.12, () => fx.ring(x, z - 28, 0xffe07d, 26, 0.68));
+    fx.after(0.24, () => fx.ring(x, z - 58, 0xff8c24, 28, 0.72));
+    fx.burst(x, 1.4, z, 0xfff8d6, 130, { speed: 26, size: 1.05, life: 1.25, up: 1.4, gravity: 3.5 });
+    fx.burst(x, 2.8, z, 0xff7a1a, 130, { speed: 20, size: 0.92, life: 1.65, up: 1.75, gravity: 2.2 });
+    fx.burst(x, 4.4, z, 0xff2a55, 85, { speed: 15, size: 0.84, life: 1.95, up: 2.0, gravity: 1.2 });
+  }
+
+  private updateNukeVisuals(snap: SimSnapshot, dt: number, t: number): void {
+    const dropRem = snap.nukeDropTimer ?? 0;
+    const dropDur = Math.max(0.1, snap.nukeDropDuration ?? 1.80);
+    const tx = snap.nukeTargetX ?? 0;
+    const tz = snap.nukeTargetZ ?? -19.5;
+
+    if (dropRem > 0) {
+      const p = THREE.MathUtils.clamp(1 - dropRem / dropDur, 0, 1);
+      const eased = 0.52 * p + 0.48 * p * p * p;
+      const warheadY = 15.2 * (1 - eased) + 1.75;
+
+      this.nukeDropGroup.visible = true;
+      this.nukeDropGroup.position.set(tx, 0, tz);
+      this.nukeReticleOuter.rotation.z = t * 2.8;
+      const pulse = 1 + Math.sin(t * 24) * 0.07;
+      this.nukeReticleOuter.scale.setScalar(pulse * (1.12 - p * 0.18));
+      this.nukeReticleInner.rotation.z = -t * 4.8;
+      this.nukeReticleInner.scale.setScalar(1.45 - p * 0.55);
+      this.nukeCrosshair.rotation.y = t * 1.6;
+      this.nukeCrosshair.scale.setScalar(1.15 - p * 0.28);
+      (this.nukeLockBeam.material as THREE.MeshBasicMaterial).opacity = 0.25 + p * 0.42 + Math.sin(t * 36) * 0.09;
+
+      const lockRadius = Math.max(0.35, (1 - p) * 7.6);
+      for (let i = 0; i < this.nukeSweepPillars.length; i++) {
+        const pil = this.nukeSweepPillars[i]!;
+        const ang = t * 3.4 + (i * Math.PI) / 2;
+        pil.position.set(Math.cos(ang) * lockRadius, 14, Math.sin(ang) * lockRadius);
+        (pil.material as THREE.MeshBasicMaterial).opacity = 0.22 + p * 0.52;
+      }
+
+      this.nukeWarhead.position.set(0, warheadY, 0);
+      this.nukeWarhead.rotation.set(0.05 * Math.sin(t * 10), t * 4.4, 0.05 * Math.cos(t * 10));
+      this.nukeWarhead.scale.setScalar(1.68);
+      this.nukePlume.scale.set(1 + Math.sin(t * 48) * 0.18, 0.95 + Math.sin(t * 58) * 0.28, 1 + Math.cos(t * 48) * 0.18);
+
+      if (Math.random() < dt * 42) {
+        this.effects.burst(tx + (Math.random() - 0.5) * 0.45, warheadY + 4.0, tz + (Math.random() - 0.5) * 0.45, 0xffb833, 2, {
+          speed: 3.8,
+          size: 0.55,
+          life: 0.42,
+          up: 1.5,
+          gravity: -2.2,
+        });
+      }
+    } else {
+      this.nukeDropGroup.visible = false;
+    }
+
+    const blastRem = snap.nukeBlastTimer ?? 0;
+    const blastDur = 3.25;
+    if (blastRem > 0) {
+      const p = THREE.MathUtils.clamp(1 - blastRem / blastDur, 0, 1);
+      const fade = p < 0.62 ? 1 : Math.max(0, 1 - (p - 0.62) / 0.38);
+      this.nukeBlastGroup.visible = true;
+      this.nukeBlastGroup.position.set(tx, 0, tz);
+
+      this.hemi.intensity = 0.9 + Math.max(0, 1 - p * 2.6) * 1.45;
+
+      const scorchScale = 11 + p * 18;
+      this.nukeGroundScorch.scale.set(scorchScale, scorchScale, 1);
+      this.nukeGroundScorchMat.opacity = 0.78 * fade;
+
+      const craterR = 4.2 + Math.pow(p, 0.4) * 9.5;
+      this.nukeCraterRing.scale.set(craterR, craterR, 1);
+      this.nukeCraterRingMat.opacity = Math.max(0, (1 - p * 1.25) * 0.72);
+
+      const shockP = Math.min(1, p / 0.42);
+      const shockR = 1.2 + Math.pow(shockP, 0.68) * 112.0;
+      this.nukeShockWall.scale.set(shockR, Math.max(0.25, 1.45 - shockP * 1.1), shockR);
+      this.nukeShockWallMat.opacity = p < 0.42 ? (1 - shockP) * 0.85 : 0;
+      this.nukeShockWallMat.color.setHex(p < 0.09 ? 0xffffff : 0xffbe42);
+
+      const fbRadius = p < 0.16 ? 1.8 + (p / 0.16) * 8.2 : 10.0 + (p - 0.16) * 3.8;
+      const fbFade = Math.max(0, 1 - p * 2.05);
+      this.nukeFireball.scale.set(fbRadius, fbRadius * 0.72, fbRadius);
+      this.nukeFireballMat.opacity = 0.74 * fbFade;
+      this.nukeFireballMat.color.setHex(p < 0.08 ? 0xfff6cc : 0xff6820);
+
+      const capY = 2.6 + Math.pow(p, 0.50) * 8.2;
+      const stemH = Math.max(1.2, capY - 0.35);
+      this.nukeStem.scale.set(0.92 + p * 0.45, stemH, 0.92 + p * 0.45);
+      this.nukeStem.position.y = stemH * 0.48;
+      this.nukeStem.rotation.set(0, t * 1.8, 0);
+      this.nukeStemMat.uniforms.uTime!.value = t;
+      this.nukeStemMat.uniforms.uProgress!.value = p;
+      this.nukeStemMat.uniforms.uOpacity!.value = 0.96 * fade;
+
+      const capScale = 0.76 + Math.pow(p, 0.44) * 1.88;
+      this.nukeCap.position.y = capY;
+      this.nukeCap.scale.set(capScale * 1.24, capScale * 0.88, capScale * 1.24);
+      this.nukeCap.rotation.set(0, -t * 1.15, 0);
+      this.nukeCapMat.uniforms.uTime!.value = t;
+      this.nukeCapMat.uniforms.uProgress!.value = p;
+      this.nukeCapMat.uniforms.uOpacity!.value = 0.98 * fade;
+
+      this.nukeCrown.position.y = capY + 0.55 * capScale;
+      this.nukeCrown.scale.set(capScale * 1.36, capScale * 0.74, capScale * 1.36);
+      this.nukeCrown.rotation.set(0, t * 0.9, 0);
+      this.nukeCrownMat.uniforms.uTime!.value = t;
+      this.nukeCrownMat.uniforms.uProgress!.value = p * 0.82;
+      this.nukeCrownMat.uniforms.uOpacity!.value = 0.97 * fade;
+
+      this.nukeCoreDome.position.y = capY * 0.92;
+      this.nukeCoreDome.scale.setScalar(capScale * 1.75);
+      this.nukeCoreDomeMat.opacity = Math.max(0, (1 - p * 1.45) * 0.68) * fade;
+      this.nukeCoreDomeMat.color.setHex(p < 0.2 ? 0xffffff : 0xffaa28);
+
+      // Horizontal spin around Y axis so plasma vortex rings hug the vertical stem & mushroom skirt cleanly!
+      const lowCycle = (p * 2.2) % 1.0;
+      this.nukeVortexLower.position.y = stemH * (0.20 + lowCycle * 0.65);
+      this.nukeVortexLower.scale.setScalar(0.92 + lowCycle * 0.88 + p * 0.32);
+      this.nukeVortexLower.rotation.set(0, t * 3.5, 0);
+      this.nukeVortexLowerMat.opacity = Math.sin(lowCycle * Math.PI) * 0.76 * fade;
+
+      this.nukeVortexUpper.position.y = capY - 0.36 * capScale;
+      this.nukeVortexUpper.scale.setScalar(capScale * 1.16);
+      this.nukeVortexUpper.rotation.set(0, -t * 2.6, 0);
+      this.nukeVortexUpperMat.opacity = 0.72 * fade;
+
+      const wilsonP = Math.min(1, p / 0.36);
+      const wilsonR = 3.2 + wilsonP * 18.5;
+      this.nukeWilsonDome.position.y = 0.2;
+      this.nukeWilsonDome.scale.set(wilsonR, wilsonR * 0.72, wilsonR);
+      this.nukeWilsonDomeMat.opacity = p < 0.36 ? Math.sin(wilsonP * Math.PI) * 0.42 : 0;
+
+      const machR = 2.8 + p * 28.0;
+      this.nukeMachRing.position.y = capY * 0.82;
+      this.nukeMachRing.scale.set(machR, machR, 1);
+      this.nukeMachRingMat.opacity = Math.max(0, (1 - p * 1.25) * 0.78);
+
+      if (p < 0.78 && Math.random() < dt * 28) {
+        const ang = Math.random() * Math.PI * 2;
+        const rad = capScale * 2.6;
+        this.effects.burst(tx + Math.cos(ang) * rad, capY, tz + Math.sin(ang) * rad, 0xffb838, 2, {
+          speed: 4.8,
+          size: 0.72,
+          life: 0.62,
+          up: 1.35,
+          gravity: -1.6,
+        });
+      }
+    } else {
+      if (this.nukeBlastGroup.visible) {
+        this.hemi.intensity = 1.02;
+      }
+      this.nukeBlastGroup.visible = false;
+    }
+  }
+
+  // ---------------------------------------------------------------- V21 Verticality, Volumetric Ribbons, Reactor, Drops & Co-Boss
+  private updateV21World(snap: SimSnapshot, dt: number, t: number): void {
+    const d = this.dummy;
+
+    // 1. Volumetric Refraction Ribbons (45° Reflectors, Golden Lenses, Phase Gates & Reactor Spokes)
+    let ribIdx = 0;
+    const pushRibbon = (x: number, y: number, z: number, yaw: number, width: number, length: number, hex: number): void => {
+      if (ribIdx >= 56 || z < -92 || z > PLAYER_Z + 4) return;
+      d.position.set(x + Math.sin(yaw) * (length * 0.5), y, z - Math.cos(yaw) * (length * 0.5));
+      d.rotation.set(0, -yaw, 0);
+      d.scale.set(width, 1, length);
+      d.updateMatrix();
+      this.refractRibbonMesh.setMatrixAt(ribIdx, d.matrix);
+      this.tmpColor.setHex(hex).multiplyScalar(1.25 + 0.18 * Math.sin(t * 14 + ribIdx));
+      this.refractRibbonMesh.setColorAt(ribIdx, this.tmpColor);
+      ribIdx++;
+    };
+
+    for (const rf of snap.reflectors ?? []) {
+      if (rf.z < -85 || rf.z > PLAYER_Z + 1) continue;
+      const inLen = Math.min(14, Math.max(3.5, PLAYER_Z - rf.z));
+      pushRibbon(rf.x, 0.72, rf.z + inLen, 0, 0.55, inLen, 0x62f4ff);
+      const rad = ((rf.angleDeg || 36) * Math.PI) / 180;
+      const bounceYaw = rad * 1.35;
+      pushRibbon(rf.x, 0.76, rf.z, bounceYaw, 0.75 + rf.pulse * 0.45, 16.5, rf.pulse > 0.08 ? 0xffe46b : 0x7dff9b);
+    }
+    for (const ln of snap.lenses ?? []) {
+      if (ln.z < -82 || ln.z > PLAYER_Z + 1) continue;
+      pushRibbon(ln.x - 0.35, 0.68, ln.z, -0.24, 0.48, 11.5, 0xffdf6e);
+      pushRibbon(ln.x + 0.35, 0.68, ln.z, 0.24, 0.48, 11.5, 0xffdf6e);
+    }
+    for (const pg of snap.phaseGates ?? []) {
+      if (pg.z < -82 || pg.z > PLAYER_Z + 1) continue;
+      const pHex = pg.attune === 'kinetic' ? 0xc59bff : 0x4ef6ff;
+      pushRibbon(pg.x, 0.42, pg.z + 2.8, 0, 1.35, 5.6, pHex);
+    }
+    if ((snap.reactorPrismRingTimer ?? 0) > 0 && snap.squadCount > 0) {
+      for (let s = 0; s < 4; s++) {
+        const ang = t * 2.4 + (s * Math.PI) / 2;
+        pushRibbon(snap.squadX + Math.cos(ang) * 1.4, 0.65 + (snap.squadAirY ?? 0), PLAYER_Z + Math.sin(ang) * 0.9, (s - 1.5) * 0.18, 0.38, 9.5, 0x72f8ff);
+      }
+    }
+    const wmRef = snap.wingmanState;
+    if (wmRef && wmRef.formation === 'forward_mirror' && snap.squadCount > 0) {
+      pushRibbon(wmRef.leftX, 0.88 + (snap.squadAirY ?? 0), wmRef.leftZ, 0.34, 0.62, 13.5, 0x62f4ff);
+      pushRibbon(wmRef.rightX, 0.88 + (snap.squadAirY ?? 0), wmRef.rightZ, -0.34, 0.62, 13.5, 0xffdf6e);
+    }
+    this.refractRibbonMesh.count = ribIdx;
+    this.refractRibbonMesh.visible = ribIdx > 0;
+    if (ribIdx > 0) {
+      this.refractRibbonMesh.instanceMatrix.needsUpdate = true;
+      if (this.refractRibbonMesh.instanceColor) this.refractRibbonMesh.instanceColor.needsUpdate = true;
+    }
+
+    // V23 Screen-Space Anamorphic Lens Flares at active Prisms, Lenses & Wingman Mirrors
+    let flIdx = 0;
+    const camQ = this.camera.quaternion;
+    const pushFlare = (fx: number, fy: number, fz: number, wScale: number, hex: number): void => {
+      if (flIdx >= 32 || fz < -78 || fz > PLAYER_Z + 3) return;
+      d.position.set(fx, fy, fz);
+      d.quaternion.copy(camQ);
+      d.scale.set(wScale, wScale * 0.24, 1);
+      d.updateMatrix();
+      this.anamorphicFlareMesh.setMatrixAt(flIdx, d.matrix);
+      this.tmpColor.setHex(hex);
+      this.anamorphicFlareMesh.setColorAt(flIdx, this.tmpColor);
+      flIdx++;
+    };
+    for (const rf of snap.reflectors ?? []) {
+      pushFlare(rf.x, 1.05, rf.z, 2.8 + rf.pulse * 2.2, rf.pulse > 0.06 ? 0xffe678 : 0x62f4ff);
+    }
+    for (const ln of snap.lenses ?? []) {
+      pushFlare(ln.x, 1.02, ln.z, 2.6 + (ln.pulse ?? 0) * 1.5, 0xffdf6e);
+    }
+    if (wmRef && wmRef.formation === 'forward_mirror' && snap.squadCount > 0) {
+      pushFlare(wmRef.leftX, 1.02 + (snap.squadAirY ?? 0), wmRef.leftZ - 0.35, 2.4, 0x62f4ff);
+      pushFlare(wmRef.rightX, 1.02 + (snap.squadAirY ?? 0), wmRef.rightZ - 0.35, 2.4, 0xffdf6e);
+    }
+    this.anamorphicFlareMesh.count = flIdx;
+    this.anamorphicFlareMesh.visible = flIdx > 0;
+    if (flIdx > 0) {
+      this.anamorphicFlareMesh.instanceMatrix.needsUpdate = true;
+      if (this.anamorphicFlareMesh.instanceColor) this.anamorphicFlareMesh.instanceColor.needsUpdate = true;
+    }
+
+    // 2. Collapse Rifts (磁悬浮断桥跃迁 & 侧翼坍缩裂谷)
+    for (const v of this.collapseRiftViews.values()) v.seen = false;
+    for (const rf of (snap.collapseRifts ?? []) as readonly CollapseRiftSnapshot[]) {
+      let v = this.collapseRiftViews.get(rf.id);
+      if (!v) {
+        const pooled = this.collapseRiftPool.pop();
+        if (pooled) {
+          pooled.group.visible = true;
+          v = pooled;
+        } else {
+          const group = new THREE.Group();
+          const pit = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+            new THREE.MeshBasicMaterial({ color: 0x05030d, transparent: true, opacity: 0.92 }),
+          );
+          pit.position.y = 0.032;
+          const rimMat = additive(0xff3868, 0.86, this.stripeTex);
+          const rim = new THREE.Mesh(new THREE.RingGeometry(0.44, 0.54, 4).rotateX(-Math.PI / 2).rotateY(Math.PI / 4), rimMat);
+          rim.position.y = 0.055;
+          const leapArc = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.05, 6, 24, Math.PI), additive(0x62f4ff, 0.82));
+          leapArc.rotation.y = Math.PI / 2;
+          leapArc.position.y = 0.2;
+          group.add(pit, rim, leapArc);
+          this.scene.add(group);
+          v = { id: rf.id, group, rimMat, leapArc, seen: true };
+        }
+        v.id = rf.id;
+        this.collapseRiftViews.set(rf.id, v);
+      }
+      v.seen = true;
+      v.group.position.set(rf.x, 0, rf.z);
+      const w = rf.halfWidth * 2;
+      const len = Math.max(1.8, rf.length);
+      v.group.children[0]!.scale.set(w, len, 1);
+      v.group.children[1]!.scale.set(w * 1.35, len * 1.35, 1);
+      v.rimMat.color.setHex(rf.kind === 'bridge_gap' ? 0xff4b78 : 0xff9a28);
+      v.rimMat.opacity = 0.62 + 0.24 * Math.sin(t * 12 + rf.id);
+      v.leapArc.visible = rf.kind === 'bridge_gap';
+      v.leapArc.scale.set(len * 0.48, 1.55 + 0.15 * Math.sin(t * 8), 1);
+    }
+    for (const [id, v] of this.collapseRiftViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.collapseRiftPool.push(v);
+        this.collapseRiftViews.delete(id);
+      }
+    }
+
+    // 3. Elevated High-Ground Sniper Prism Spires (高台狙击棱塔, elevationY = 2.85m)
+    for (const v of this.highSpireViews.values()) v.seen = false;
+    for (const sp of (snap.highSpires ?? []) as readonly HighSpireSnapshot[]) {
+      let v = this.highSpireViews.get(sp.id);
+      if (!v) {
+        const pooled = this.highSpirePool.pop();
+        if (pooled) {
+          pooled.group.visible = true;
+          v = pooled;
+        } else {
+          const group = new THREE.Group();
+          const colGeo = new GeoBuilder()
+            .add(cyl(0.56, 0.92, 2.75, 6), 0x1a2d52, 0.28, { p: [0, 1.38, 0] })
+            .add(cyl(1.05, 0.72, 0.28, 6), 0x2b4a80, 0.45, { p: [0, 2.78, 0] })
+            .add(tor(0.98, 0.065, 6, 18), 0x62f4ff, 2.5, { p: [0, 2.82, 0], r: [Math.PI / 2, 0, 0] })
+            .build();
+          const column = new THREE.Mesh(colGeo, this.propMat);
+          const turret = new THREE.Mesh(new THREE.OctahedronGeometry(0.58, 0), additive(0xffdf6e, 0.96));
+          turret.position.y = 3.35;
+          const domeMat = additive(0x4ef6ff, 0.48);
+          const dome = new THREE.Mesh(new THREE.IcosahedronGeometry(1.18, 1), domeMat);
+          dome.position.y = 3.25;
+          const laserMat = additive(0xff2a55, 0.78);
+          const laser = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.10, 1.0), laserMat);
+          group.add(column, turret, dome, laser);
+          this.scene.add(group);
+          v = { id: sp.id, group, dome, domeMat, turret, laser, laserMat, seen: true };
+        }
+        v.id = sp.id;
+        this.highSpireViews.set(sp.id, v);
+      }
+      v.seen = true;
+      v.group.position.set(sp.x, 0, sp.z);
+      v.turret.position.y = sp.elevationY + 0.48 + Math.sin(t * 4.5 + sp.id) * 0.12;
+      v.turret.rotation.set(t * 2.2, t * 3.6, 0);
+      const sScale = 1 + sp.hitPulse * 0.24 + sp.chargeProgress * 0.22;
+      v.turret.scale.setScalar(sScale);
+      v.dome.visible = sp.shieldRatio > 0;
+      v.dome.position.y = sp.elevationY + 0.42;
+      v.dome.rotation.y = -t * 1.6;
+      v.domeMat.opacity = 0.30 + sp.shieldRatio * 0.26 + sp.hitPulse * 0.2;
+      if (sp.chargeProgress > 0.15 && sp.z < PLAYER_Z - 1.5) {
+        v.laser.visible = true;
+        const dx = snap.squadX - sp.x;
+        const dy = 0.9 - (sp.elevationY + 0.45);
+        const dz = PLAYER_Z - sp.z;
+        const dist = Math.hypot(dx, dy, dz);
+        v.laser.position.set(dx * 0.5, sp.elevationY + 0.45 + dy * 0.5, dz * 0.5);
+        v.laser.lookAt(snap.squadX, 0.9, PLAYER_Z);
+        v.laser.scale.set(1 + sp.chargeProgress * 1.4, 1 + sp.chargeProgress * 1.4, dist);
+        v.laserMat.opacity = 0.25 + sp.chargeProgress * 0.65;
+        v.laserMat.color.setHex(sp.chargeProgress > 0.78 ? 0xffe26a : 0xff2a55);
+      } else {
+        v.laser.visible = false;
+      }
+    }
+    for (const [id, v] of this.highSpireViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.highSpirePool.push(v);
+        this.highSpireViews.delete(id);
+      }
+    }
+
+    // 4. Tactical Squad Formation Command Tethers (精英协同编队指挥节点光链)
+    let ftIdx = 0;
+    const leaders = new Map<number, { x: number; y: number; z: number; role: string }>();
+    for (const e of snap.enemies) {
+      if (e.formationId && e.isFormationLeader) {
+        leaders.set(e.formationId, { x: e.x, y: 1.15, z: e.z, role: e.formationKind ?? 'aegis_refract' });
+      }
+    }
+    if (leaders.size > 0) {
+      for (const e of snap.enemies) {
+        if (!e.formationId || e.isFormationLeader || ftIdx >= 24) continue;
+        const ld = leaders.get(e.formationId);
+        if (!ld) continue;
+        const dx = e.x - ld.x;
+        const dz = e.z - ld.z;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.2 || len > 14) continue;
+        d.position.set(ld.x + dx * 0.5, 1.05, ld.z + dz * 0.5);
+        d.rotation.set(0, Math.atan2(dx, dz), 0);
+        d.scale.set(1.15, 1.0, len);
+        d.updateMatrix();
+        this.formationTetherMesh.setMatrixAt(ftIdx, d.matrix);
+        this.tmpColor.setHex(ld.role === 'aegis_refract' ? 0x4ef6ff : 0xffb340);
+        this.formationTetherMesh.setColorAt(ftIdx, this.tmpColor);
+        ftIdx++;
+      }
+    }
+    this.formationTetherMesh.count = ftIdx;
+    this.formationTetherMesh.visible = ftIdx > 0;
+    if (ftIdx > 0) {
+      this.formationTetherMesh.instanceMatrix.needsUpdate = true;
+      if (this.formationTetherMesh.instanceColor) this.formationTetherMesh.instanceColor.needsUpdate = true;
+    }
+
+    // 5. Core Reactor 3-Tier Awakening Orbiting Halo & Sweeping EMP Pulse Wall
+    const rTier = snap.coreReactorTier ?? 0;
+    if (rTier > 0 && snap.squadCount > 0) {
+      this.reactorHaloGroup.visible = true;
+      const ringActive = (snap.reactorPrismRingTimer ?? 0) > 0;
+      const orbitR = snap.formationRadius + (ringActive ? 1.55 : 1.15);
+      this.reactorHaloGroup.position.set(snap.squadX, 0.55 + (snap.squadAirY ?? 0), PLAYER_Z);
+      const visCount = rTier * 2;
+      for (let i = 0; i < this.reactorPrisms.length; i++) {
+        const pm = this.reactorPrisms[i]!;
+        pm.visible = i < visCount;
+        if (pm.visible) {
+          const ang = t * (ringActive ? 4.2 : 2.1) + (i / visCount) * Math.PI * 2;
+          pm.position.set(Math.cos(ang) * orbitR, 0.35 + Math.sin(t * 5 + i) * 0.14, Math.sin(ang) * orbitR * 0.78);
+          pm.rotation.set(t * 3, ang, 0);
+          pm.scale.setScalar(ringActive ? 1.32 : 0.92);
+        }
+      }
+    } else {
+      this.reactorHaloGroup.visible = false;
+    }
+
+    if (snap.reactorWallZ !== null && snap.reactorWallZ !== undefined) {
+      this.reactorWallMesh.visible = true;
+      this.reactorWallMesh.position.set(0, 1.2, snap.reactorWallZ);
+      this.reactorWallMat.opacity = 0.68 + 0.22 * Math.sin(t * 30);
+    } else {
+      this.reactorWallMesh.visible = false;
+    }
+
+    // 6. Dynamic Tactical Drop Events (限时战术空投信标 & 失控核心货运车 — Pooled & Shared Geometry)
+    for (const v of this.tacticalEventViews.values()) v.seen = false;
+    for (const ev of (snap.tacticalEvents ?? []) as readonly TacticalEventSnapshot[]) {
+      let v = this.tacticalEventViews.get(ev.id);
+      if (!v) {
+        const idxPool = this.tacticalEventPool.findIndex((p) => p.kind === ev.kind);
+        if (idxPool >= 0) {
+          v = this.tacticalEventPool.splice(idxPool, 1)[0]!;
+          v.group.visible = true;
+        } else {
+          const group = new THREE.Group();
+          const isBeacon = ev.kind === 'supply_beacon';
+          if (isBeacon && !this.sharedBeaconGeo) {
+            this.sharedBeaconGeo = new GeoBuilder()
+              .add(cyl(0.45, 0.62, 1.45, 8), 0x1d3b66, 0.35, { p: [0, 0.72, 0] })
+              .add(new THREE.OctahedronGeometry(0.46, 0), 0x62f4ff, 2.4, { p: [0, 1.78, 0] })
+              .build();
+          } else if (!isBeacon && !this.sharedCartGeo) {
+            this.sharedCartGeo = new GeoBuilder()
+              .add(box(1.55, 0.78, 2.15), 0x3b2c14, 0.35, { p: [0, 0.58, 0] })
+              .add(box(1.12, 0.62, 1.25), 0xffcf40, 2.2, { p: [0, 1.18, 0] })
+              .build();
+          }
+          const core = new THREE.Mesh(isBeacon ? this.sharedBeaconGeo! : this.sharedCartGeo!, this.propMat);
+          const ringMat = additive(isBeacon ? 0x3ef3ff : 0xffdf58, 0.78);
+          const ring = new THREE.Mesh(new THREE.RingGeometry(isBeacon ? 1.85 : 1.25, isBeacon ? 2.15 : 1.52, 36).rotateX(-Math.PI / 2), ringMat);
+          ring.position.y = 0.06;
+          group.add(core, ring);
+          this.scene.add(group);
+          v = { id: ev.id, kind: ev.kind, group, core, ring, ringMat, seen: true };
+        }
+        v.id = ev.id;
+        this.tacticalEventViews.set(ev.id, v);
+      }
+      v.seen = true;
+      v.group.visible = true;
+      v.group.position.set(ev.x, 0, ev.z);
+      v.core.rotation.y = ev.kind === 'supply_beacon' ? t * 2.2 : Math.sin(t * 8) * 0.08;
+      v.core.scale.setScalar(1 + ev.captureProgress * 0.22);
+      v.ring.scale.setScalar(1 + 0.08 * Math.sin(t * 10));
+      v.ringMat.opacity = 0.45 + ev.captureProgress * 0.48;
+    }
+    for (const [id, v] of this.tacticalEventViews) {
+      if (!v.seen) {
+        v.group.visible = false;
+        this.tacticalEventPool.push(v);
+        this.tacticalEventViews.delete(id);
+      }
+    }
+
+    // 7. Pantheon Stage-4 Simultaneous Dual-Boss Co-Boss
+    const co = (snap.pantheonCoBoss ?? null) as PantheonCoBossSnapshot | null;
+    if (co && co.active) {
+      this.coBossGroup.visible = true;
+      this.coBossGroup.position.set(co.x, 0, co.z);
+      const sc = 0.92 + co.hitPulse * 0.08;
+      this.coBossGroup.scale.set(sc, sc, sc);
+      this.coBossShield.visible = co.shielded;
+      this.coBossShield.rotation.y = -t * 1.1;
+      this.coBossHalo.rotation.z = -t * 1.6;
+      if (this.coBossActor) {
+        this.coBossActor.setVisuals(co.hitPulse * 0.24, 1.12, 0.96, 1.08);
+        this.coBossActor.update(dt);
+      }
+      this.pushShadow(co.x, co.z, 2.15);
+    } else {
+      this.coBossGroup.visible = false;
+    }
+  }
+
+  private updateCodexStageAfterCamera(dt: number, t: number): void {
+    if (!this.codexStageGroup || !this.codexPreviewSpec || !this.codexStageGroup.visible) return;
+    this.codexYaw += dt * 0.65;
+    const fwd = this.tmpV.set(0, 1.48, -8.65).applyQuaternion(this.camera.quaternion);
+    this.codexStageGroup.position.copy(this.camera.position).add(fwd);
+    this.codexStageGroup.scale.setScalar(0.68);
+    this.codexStageGroup.rotation.set(0.16, this.codexYaw, 0);
+    this.codexPedestal.rotation.y = -this.codexYaw * 1.5 + t * 0.8;
+  }
+
+  // ---------------------------------------------------------------- AAA Dynamic Camera State Machine
   private updateCamera(snap: SimSnapshot, dt: number, cinematic: boolean): void {
-    this.camX += (snap.squadX * 0.34 - this.camX) * (1 - Math.exp(-Math.max(dt, 0.001) * 5.5));
+    if (this.photoModeState && this.photoModeState.active) {
+      const pm = this.photoModeState;
+      const focusX = snap.squadX * 0.45;
+      const focusY = 1.15 + (snap.squadAirY ?? 0) * 0.4;
+      const focusZ = snap.boss?.active ? -5.5 : PLAYER_Z - 6.5;
+      const dist = 14.5;
+      const pitchRad = (THREE.MathUtils.clamp(pm.pitch, -20, 68) * Math.PI) / 180;
+      const yawRad = (pm.yaw * Math.PI) / 180;
+      const horiz = Math.cos(pitchRad) * dist;
+      this.camera.position.set(
+        focusX + Math.sin(yawRad) * horiz,
+        Math.max(0.55, focusY + Math.sin(pitchRad) * dist),
+        focusZ + Math.cos(yawRad) * horiz,
+      );
+      this.camera.lookAt(focusX, focusY, focusZ);
+      const clampedFov = THREE.MathUtils.clamp(pm.fov, 28, 82);
+      if (Math.abs(this.camera.fov - clampedFov) > 0.05) {
+        this.camera.fov = clampedFov;
+        this.camera.updateProjectionMatrix();
+      }
+      return;
+    }
+    const safeDt = Math.max(dt, 0.001);
+    const followAlpha = 1 - Math.exp(-safeDt * 6.0);
+    const rawVx = (snap.squadX - this.prevSquadXForCam) / safeDt;
+    this.prevSquadXForCam = snap.squadX;
+
+    // 1. Fighter-jet lateral banking roll proportional to strafe velocity
+    const targetBank = THREE.MathUtils.clamp(-rawVx * 0.0042, -0.048, 0.048);
+    this.camBankRoll += (targetBank - this.camBankRoll) * (1 - Math.exp(-safeDt * 10));
+
+    // 2. Speed/Overdrive/Airborne Dynamic FOV + Chromatic Shockwave Decay
+    const airY = snap.squadAirY ?? 0;
+    const targetFovOff =
+      (snap.overdriveTimer > 0 ? 5.2 : 0) +
+      (airY > 0.1 ? Math.min(6.2, airY * 2.2) : 0) +
+      (snap.blitzActive ? 2.0 : 0) -
+      (this.shockwaveAmt > 0.25 ? this.shockwaveAmt * 2.4 : 0) -
+      (this.phaseCamTimer > 0 ? Math.sin((1 - this.phaseCamTimer / this.phaseCamDur) * Math.PI) * 6.2 : 0);
+    this.dynFovOffset += (targetFovOff - this.dynFovOffset) * (1 - Math.exp(-safeDt * 7.5));
+    const desiredFov = THREE.MathUtils.clamp(this.fov + this.dynFovOffset, 42, 74);
+    if (Math.abs(this.camera.fov - desiredFov) > 0.03) {
+      this.camera.fov = desiredFov;
+      this.camera.updateProjectionMatrix();
+    }
+    this.shockwaveAmt *= Math.exp(-safeDt * 6.5);
+    if (this.shockwaveAmt < 0.002) this.shockwaveAmt = 0;
+    this.chromaAmt *= Math.exp(-safeDt * 8.5);
+    if (this.chromaAmt < 0.0002) this.chromaAmt = 0;
+    this.radialBlurAmt *= Math.exp(-safeDt * 7.5);
+    if (this.radialBlurAmt < 0.001) this.radialBlurAmt = 0;
+
+    let phaseZoomBell = 0;
+    if (this.phaseCamTimer > 0) {
+      this.phaseCamTimer = Math.max(0, this.phaseCamTimer - safeDt);
+      const prog = 1 - this.phaseCamTimer / this.phaseCamDur;
+      phaseZoomBell = Math.sin(prog * Math.PI);
+    }
+    if (this.execCamTimer > 0) {
+      this.execCamTimer = Math.max(0, this.execCamTimer - safeDt);
+      const eProg = 1 - this.execCamTimer / this.execCamDur;
+      phaseZoomBell = Math.max(phaseZoomBell, Math.sin(eProg * Math.PI) * 1.38);
+    }
+    let awakenOrbitX = 0;
+    if (this.awakenCamTimer > 0) {
+      this.awakenCamTimer = Math.max(0, this.awakenCamTimer - safeDt);
+      const aProg = 1 - this.awakenCamTimer / this.awakenCamDur;
+      const aBell = Math.sin(aProg * Math.PI);
+      phaseZoomBell = Math.max(phaseZoomBell, aBell * 1.12);
+      awakenOrbitX = Math.sin(aProg * Math.PI * 2) * 1.48 * aBell;
+      this.splitToneAmt = aBell * 0.85;
+    } else if (this.splitToneAmt > 0.001) {
+      this.splitToneAmt *= Math.exp(-safeDt * 7.0);
+    }
+
+    this.camX += (snap.squadX * 0.35 - this.camX) * followAlpha;
+    const kickDecay = Math.exp(-safeDt * 18);
+    this.camKickZ *= kickDecay;
+    this.camKickRoll *= kickDecay;
+
     const bb = this.bossBlend;
-    const y = CAM_BASE_Y + bb * 1.65 + (cinematic ? 1.1 : 0);
-    const z = CAM_BASE_Z + bb * 1.9 + (cinematic ? 1.4 : 0);
-    this.trauma = Math.max(0, this.trauma - dt * 1.8);
+    const y = CAM_BASE_Y + bb * 1.65 - phaseZoomBell * 1.35 + airY * 0.38 + (cinematic ? 1.1 : 0) - this.camKickZ * 0.18;
+    const z = CAM_BASE_Z + bb * 1.9 - phaseZoomBell * 3.6 + (snap.overdriveTimer > 0 ? 0.45 : 0) + (cinematic ? 1.4 : 0) + this.camKickZ;
+    this.trauma = Math.max(0, this.trauma - dt * 1.9);
     const sh = this.trauma * this.trauma;
-    const sx = (Math.random() - 0.5) * sh * 1.05;
-    const sy = (Math.random() - 0.5) * sh * 0.75;
-    this.camera.position.set(this.camX + sx, y + sy, z);
-    this.camera.lookAt(this.camX * 0.55, 0.3, -8.2 - bb * 2.2);
+    const sx = (Math.random() - 0.5) * sh * 1.12;
+    const sy = (Math.random() - 0.5) * sh * 0.82;
+    if (this.replayCameraMode === 'tactical_top' && !cinematic) {
+      this.camera.position.set(this.camX * 0.45 + sx, y + 9.2 + sy, z + 3.2);
+      this.camera.lookAt(this.camX * 0.35, 0, -16.5 - bb * 2.5);
+    } else if (this.replayCameraMode === 'action_closeup' && !cinematic) {
+      this.camera.position.set(snap.squadX * 0.72 + sx, y - 2.35 + airY * 0.5 + sy, z - 3.4);
+      this.camera.lookAt(snap.squadX * 0.42, 1.05 + airY * 0.35, -13.5 - bb * 3.0);
+      this.camera.rotation.z += this.camBankRoll * 1.45 + this.camKickRoll;
+    } else {
+      this.camera.position.set(this.camX + awakenOrbitX + sx, y + sy, z);
+      this.camera.lookAt(this.camX * 0.56, 0.3 + airY * 0.25, -8.4 - bb * 2.2);
+      this.camera.rotation.z += this.camBankRoll + this.camKickRoll + (Math.random() - 0.5) * sh * 0.022;
+    }
+  }
+
+  private buildV22Visuals(): void {
+    // 1. Twin Tactical Drone Wingmen (left & right cyber wingmen + deployable 45-degree laser mirror fins)
+    const makeDrone = (isRight: boolean): { group: THREE.Group; mirror: THREE.Mesh; coreMat: THREE.MeshBasicMaterial } => {
+      const group = new THREE.Group();
+      const bodyGeo = new GeoBuilder()
+        .add(oct(0.32), 0xffffff, 2.4, { p: [0, 0, 0] })
+        .add(box(1.18, 0.06, 0.34), 0x1d3b6b, 0.45, { p: [0, 0, 0.08], r: [0, 0, isRight ? -0.14 : 0.14] })
+        .add(cone(0.14, 0.46, 6).rotateX(Math.PI / 2), 0x62f4ff, 2.2, { p: [0, 0, 0.32] })
+        .build();
+      const body = new THREE.Mesh(bodyGeo, this.propMat);
+      const coreMat = additive(0x5ef6ff, 0.92);
+      const halo = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.54, 6).rotateX(-Math.PI / 2), coreMat);
+      halo.position.y = -0.12;
+      const mirror = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.78, 0.06), additive(0x7dff9b, 0.72, this.reflectorTex));
+      mirror.position.set(0, -0.05, -0.45);
+      mirror.visible = false;
+      group.add(body, halo, mirror);
+      group.visible = false;
+      this.scene.add(group);
+      return { group, mirror, coreMat };
+    };
+    const wl = makeDrone(false);
+    const wr = makeDrone(true);
+    this.wingmanLeftGroup = wl.group;
+    this.wingmanLeftMirror = wl.mirror;
+    this.wingmanCoreMatL = wl.coreMat;
+    this.wingmanRightGroup = wr.group;
+    this.wingmanRightMirror = wr.mirror;
+    this.wingmanCoreMatR = wr.coreMat;
+
+    // 2. Core Reactor Tier-3 Awakening Holographic Energy Mandala
+    this.reactorMandalaGroup = new THREE.Group();
+    this.reactorMandalaMat = additive(0xffdf58, 0.78);
+    this.reactorMandalaOuter = new THREE.Mesh(
+      new THREE.RingGeometry(2.35, 2.68, 6).rotateX(-Math.PI / 2),
+      this.reactorMandalaMat,
+    );
+    this.reactorMandalaInner = new THREE.Mesh(
+      new THREE.RingGeometry(1.42, 1.72, 8).rotateX(-Math.PI / 2),
+      additive(0x62f4ff, 0.74),
+    );
+    const crossSpoke = new THREE.Mesh(
+      new THREE.PlaneGeometry(5.2, 0.16).rotateX(-Math.PI / 2),
+      additive(0xffe885, 0.58),
+    );
+    const crossSpokeB = crossSpoke.clone();
+    crossSpokeB.rotation.y = Math.PI / 2;
+    this.reactorMandalaGroup.add(this.reactorMandalaOuter, this.reactorMandalaInner, crossSpoke, crossSpokeB);
+    this.reactorMandalaGroup.position.y = 0.062;
+    this.reactorMandalaGroup.visible = false;
+    this.scene.add(this.reactorMandalaGroup);
+
+    // 3. Abyssal Protocol Heat >= 4 Boss Apex Mutated Moveset Visuals & Dual-Core Harmonic Shield
+    this.bossApexGroup = new THREE.Group();
+    const laserGeo = new THREE.BoxGeometry(0.18, 0.18, 28);
+    this.bossApexLaserA = new THREE.Mesh(laserGeo, additive(0xff3878, 0.78));
+    this.bossApexLaserB = new THREE.Mesh(laserGeo, additive(0xc44dff, 0.78));
+    const cloneGeo = new THREE.OctahedronGeometry(1.05, 1);
+    this.bossApexCloneL = new THREE.Mesh(cloneGeo, additive(0x5ef6ff, 0.62));
+    this.bossApexCloneR = new THREE.Mesh(cloneGeo, additive(0xff5ce0, 0.62));
+    this.bossApexTideRing = new THREE.Mesh(
+      new THREE.RingGeometry(5.2, 6.1, 40).rotateX(-Math.PI / 2),
+      additive(0x62f4ff, 0.68),
+    );
+    this.bossHarmonicDome = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(3.55, 1),
+      additive(0xffd84a, 0.34),
+    );
+    this.bossApexGroup.add(
+      this.bossApexLaserA,
+      this.bossApexLaserB,
+      this.bossApexCloneL,
+      this.bossApexCloneR,
+      this.bossApexTideRing,
+      this.bossHarmonicDome,
+    );
+    this.bossApexGroup.visible = false;
+    this.scene.add(this.bossApexGroup);
+
+    // 4. Stage 5: 3D Translucent Holographic Ghost Runner (Fair Trial #202611 & Same-Seed Duel)
+    this.ghostGroup = new THREE.Group();
+    this.ghostBodyMat = additive(0x3ef3ff, 0.56);
+    const ghostSilGeo = new GeoBuilder()
+      .add(cyl(0.26, 0.34, 0.88, 8), 0x62f4ff, 2.2, { p: [0, 0.62, 0] })
+      .add(sph(0.28, 10, 8), 0xb8ffff, 2.6, { p: [0, 1.26, 0] })
+      .add(box(0.18, 0.16, 0.68), 0xffe26a, 2.4, { p: [0.24, 0.78, -0.32] })
+      .build();
+    const ghostMesh = new THREE.Mesh(ghostSilGeo, this.ghostBodyMat);
+    this.ghostRingMat = additive(0x19f5a8, 0.74);
+    const ghostFloorRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.68, 0.88, 6).rotateX(-Math.PI / 2),
+      this.ghostRingMat,
+    );
+    ghostFloorRing.position.y = 0.048;
+    const ghostBeacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.18, 2.2, 8, 1, true),
+      additive(0x62f4ff, 0.26),
+    );
+    ghostBeacon.position.y = 1.1;
+    this.ghostGroup.add(ghostMesh, ghostFloorRing, ghostBeacon);
+    this.ghostGroup.visible = false;
+    this.scene.add(this.ghostGroup);
+  }
+
+  private updateV22Visuals(snap: SimSnapshot, _dt: number, t: number): void {
+    const airY = snap.squadAirY ?? 0;
+
+    // 1. Update Twin Tactical Drone Wingmen
+    const wm = snap.wingmanState;
+    if (wm && snap.squadCount > 0) {
+      const hex = wm.id === 'prism_mirror' ? 0x5ef6ff : wm.id === 'gravity_anchor' ? 0xc47dff : 0xffe26a;
+      this.wingmanCoreMatL.color.setHex(hex);
+      this.wingmanCoreMatR.color.setHex(hex);
+      const bobL = Math.sin(t * 5.2) * 0.12;
+      const bobR = Math.cos(t * 5.2) * 0.12;
+      const hoverY = (wm.formation === 'forward_mirror' ? 0.92 : 1.38) + airY;
+      this.wingmanLeftGroup.visible = true;
+      this.wingmanRightGroup.visible = true;
+      this.wingmanLeftGroup.position.set(wm.leftX, hoverY + bobL, wm.leftZ);
+      this.wingmanRightGroup.position.set(wm.rightX, hoverY + bobR, wm.rightZ);
+      const pulseScale = 1 + ((wm as { pulseTimer?: number }).pulseTimer ?? 0) * 0.35;
+      this.wingmanLeftGroup.scale.setScalar(pulseScale);
+      this.wingmanRightGroup.scale.setScalar(pulseScale);
+      const isMirror = wm.formation === 'forward_mirror';
+      this.wingmanLeftMirror.visible = isMirror;
+      this.wingmanRightMirror.visible = isMirror;
+      if (isMirror) {
+        this.wingmanLeftMirror.rotation.y = (34 * Math.PI) / 180;
+        this.wingmanRightMirror.rotation.y = (-34 * Math.PI) / 180;
+      }
+      this.wingmanLeftGroup.children[0]!.rotation.y = Math.sin(t * 2.5) * 0.22;
+      this.wingmanRightGroup.children[0]!.rotation.y = -Math.sin(t * 2.5) * 0.22;
+    } else {
+      this.wingmanLeftGroup.visible = false;
+      this.wingmanRightGroup.visible = false;
+    }
+
+    // 2. Update Core Reactor Tier-3 Awakening Mandala
+    const rTier = snap.coreReactorTier ?? 0;
+    if ((this.awakenCamTimer > 0 || rTier >= 3) && snap.squadCount > 0) {
+      this.reactorMandalaGroup.visible = true;
+      this.reactorMandalaGroup.position.set(snap.squadX, 0.058 + airY * 0.85, PLAYER_Z);
+      const burstBoost = this.awakenCamTimer > 0 ? 1 + Math.sin((1 - this.awakenCamTimer / this.awakenCamDur) * Math.PI) * 0.82 : 1;
+      const baseS = (snap.formationRadius * 0.62 + 0.95) * burstBoost;
+      this.reactorMandalaGroup.scale.setScalar(baseS);
+      this.reactorMandalaOuter.rotation.z = t * 1.45;
+      this.reactorMandalaInner.rotation.z = -t * 2.15;
+      this.reactorMandalaMat.opacity = this.awakenCamTimer > 0 ? 0.92 : 0.44 + 0.14 * Math.sin(t * 5);
+    } else {
+      this.reactorMandalaGroup.visible = false;
+    }
+
+    // 3. Update Abyssal Boss Apex Mutation & Harmonic Dual-Core Shield Visuals
+    const b = snap.boss;
+    if (b && b.active && (b.abyssalMutation || b.harmonicShield)) {
+      this.bossApexGroup.visible = true;
+      this.bossApexGroup.position.set(b.x, 0, b.z);
+      this.bossHarmonicDome.visible = Boolean(b.harmonicShield) && (b.parts ?? []).some((p) => !p.destroyed);
+      this.bossHarmonicDome.position.y = 2.55;
+      this.bossHarmonicDome.rotation.y = t * 1.9;
+
+      const mut = b.abyssalMutation;
+      this.bossApexLaserA.visible = mut === 'cross_laser_grid';
+      this.bossApexLaserB.visible = mut === 'cross_laser_grid';
+      if (mut === 'cross_laser_grid') {
+        const sweep = Math.sin(t * 1.85) * 0.46;
+        this.bossApexLaserA.position.set(0, 1.15, 11);
+        this.bossApexLaserA.rotation.y = sweep + 0.28;
+        this.bossApexLaserB.position.set(0, 1.15, 11);
+        this.bossApexLaserB.rotation.y = -sweep - 0.28;
+      }
+
+      this.bossApexCloneL.visible = mut === 'phantom_clone_salvo';
+      this.bossApexCloneR.visible = mut === 'phantom_clone_salvo';
+      if (mut === 'phantom_clone_salvo') {
+        this.bossApexCloneL.position.set(-3.4 + Math.sin(t * 3.2) * 0.5, 2.2, 1.5);
+        this.bossApexCloneR.position.set(3.4 - Math.sin(t * 3.2) * 0.5, 2.2, 1.5);
+        this.bossApexCloneL.rotation.y = t * 3.2;
+        this.bossApexCloneR.rotation.y = -t * 3.2;
+      }
+
+      this.bossApexTideRing.visible = mut === 'mag_storm_tide';
+      if (mut === 'mag_storm_tide') {
+        const tideZ = ((t * 14) % 26);
+        this.bossApexTideRing.position.set(0, 0.14, tideZ);
+        this.bossApexTideRing.scale.setScalar(1 + tideZ * 0.04);
+      }
+    } else {
+      this.bossApexGroup.visible = false;
+    }
+  }
+
+  /** Stage 5: Updates 3D Translucent Holographic Ghost Runner on the highway */
+  updateGhostRunner(ghost: { active: boolean; x: number; zOffset: number; weapon: WeaponId; playerAhead: boolean } | null, t: number): void {
+    if (!this.ghostGroup) return;
+    if (!ghost || !ghost.active) {
+      this.ghostGroup.visible = false;
+      return;
+    }
+    this.ghostGroup.visible = true;
+    const gz = THREE.MathUtils.clamp(PLAYER_Z - ghost.zOffset, -26, PLAYER_Z + 3.2);
+    const bob = Math.abs(Math.sin(t * 11.5)) * 0.08;
+    this.ghostGroup.position.set(ghost.x, bob, gz);
+    this.ghostGroup.rotation.y = Math.sin(t * 3) * 0.08;
+    this.ghostBodyMat.color.setHex(WEAPON_COLOR[ghost.weapon] ?? 0x3ef3ff);
+    this.ghostBodyMat.opacity = 0.48 + 0.12 * Math.sin(t * 9);
+    this.ghostRingMat.color.setHex(ghost.playerAhead ? 0x19f5a8 : 0xffbe3d);
+  }
+
+  /** V23 Stage 1: Configures 3A Holographic Free-Cam Photo Mode */
+  setPhotoMode(state: { active: boolean; yaw: number; pitch: number; fov: number; filter: PhotoFilterKind } | null): void {
+    this.photoModeState = state && state.active ? { ...state } : null;
+    if (!this.photoModeState) {
+      this.camera.fov = this.fov;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /** V23 Stage 1: Renders an immediate clean frame & returns PNG Data URL for HD Photo Capture */
+  captureFrameDataUrl(snap: SimSnapshot): string {
+    this.render(snap, 0, false);
+    return this.renderer.domElement.toDataURL('image/png');
+  }
+
+  private buildV23Visuals(): void {
+    // 1. Tri-Prism Resonance Lattice Plasma Cutter Grid (single InstancedMesh, cap 16)
+    const latGeo = new THREE.BoxGeometry(0.18, 0.14, 1.0);
+    const latMat = additive(0xffffff, 0.92);
+    this.triPrismLatticeMesh = new THREE.InstancedMesh(latGeo, latMat, 16);
+    this.triPrismLatticeMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(16 * 3), 3);
+    this.triPrismLatticeMesh.count = 0;
+    this.triPrismLatticeMesh.visible = false;
+    this.triPrismLatticeMesh.frustumCulled = false;
+    this.triPrismLatticeMesh.renderOrder = 7;
+    this.scene.add(this.triPrismLatticeMesh);
+
+    // 2. Dynamic Nemesis Pursuer ("PRISM HUNTER · 零号猎犬") + Adaptive Polarized Counter-Shield
+    this.nemesisGroup = new THREE.Group();
+    const houndGeo = new GeoBuilder()
+      .add(box(1.35, 0.62, 2.25), 0x182544, 0.42, { p: [0, 0.95, 0] })
+      .add(cone(0.56, 1.35, 6).rotateX(Math.PI / 2), 0xff3b6e, 2.2, { p: [0, 0.98, 1.32] })
+      .add(box(2.45, 0.12, 0.68), 0x2c487c, 0.55, { p: [0, 1.08, -0.15] })
+      .add(oct(0.42), 0xffe26a, 2.6, { p: [0, 1.48, 0.15] })
+      .build();
+    const houndBody = new THREE.Mesh(houndGeo, this.propMat);
+    this.nemesisShieldMat = new THREE.MeshBasicMaterial({
+      color: 0x3ef3ff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.62,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.nemesisShieldMesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1.72, 1), this.nemesisShieldMat);
+    this.nemesisShieldMesh.position.y = 1.08;
+    this.nemesisTelegraphBeam = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.12, 26),
+      additive(0xff2a55, 0.72),
+    );
+    this.nemesisTelegraphBeam.position.set(0, 0.42, 13);
+    this.nemesisTelegraphBeam.visible = false;
+    this.nemesisGroup.add(houndBody, this.nemesisShieldMesh, this.nemesisTelegraphBeam);
+    this.nemesisGroup.visible = false;
+    this.scene.add(this.nemesisGroup);
+
+    // 3. 2nd-Order Overlimit Nirvana Burst Expanding Cataclysm Mandala
+    this.nirvanaBurstGroup = new THREE.Group();
+    this.nirvanaOuterMat = additive(0xffe26a, 0.88);
+    this.nirvanaInnerMat = additive(0x62f4ff, 0.85);
+    this.nirvanaRingOuter = new THREE.Mesh(new THREE.RingGeometry(2.2, 3.55, 12).rotateX(-Math.PI / 2), this.nirvanaOuterMat);
+    this.nirvanaRingInner = new THREE.Mesh(new THREE.RingGeometry(1.35, 2.05, 16).rotateX(-Math.PI / 2), this.nirvanaInnerMat);
+    this.nirvanaBurstGroup.add(this.nirvanaRingOuter, this.nirvanaRingInner);
+    this.nirvanaBurstGroup.position.y = 0.14;
+    this.nirvanaBurstGroup.visible = false;
+    this.scene.add(this.nirvanaBurstGroup);
+  }
+
+  private updateV23Visuals(snap: SimSnapshot, _dt: number, t: number): void {
+    const d = this.dummy;
+
+    // 1. Tri-Prism Resonance Lattice Cutter Grid
+    const links = (snap.triPrismLinks ?? []) as readonly TriPrismLinkSnapshot[];
+    let lIdx = 0;
+    if ((snap.triPrismLatticeTimer ?? 0) > 0 && links.length > 0) {
+      for (const lk of links) {
+        if (lIdx >= 16) break;
+        const dx = lk.x2 - lk.x1;
+        const dz = lk.z2 - lk.z1;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.25) continue;
+        d.position.set(lk.x1 + dx * 0.5, 0.86 + 0.08 * Math.sin(t * 24 + lIdx), lk.z1 + dz * 0.5);
+        d.rotation.set(0, Math.atan2(dx, dz), 0);
+        d.scale.set(1.15 + 0.35 * Math.sin(t * 32 + lIdx), 1.0, len);
+        d.updateMatrix();
+        this.triPrismLatticeMesh.setMatrixAt(lIdx, d.matrix);
+        this.tmpColor.setHex(lIdx % 2 === 0 ? 0x62f4ff : 0xffe46b);
+        this.triPrismLatticeMesh.setColorAt(lIdx, this.tmpColor);
+        lIdx++;
+      }
+    }
+    this.triPrismLatticeMesh.count = lIdx;
+    this.triPrismLatticeMesh.visible = lIdx > 0;
+    if (lIdx > 0) {
+      this.triPrismLatticeMesh.instanceMatrix.needsUpdate = true;
+      if (this.triPrismLatticeMesh.instanceColor) this.triPrismLatticeMesh.instanceColor.needsUpdate = true;
+    }
+
+    // 2. Dynamic Nemesis Pursuer ("PRISM HUNTER · 零号猎犬")
+    const nem = (snap.nemesis ?? null) as NemesisSnapshot | null;
+    if (nem && nem.hp > 0) {
+      this.nemesisGroup.visible = true;
+      const hover = Math.sin(t * 6.5) * 0.16;
+      this.nemesisGroup.position.set(nem.x, hover, nem.z);
+      this.nemesisGroup.rotation.z = Math.sin(t * 4.2) * 0.08;
+      const s = 1.0 + nem.hitPulse * 0.14;
+      this.nemesisGroup.scale.setScalar(s);
+      this.nemesisShieldMesh.visible = !nem.shieldBroken;
+      if (!nem.shieldBroken) {
+        this.nemesisShieldMat.color.setHex(WEAPON_COLOR[nem.adaptedWeapon] ?? 0x3ef3ff);
+        this.nemesisShieldMat.opacity = 0.46 + 0.22 * Math.sin(t * 10);
+        this.nemesisShieldMesh.rotation.y = t * 2.4;
+      }
+      this.nemesisTelegraphBeam.visible = nem.dashTelegraph > 0.05;
+      this.pushShadow(nem.x, nem.z, 1.55);
+    } else {
+      this.nemesisGroup.visible = false;
+    }
+
+    // 3. 2nd-Order Overlimit Nirvana Burst Mandala
+    const nirRem = snap.nirvanaActiveTimer ?? 0;
+    if (nirRem > 0) {
+      const p = 1 - Math.min(1, nirRem / 2.6);
+      const arch: NirvanaArchetype = snap.nirvanaArchetype ?? 'prism_kaleidoscope';
+      this.nirvanaBurstGroup.visible = true;
+      this.nirvanaBurstGroup.position.set(snap.squadX * 0.35, 0.16, -12.0);
+      const sc = 1.2 + p * 8.5;
+      this.nirvanaBurstGroup.scale.setScalar(sc);
+      this.nirvanaRingOuter.rotation.z = t * 4.2;
+      this.nirvanaRingInner.rotation.z = -t * 6.0;
+      this.nirvanaOuterMat.color.setHex(
+        arch === 'singularity_supernova' ? 0xd982ff : arch === 'absolute_zero_storm' ? 0x80f8ff : 0xffe46b,
+      );
+      this.nirvanaInnerMat.color.setHex(
+        arch === 'singularity_supernova' ? 0xffb84d : arch === 'absolute_zero_storm' ? 0xffffff : 0x62f4ff,
+      );
+      const fade = Math.max(0, 1 - p);
+      this.nirvanaOuterMat.opacity = 0.86 * fade;
+      this.nirvanaInnerMat.opacity = 0.82 * fade;
+    } else {
+      this.nirvanaBurstGroup.visible = false;
+    }
   }
 }

@@ -72,6 +72,10 @@ test('first endless defeat asks once, uploads actual metrics and reuses name/pla
   expect(api.scores[0]).toMatchObject({ username: '霓虹玩家', metrics: actual, info: { mode: 'endless' } });
   expect(api.authorizations).toEqual(['Bearer guest-test-token']);
   expect(api.sessions).toBe(1);
+  await page.getByTestId('watch-replay-btn').click();
+  await page.getByTestId('exit-replay-btn').click();
+  await expect(page.getByTestId('ranking-result-status')).toContainText('我的名次 #7');
+  expect(api.scores).toHaveLength(1);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('prism-swarm-save-v1')!).leaderboardName)).toBe('霓虹玩家');
   api.accepted = false;
   await page.reload();

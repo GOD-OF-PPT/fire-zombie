@@ -269,70 +269,68 @@ describe('3 Handcrafted Sectors Structural Audit & Full Campaign Balance Proof',
     }
   });
 
-  it('proves Heuristic Bot achieves VICTORY traversing all Boss phases while Pure AFK & Reckless policies achieve DEFEAT across Sectors 1, 2, and 3', () => {
-    for (const sector of [1, 2, 3] as readonly SectorId[]) {
-      // 1. Heuristic Bot -> VICTORY traversing 100% of Boss phases
-      const winSim = createSimulation();
-      winSim.startSector(sector);
-      let maxBossPhase = 0;
-      let steps = 0;
+  it.each([1, 2, 3] as const)('checks boss phases, victory and idle/reckless defeats in sector %i', (sector) => {
+    // 1. Heuristic Bot -> VICTORY traversing 100% of Boss phases
+    const winSim = createSimulation();
+    winSim.startSector(sector);
+    let maxBossPhase = 0;
+    let steps = 0;
 
-      while (winSim.getSnapshot().phase === 'PLAYING' && steps < 9000) {
-        const snap = winSim.getSnapshot();
-        if (snap.boss && snap.boss.active && snap.boss.phase > maxBossPhase) {
-          maxBossPhase = snap.boss.phase;
-        }
-        const targetX = chooseHeuristicTargetX(snap);
-        const drag = Math.max(-0.32, Math.min(0.32, targetX - snap.squadX));
-        winSim.stepFixed({ dragDeltaX: drag, keyAxisX: 0 });
-        steps += 1;
+    while (winSim.getSnapshot().phase === 'PLAYING' && steps < 9000) {
+      const snap = winSim.getSnapshot();
+      if (snap.boss && snap.boss.active && snap.boss.phase > maxBossPhase) {
+        maxBossPhase = snap.boss.phase;
       }
-
-      const winSnap = winSim.getSnapshot();
-      expect(winSnap.phase).toBe('VICTORY');
-      expect(winSnap.defeatReason).toBeNull();
-      expect(winSnap.squadCount).toBeGreaterThan(0);
-      expect(maxBossPhase).toBe(SECTORS[sector].boss.maxPhases);
-      expect(winSnap.simTime).toBeGreaterThanOrEqual(65);
-      expect(winSnap.simTime).toBeLessThanOrEqual(115);
-      expect(winSnap.stats.vaultsCracked).toBeGreaterThanOrEqual(2);
-      expect(winSnap.stats.gatesImproved).toBeGreaterThanOrEqual(1);
-      expect(winSnap.stats.kills).toBeGreaterThanOrEqual(10);
-
-      // 2. Pure AFK Bot (x = 0, zero input) -> DEFEAT
-      const afkSim = createSimulation();
-      afkSim.startSector(sector);
-      let afkSteps = 0;
-      while (afkSim.getSnapshot().phase === 'PLAYING' && afkSteps < 9000) {
-        afkSim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
-        afkSteps += 1;
-      }
-      const afkSnap = afkSim.getSnapshot();
-      expect(afkSnap.phase).toBe('DEFEAT');
-      expect(afkSnap.squadCount).toBe(0);
-      expect(afkSnap.defeatReason).toBe('NEGATIVE_GATE');
-
-      // Sector 1 onboarding check ([POLISH-S1-ONBOARD]): AFK center auto-fire kills lead crawler at t~4s and survives to Act 2's d=228 gate
-      if (sector === 1) {
-        expect(afkSnap.stats.kills).toBeGreaterThanOrEqual(1);
-        expect(afkSnap.simTime).toBeGreaterThan(12.0);
-      }
-
-      // 3. Reckless Negative-Gate Bot -> DEFEAT
-      const recklessSim = createSimulation();
-      recklessSim.startSector(sector);
-      let recklessSteps = 0;
-      while (recklessSim.getSnapshot().phase === 'PLAYING' && recklessSteps < 9000) {
-        const snap = recklessSim.getSnapshot();
-        const targetX = chooseRecklessTargetX(snap);
-        const drag = Math.max(-0.35, Math.min(0.35, targetX - snap.squadX));
-        recklessSim.stepFixed({ dragDeltaX: drag, keyAxisX: 0 });
-        recklessSteps += 1;
-      }
-      const recklessSnap = recklessSim.getSnapshot();
-      expect(recklessSnap.phase).toBe('DEFEAT');
-      expect(recklessSnap.squadCount).toBe(0);
-      expect(recklessSnap.defeatReason).not.toBeNull();
+      const targetX = chooseHeuristicTargetX(snap);
+      const drag = Math.max(-0.32, Math.min(0.32, targetX - snap.squadX));
+      winSim.stepFixed({ dragDeltaX: drag, keyAxisX: 0 });
+      steps += 1;
     }
+
+    const winSnap = winSim.getSnapshot();
+    expect(winSnap.phase).toBe('VICTORY');
+    expect(winSnap.defeatReason).toBeNull();
+    expect(winSnap.squadCount).toBeGreaterThan(0);
+    expect(maxBossPhase).toBe(SECTORS[sector].boss.maxPhases);
+    expect(winSnap.simTime).toBeGreaterThanOrEqual(65);
+    expect(winSnap.simTime).toBeLessThanOrEqual(115);
+    expect(winSnap.stats.vaultsCracked).toBeGreaterThanOrEqual(2);
+    expect(winSnap.stats.gatesImproved).toBeGreaterThanOrEqual(1);
+    expect(winSnap.stats.kills).toBeGreaterThanOrEqual(10);
+
+    // 2. Pure AFK Bot (x = 0, zero input) -> DEFEAT
+    const afkSim = createSimulation();
+    afkSim.startSector(sector);
+    let afkSteps = 0;
+    while (afkSim.getSnapshot().phase === 'PLAYING' && afkSteps < 9000) {
+      afkSim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
+      afkSteps += 1;
+    }
+    const afkSnap = afkSim.getSnapshot();
+    expect(afkSnap.phase).toBe('DEFEAT');
+    expect(afkSnap.squadCount).toBe(0);
+    expect(afkSnap.defeatReason).toBe('NEGATIVE_GATE');
+
+    // Sector 1 onboarding check ([POLISH-S1-ONBOARD]): AFK center auto-fire kills lead crawler at t~4s and survives to Act 2's d=228 gate
+    if (sector === 1) {
+      expect(afkSnap.stats.kills).toBeGreaterThanOrEqual(1);
+      expect(afkSnap.simTime).toBeGreaterThan(12.0);
+    }
+
+    // 3. Reckless Negative-Gate Bot -> DEFEAT
+    const recklessSim = createSimulation();
+    recklessSim.startSector(sector);
+    let recklessSteps = 0;
+    while (recklessSim.getSnapshot().phase === 'PLAYING' && recklessSteps < 9000) {
+      const snap = recklessSim.getSnapshot();
+      const targetX = chooseRecklessTargetX(snap);
+      const drag = Math.max(-0.35, Math.min(0.35, targetX - snap.squadX));
+      recklessSim.stepFixed({ dragDeltaX: drag, keyAxisX: 0 });
+      recklessSteps += 1;
+    }
+    const recklessSnap = recklessSim.getSnapshot();
+    expect(recklessSnap.phase).toBe('DEFEAT');
+    expect(recklessSnap.squadCount).toBe(0);
+    expect(recklessSnap.defeatReason).not.toBeNull();
   });
 });

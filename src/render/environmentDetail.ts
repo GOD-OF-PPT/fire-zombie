@@ -23,7 +23,7 @@ const SEARCHLIGHT_COUNT = 8;
 function billboardTexture(): THREE.CanvasTexture {
   const { ctx, tex } = makeCanvasTexture(1536, 256);
   const titles = ['PRISM', 'NOVA', 'AEGIS'];
-  const subtitles = ['NEON PROTOCOL  //  V2', 'HYPER TRANSIT', 'PHASE SHIELD READY'];
+  const subtitles = ['NEON PROTOCOL  //  OMEGA', 'HYPER TRANSIT', 'PHASE SHIELD READY'];
   const accents = ['#62f4ff', '#ffc531', '#d29bff'];
   for (let panel = 0; panel < 3; panel++) {
     ctx.save();

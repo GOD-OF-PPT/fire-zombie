@@ -271,11 +271,11 @@ export const WEAPON_CONFIGS: Readonly<Record<WeaponId, WeaponDefinition>> = {
 
 /** Per-enemy damage multipliers so each weapon is the clear answer to one threat. */
 export const WEAPON_COUNTER_MULT: Readonly<Record<WeaponId, Partial<Record<EnemyKind, number>>>> = {
-  pulse: { siphon: 1.5 },
-  scatter: { crawler: 1.4, mitosis: 1.3 },
-  rail: { bastion: 1.8 },
-  plasma: { mitosis: 1.6, crawler: 1.2 },
-  cryo: { dasher: 1.6 },
+  pulse: { siphon: 1.5, bomber: 1.5, howler: 1.45, beholder: 1.65 },
+  scatter: { crawler: 1.4, mitosis: 1.3, stalker: 1.4, bomber: 1.35, burrower: 1.65, necromancer: 1.45 },
+  rail: { bastion: 1.8, phalanx: 2.0, howler: 1.6, brood: 1.45, glacier: 1.65, beholder: 1.75, necromancer: 1.7 },
+  plasma: { mitosis: 1.6, crawler: 1.2, brood: 1.75, phalanx: 1.65, glacier: 1.85, necromancer: 1.6 },
+  cryo: { dasher: 1.6, stalker: 1.75, howler: 1.35, burrower: 1.7, beholder: 1.45 },
 };
 
 export function getWeaponCounterMult(weapon: WeaponId, kind: EnemyKind): number {

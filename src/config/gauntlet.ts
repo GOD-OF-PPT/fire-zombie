@@ -128,7 +128,25 @@ export function generateGauntlet(seed: number): { boss: BossConfig; encounters: 
   };
 
   const packKinds = (t: number): EnemyKind[] =>
-    t < 0.2 ? ['crawler', 'crawler', 'dasher'] : t < 0.45 ? ['crawler', 'dasher', 'mitosis'] : ['crawler', 'dasher', 'mitosis', 'bastion'];
+    t < 0.2
+      ? ['crawler', 'crawler', 'dasher', 'bomber', 'burrower', 'stalker']
+      : t < 0.45
+        ? ['crawler', 'dasher', 'mitosis', 'bomber', 'stalker', 'phalanx', 'burrower', 'glacier', 'beholder']
+        : [
+            'crawler',
+            'dasher',
+            'mitosis',
+            'bastion',
+            'bomber',
+            'phalanx',
+            'stalker',
+            'brood',
+            'howler',
+            'glacier',
+            'beholder',
+            'burrower',
+            'necromancer',
+          ];
 
   const emitPack = (d: number, extra = 0): void => {
     const t = d / L;
@@ -138,7 +156,7 @@ export function generateGauntlet(seed: number): { boss: BossConfig; encounters: 
     let bastions = 0;
     for (let i = 0; i < n; i++) {
       let kind = pick(kinds);
-      if (kind === 'bastion' && ++bastions > 2) kind = 'crawler';
+      if ((kind === 'bastion' || kind === 'brood' || kind === 'glacier') && ++bastions > 2) kind = 'crawler';
       units.push({ kind, x: round1(rand() * 6.6 - 3.3), dz: round1(i * 1.6 + rand() * 1.2) });
     }
     // Add deterministic high-density crawler swarm escorts via isolated sub-PRNG so gate PRNG stays rock-solid

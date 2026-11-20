@@ -4,11 +4,11 @@ export type Content = string | number | boolean | null | undefined | Markup | re
 const marker = '__prism_slot_';
 const slots = /__prism_slot_(\d+)__/g;
 const templates = new WeakMap<TemplateStringsArray, DocumentFragment>();
-const tags = new Set(['div', 'span', 'button', 'i', 'b', 'em', 'small', 'h1', 'h2', 'p', 'ul', 'li', 'strong', 'form', 'label', 'input']);
-const booleanAttributes = new Set(['disabled', 'hidden']);
+const tags = new Set(['div', 'span', 'button', 'i', 'b', 'em', 'small', 'h1', 'h2', 'p', 'ul', 'li', 'strong', 'form', 'label', 'input', 'canvas', 'select', 'option']);
+const booleanAttributes = new Set(['disabled', 'hidden', 'checked']);
 
 function allowedAttribute(name: string): boolean {
-  return ['class', 'id', 'title', 'role', 'style', 'disabled', 'hidden', 'type', 'for', 'maxlength', 'autocomplete', 'placeholder'].includes(name) ||
+  return ['class', 'id', 'title', 'role', 'style', 'disabled', 'hidden', 'type', 'for', 'maxlength', 'autocomplete', 'placeholder', 'width', 'height', 'min', 'max', 'step', 'value', 'checked'].includes(name) ||
     /^(?:data|aria)-[a-z0-9-]+$/.test(name);
 }
 
@@ -17,9 +17,9 @@ function checkStyle(value: string): void {
     const [property, ...parts] = declaration.split(':');
     const name = property!.trim();
     const cssValue = parts.join(':').trim();
-    const color = /^(?:color|background|--(?:cc|mc|pc|sc|ac))$/.test(name) && /^#[a-f\d]{3,8}$/i.test(cssValue);
-    const width = name === 'width' && /^-?\d+(?:\.\d+)?%$/.test(cssValue);
-    if (!color && !width) throw new TypeError('Unsupported UI style');
+    const color = /^(?:color|background|--(?:cc|mc|pc|sc|ac|uc|rc|nc))$/.test(name) && /^#[a-f\d]{3,8}$/i.test(cssValue);
+    const percentage = /^(?:width|left|top)$/.test(name) && /^-?\d+(?:\.\d+)?%$/.test(cssValue);
+    if (!color && !percentage) throw new TypeError('Unsupported UI style');
   }
 }
 

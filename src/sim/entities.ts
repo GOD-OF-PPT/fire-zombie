@@ -1,4 +1,7 @@
 import type {
+  NirvanaArchetype,
+  TriPrismLinkSnapshot, DualSynergyId } from '../types/game';
+import type {
   BossId,
   DefeatReason,
   DronePosition,
@@ -95,6 +98,11 @@ export interface SimEnemy {
   radius: number;
   hp: number;
   maxHp: number;
+  shieldHp: number;
+  maxShieldHp: number;
+  specialAcc: number;
+  specialCount: number;
+  frenzyBuffed: boolean;
   slowTimer: number;
   telegraphTimer: number;
   dasherState: DasherState;
@@ -104,6 +112,11 @@ export interface SimEnemy {
   bladeHitCooldown: number;
   hitPulse: number;
   isBountyElite: boolean;
+  isSwarmFodder: boolean;
+  armorBroken: boolean;
+  formationId?: number;
+  formationKind?: import('../types/game').FormationKind;
+  isFormationLeader?: boolean;
   consumed: boolean;
   bypassed: boolean;
   active: boolean;
@@ -125,6 +138,7 @@ export interface SimBarrel {
   chainScheduledAt: number | null;
   scheduledChainIndex: number;
   hitPulse: number;
+  overheat: number;
   active: boolean;
 }
 
@@ -143,9 +157,29 @@ export interface SimPrismLens {
   halfDepth: number;
   pulse: number;
   active: boolean;
+  isWingmanMirror?: boolean;
+}
+
+export interface SimNemesis {
+  id: number;
+  name: string;
+  x: number;
+  z: number;
+  targetX: number;
+  hp: number;
+  maxHp: number;
+  adaptedWeapon: WeaponId;
+  adaptExposure: number;
+  shieldBrokenTimer: number;
+  attackTimer: number;
+  dashTelegraph: number;
+  hitPulse: number;
+  active: boolean;
 }
 
 export interface SimProjectile {
+  hitWingmanMirror?: boolean;
+  hitFixedMirror?: boolean;
   id: number;
   prevX: number;
   prevZ: number;
@@ -167,6 +201,7 @@ export interface SimProjectile {
   splashDamageRatio: number;
   cryoSlowDuration: number;
   sweepStartFraction: number;
+  fodderPunches: number;
   hitIds: Set<number>;
   active: boolean;
 }
@@ -201,7 +236,7 @@ export interface SimBossPylon {
 
 export interface SimBossPart {
   id: number;
-  slot: 'left' | 'right';
+  slot: import('../types/game').BossPartSlot;
   label: string;
   prevX: number;
   prevZ: number;
@@ -212,6 +247,7 @@ export interface SimBossPart {
   hp: number;
   maxHp: number;
   hitPulse: number;
+  telegraph: number;
   destroyed: boolean;
 }
 
@@ -255,6 +291,7 @@ export interface SimJumpPad {
 }
 
 export interface SimReflector {
+  isWingmanMirror?: boolean;
   id: number;
   prevX: number;
   prevZ: number;
@@ -262,6 +299,7 @@ export interface SimReflector {
   z: number;
   vz: number;
   lean: 1 | -1;
+  angleDeg?: number;
   halfWidth: number;
   halfDepth: number;
   pulse: number;
@@ -276,6 +314,153 @@ export interface SimContractWall {
   vz: number;
   bountySide: 'left' | 'right';
   active: boolean;
+}
+
+export interface SimSkyCargo {
+  id: number;
+  prevX: number;
+  prevZ: number;
+  x: number;
+  y: number;
+  z: number;
+  vy: number;
+  vz: number;
+  halfWidth: number;
+  halfDepth: number;
+  hp: number;
+  maxHp: number;
+  state: 'hanging' | 'falling' | 'slammed';
+  slamTimer: number;
+  hitPulse: number;
+  active: boolean;
+}
+
+export interface SimMaglevTrain {
+  id: number;
+  z: number;
+  dir: 1 | -1;
+  trainX: number;
+  prevTrainX: number;
+  state: 'warning' | 'crossing';
+  elapsed: number;
+  warningDuration: number;
+  warningProgress: number;
+  sweepEmitted: boolean;
+  kills: number;
+  active: boolean;
+}
+
+export interface SimMagRail {
+  id: number;
+  x: number;
+  z: number;
+  length: number;
+  halfWidth: number;
+  polarity: 1 | -1;
+  boostEmitted: boolean;
+  active: boolean;
+}
+
+export interface SimCapacitorTower {
+  id: number;
+  prevX: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  vz: number;
+  radius: number;
+  charge: number;
+  maxCharge: number;
+  hitPulse: number;
+  discharged: boolean;
+  active: boolean;
+}
+
+export interface SimPhaseGate {
+  id: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  halfWidth: number;
+  attune: import('../types/game').PhaseGateAttune;
+  triggered: boolean;
+  active: boolean;
+}
+
+export interface SimCoreShard {
+  id: number;
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  value: number;
+  age: number;
+  active: boolean;
+}
+
+export interface SimCollapseRift {
+  id: number;
+  kind: import('../types/game').CollapseRiftKind;
+  x: number;
+  z: number;
+  length: number;
+  halfWidth: number;
+  leaped: boolean;
+  damaged: boolean;
+  active: boolean;
+}
+
+export interface SimHighSpire {
+  id: number;
+  prevX: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  elevationY: number;
+  radius: number;
+  hp: number;
+  maxHp: number;
+  shieldHp: number;
+  maxShieldHp: number;
+  chargeTimer: number;
+  chargeDuration: number;
+  hitPulse: number;
+  destroyed: boolean;
+  active: boolean;
+}
+
+export interface SimTacticalEvent {
+  id: number;
+  kind: import('../types/game').TacticalEventKind;
+  prevX: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  radius: number;
+  hp: number;
+  maxHp: number;
+  captureProgress: number;
+  timer: number;
+  hitPulse: number;
+  completed: boolean;
+  active: boolean;
+}
+
+export interface SimPantheonCoBoss {
+  entityId: number;
+  active: boolean;
+  id: BossId;
+  name: string;
+  prevX: number;
+  prevZ: number;
+  x: number;
+  z: number;
+  halfWidth: number;
+  halfDepth: number;
+  hp: number;
+  maxHp: number;
+  hitPulse: number;
+  attackTimer: number;
 }
 
 export interface SimSeekerBlade {
@@ -311,6 +496,12 @@ export interface SimBossState {
   halfDepth: number;
   hp: number;
   maxHp: number;
+  titanRank: number;
+  titanScale: number;
+  hpBars: number;
+  hasMetaPower: boolean;
+  titanHpMult: number;
+  swarmCycle: number;
   secondaryCore: SimBossSecondaryCore | null;
   shielded: boolean;
   pylons: SimBossPylon[];
@@ -333,6 +524,15 @@ export interface SimBossState {
   orbTimer: number;
   shieldSwapTimer: number;
   barrelTimer: number;
+  omegaOverdrive?: boolean;
+  omegaBeamState?: 'idle' | 'charging' | 'firing';
+  omegaBeamTimer?: number;
+  omegaBeamX?: number;
+  omegaBeamHitApplied?: boolean;
+  omegaLeftFocus?: number;
+  omegaRightFocus?: number;
+  omegaFocusHits?: number;
+  omegaExecuted?: boolean;
 }
 
 export interface EndlessRunState {
@@ -375,8 +575,39 @@ export interface SimWorld {
   auxCooldowns: Record<WeaponId, number>;
   overclockStacks: number;
   rampageStacks: number;
+  rampageKillCounter: number;
   rampageTimer: number;
+  activeLoadout: WeaponId[];
+  primaryFusion: FusionId | null;
+  activeDualSynergy: DualSynergyId | null;
+  overlimitResonance: import('../types/game').OverlimitResonanceId | null;
+  overlimitTickCounter: number;
+  isFiringRange: boolean;
+  rangePreset: import('../types/game').RangePresetId;
+  rangeReflectorAngle: number;
+  rangeForceOverlimit: boolean;
+  rangeDamageBuckets: Float64Array;
+  rangeBucketCursor: number;
+  rangePrevTotalDmg: number;
+  rangeRealizedDps: number;
+  rangeRespawnTimer: number;
+  pendingSwapWeapon: WeaponId | null;
+  reserveTroops: number;
+  triFusionTimer: number;
   gateStreak: number;
+  swarmDirectorTimer: number;
+  swarmDirectorCycle: number;
+  swarmSpatialCursor: number;
+  swarmPeakTier: number;
+  swarmBreachGrace: number;
+  nukeCharge: number;
+  nukeDropTimer: number;
+  nukeBlastTimer: number;
+  nukeTargetX: number;
+  nukeTargetZ: number;
+  isNukeDetonating: boolean;
+  playerHasSteered: boolean;
+  afkIdleTimer: number;
   fireCooldown: number;
   volleyIndex: number;
 
@@ -409,6 +640,64 @@ export interface SimWorld {
   reflectors: SimReflector[];
   contractWalls: SimContractWall[];
   doomOrbs: SimDoomOrb[];
+  skyCargos: SimSkyCargo[];
+  maglevTrains: SimMaglevTrain[];
+  magRails: SimMagRail[];
+  capTowers: SimCapacitorTower[];
+  phaseGates: SimPhaseGate[];
+  coreShards: SimCoreShard[];
+  weatherState: import('../types/game').WeatherKind;
+  onMagRail: boolean;
+  magBoostTimer: number;
+  phaseSyncTimer: number;
+  collectedShards: number;
+  collapseRifts: SimCollapseRift[];
+  highSpires: SimHighSpire[];
+  tacticalEvents: SimTacticalEvent[];
+  coreReactorTier: import('../types/game').CoreReactorTier;
+  reactorPrismRingTimer: number;
+  reactorWallActive: boolean;
+  reactorWallZ: number;
+  reactorDropUpgrades: number;
+  pantheonStage: 1 | 2 | 3 | 4;
+  pantheonClears: number;
+  pantheonArenaInitialized: boolean;
+  pantheonCoBoss: SimPantheonCoBoss | null;
+  abyssalHeat: number;
+  lastAbyssVanguardStage: number;
+  bossHarmonicShield: boolean;
+  bossApexMove: import('../types/game').AbyssalApexMoveKind | null;
+  bossApexTimer: number;
+  bossApexActiveTimer: number;
+  bossApexSafeX: number;
+  wingmanId: import('../types/game').WingmanId | null;
+  wingmanFormation: import('../types/game').WingmanFormation;
+  wingmanOrbitAngle: number;
+  wingmanFireTimer: number;
+  wingmanPulseTimer: number;
+  wingmanLeftPos: { x: number; y: number; z: number };
+  wingmanRightPos: { x: number; y: number; z: number };
+  wingmanMirrorBounces?: number;
+  nemesis: SimNemesis | null;
+  nemesisSpawned: boolean;
+  nirvanaCharge: number;
+  nirvanaActiveTimer: number;
+  nirvanaArchetype: NirvanaArchetype | null;
+  triPrismLatticeTimer: number;
+  triPrismTickTimer: number;
+  triPrismLinks: TriPrismLinkSnapshot[];
+  lastWingmanMirrorTick: number;
+  lastFixedMirrorTick: number;
+  v23RefractedDmg: number;
+  v23LatticeDmg: number;
+  v23NirvanaDmg: number;
+  lastVertStage: number;
+  lastFormationStage: number;
+  lastDropEventStage: number;
+  lastTacStage: number;
+  spectacleIdSeq: number;
+  lastCargoStage: number;
+  lastMaglevStage: number;
 
   gateRows: SimGateRow[];
   gates: SimGate[];
@@ -581,7 +870,7 @@ export function createEntityPools(): Pick<
   );
 
   const enemyPool = new EntityPool<SimEnemy>(
-    320,
+    1280,
     () => ({
       id: 0,
       kind: 'crawler',
@@ -592,6 +881,11 @@ export function createEntityPools(): Pick<
       radius: 0.48,
       hp: 1,
       maxHp: 1,
+      shieldHp: 0,
+      maxShieldHp: 0,
+      specialAcc: 0,
+      specialCount: 0,
+      frenzyBuffed: false,
       slowTimer: 0,
       telegraphTimer: 0,
       dasherState: 'APPROACH',
@@ -601,6 +895,8 @@ export function createEntityPools(): Pick<
       bladeHitCooldown: 0,
       hitPulse: 0,
       isBountyElite: false,
+      isSwarmFodder: false,
+      armorBroken: false,
       consumed: false,
       bypassed: false,
       active: false,
@@ -615,6 +911,11 @@ export function createEntityPools(): Pick<
       e.radius = 0.48;
       e.hp = 1;
       e.maxHp = 1;
+      e.shieldHp = 0;
+      e.maxShieldHp = 0;
+      e.specialAcc = 0;
+      e.specialCount = 0;
+      e.frenzyBuffed = false;
       e.slowTimer = 0;
       e.telegraphTimer = 0;
       e.dasherState = 'APPROACH';
@@ -624,6 +925,11 @@ export function createEntityPools(): Pick<
       e.bladeHitCooldown = 0;
       e.hitPulse = 0;
       e.isBountyElite = false;
+      e.isSwarmFodder = false;
+      e.armorBroken = false;
+      e.formationId = undefined;
+      e.formationKind = undefined;
+      e.isFormationLeader = false;
       e.consumed = false;
       e.bypassed = false;
       e.active = false;
@@ -631,7 +937,7 @@ export function createEntityPools(): Pick<
   );
 
   const barrelPool = new EntityPool<SimBarrel>(
-    32,
+    40,
     () => ({
       id: 0,
       prevX: 0,
@@ -648,6 +954,7 @@ export function createEntityPools(): Pick<
       chainScheduledAt: null,
       scheduledChainIndex: 1,
       hitPulse: 0,
+      overheat: 0,
       active: false,
     }),
     (b) => {
@@ -666,6 +973,7 @@ export function createEntityPools(): Pick<
       b.chainScheduledAt = null;
       b.scheduledChainIndex = 1;
       b.hitPulse = 0;
+      b.overheat = 0;
       b.active = false;
     },
   );
@@ -707,7 +1015,7 @@ export function createEntityPools(): Pick<
   );
 
   const projectilePool = new EntityPool<SimProjectile>(
-    1024,
+    2048,
     () => ({
       id: 0,
       prevX: 0,
@@ -730,6 +1038,7 @@ export function createEntityPools(): Pick<
       splashDamageRatio: 0,
       cryoSlowDuration: 0,
       sweepStartFraction: 0,
+      fodderPunches: 0,
       hitIds: new Set<number>(),
       active: false,
     }),
@@ -746,6 +1055,8 @@ export function createEntityPools(): Pick<
       p.damage = 1;
       p.remainingPierce = 0;
       p.amplified = false;
+      p.hitWingmanMirror = false;
+      p.hitFixedMirror = false;
       p.powerScale = 1;
       p.hostile = false;
       p.hostileLoss = 0;
@@ -755,6 +1066,7 @@ export function createEntityPools(): Pick<
       p.splashDamageRatio = 0;
       p.cryoSlowDuration = 0;
       p.sweepStartFraction = 0;
+      p.fodderPunches = 0;
       p.hitIds.clear();
       p.active = false;
     },

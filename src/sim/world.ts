@@ -1,3 +1,4 @@
+import { ENEMY_CONFIGS } from '../config/enemies';
 import type {
   RunModifiers,
   BarrelSnapshot,
@@ -35,6 +36,7 @@ import {
   resolveJumpPadCrossings,
   stepCompetitionEntitiesMotion,
   stepJumpArc,
+  stepMidRunSpectacles,
   stepSingularities,
   syncActiveFusions,
 } from './competition';
@@ -52,7 +54,7 @@ import {
   stepOrbitalBlades,
 } from './enemies';
 import { createEntityPools, type SimWorld } from './entities';
-import { resolveGateRowCrossings } from './gates';
+import { resolveGateRowCrossings, spawnGateRow } from './gates';
 import {
   clamp,
   clampSquadX,
@@ -62,10 +64,37 @@ import {
   computeTrueSquadDps,
   normalizeZero,
 } from './math';
-import { computeMirrorFlags, spawnReadyRunwayEncounters, stepTrackAndSpawner } from './spawner';
+import { computeDynamicSwarmProfile, computeMirrorFlags, spawnReadyRunwayEncounters, stepTrackAndSpawner } from './spawner';
 import { getEffectiveOverdriveDuration, tryStartManualOverdrive } from './resonance';
 import { tryTriggerAegisPulse } from './aegis';
-import { stepProjectilesAndAutoFire } from './weapons';
+import { NUKE_DROP_DURATION, NUKE_TARGET_Z, stepNukeStrike, tryTriggerNukeStrike } from './nuke';
+import { computeAuthoritativeEffectiveDps, stepProjectilesAndAutoFire, trySwapLeadWeapon } from './weapons';
+import { computeRangeFrontCounterMult, initFiringRangeWorld, stepFiringRangeWorld } from './firingRange';
+import { checkAndStepBossOmegaOverdrive, stepCoreShards, stepV20SetPieces } from './v20Mechanics';
+import {
+  applyAimAssistNudge,
+  buildPantheonCoBossSnapshot,
+  generatePantheonStageScript,
+  PANTHEON_STAGE_META,
+  stepPantheonCoBoss,
+  stepTacticalDropEvents,
+  stepTacticalFormations,
+  stepV21Verticality,
+  syncCoreReactorAwakening,
+} from './v21Mechanics';
+import {
+  buildWingmanSnapshot,
+  computeAbyssalHeatTier,
+  cycleWingmanFormation,
+  stepV22WingmenAndAbyss,
+} from './v22Mechanics';
+import {
+  buildExpeditionNodeScript,
+  buildNemesisSnapshot,
+  stepV23Systems,
+  tryTriggerNirvanaBurst,
+} from './v23Mechanics';
+import { compileCustomBlueprint } from './trackEditor';
 
 export function reconcileFormationAndDps(world: SimWorld): void {
   world.tiers = computeTierBreakdown(world.squadCount);
@@ -100,8 +129,19 @@ function releaseAllActivePools(world: SimWorld): void {
   world.reflectors.length = 0;
   world.contractWalls.length = 0;
   world.doomOrbs.length = 0;
+  world.skyCargos.length = 0;
+  world.maglevTrains.length = 0;
+  world.magRails.length = 0;
+  world.capTowers.length = 0;
+  world.phaseGates.length = 0;
+  world.coreShards.length = 0;
+  world.collapseRifts.length = 0;
+  world.highSpires.length = 0;
+  world.tacticalEvents.length = 0;
+  world.pantheonCoBoss = null;
   world.seekerBlades.length = 0;
   world.boss = null;
+  world.nemesis = null;
 }
 
 function clearCoreRunFields(world: SimWorld, startSquad: number): void {
@@ -120,6 +160,54 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
   world.squadAirY = 0;
   world.jumpTimer = 0;
   world.ricochetsThisTick = 0;
+  world.spectacleIdSeq = 0;
+  world.lastCargoStage = 0;
+  world.lastMaglevStage = 0;
+  world.lastTacStage = 0;
+  world.lastVertStage = 0;
+  world.lastFormationStage = 0;
+  world.lastDropEventStage = 0;
+  world.weatherState = 'none';
+  world.onMagRail = false;
+  world.magBoostTimer = 0;
+  world.phaseSyncTimer = 0;
+  world.collectedShards = 0;
+  world.coreReactorTier = 0;
+  world.reactorPrismRingTimer = 0;
+  world.reactorWallActive = false;
+  world.reactorWallZ = 0;
+  world.reactorDropUpgrades = 0;
+  world.pantheonStage = 1;
+  world.pantheonClears = 0;
+  world.pantheonArenaInitialized = false;
+  world.pantheonCoBoss = null;
+  world.abyssalHeat = world.mods.fairTrial ? 0 : computeAbyssalHeatTier(world.mods.abyssalPacts);
+  world.lastAbyssVanguardStage = 0;
+  world.bossHarmonicShield = false;
+  world.bossApexMove = null;
+  world.bossApexTimer = 4.2;
+  world.bossApexActiveTimer = 0;
+  world.bossApexSafeX = 0;
+  world.wingmanId = world.mods.fairTrial ? null : (world.mods.wingmanId ?? null);
+  world.wingmanFormation = world.mods.wingmanFormation ?? 'volley_sync';
+  world.wingmanOrbitAngle = 0;
+  world.wingmanFireTimer = 0.24;
+  world.wingmanPulseTimer = 0.2;
+  world.wingmanLeftPos = { x: -1.5, y: 1.25, z: PLAYER_Z - 0.5 };
+  world.wingmanRightPos = { x: 1.5, y: 1.25, z: PLAYER_Z - 0.5 };
+  world.nemesis = null;
+  world.nemesisSpawned = false;
+  world.nirvanaCharge = world.mods.expeditionRelics?.includes('relic_nirvana_core') ? 0.5 : 0;
+  world.nirvanaActiveTimer = 0;
+  world.nirvanaArchetype = null;
+  world.triPrismLatticeTimer = 0;
+  world.triPrismTickTimer = 0.12;
+  world.triPrismLinks = [];
+  world.lastWingmanMirrorTick = -999;
+  world.lastFixedMirrorTick = -999;
+  world.v23RefractedDmg = 0;
+  world.v23LatticeDmg = 0;
+  world.v23NirvanaDmg = 0;
   world.activeFusions = [];
   world.damageBySource = {
     pulse: 0,
@@ -127,13 +215,15 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
     rail: 0,
     plasma: 0,
     cryo: 0,
+    blades: 0,
     fusions: 0,
     deflect: 0,
     explosives: 0,
   };
   world.squadCount = startSquad;
 
-  world.weapon = 'pulse';
+  const startW = !world.mods.fairTrial && world.mods.starterWeapon ? world.mods.starterWeapon : 'pulse';
+  world.weapon = startW;
   world.weaponLevel = 1;
   world.learnedWeaponLevels = {
     pulse: 1,
@@ -142,15 +232,47 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
     plasma: 0,
     cryo: 0,
   };
+  world.learnedWeaponLevels[startW] = 1;
   world.auxCooldowns = { pulse: 0.18, scatter: 0.24, rail: 0.3, plasma: 0.36, cryo: 0.22 };
   world.overclockStacks = 0;
   world.rampageStacks = 0;
+  world.rampageKillCounter = 0;
   world.rampageTimer = 0;
+  world.activeLoadout = startW !== 'pulse' ? [startW] : [];
+  world.primaryFusion = null;
+  world.activeDualSynergy = null;
+  world.overlimitResonance = null;
+  world.overlimitTickCounter = 0;
+  world.isFiringRange = Boolean(world.mods.firingRange);
+  world.rangePreset = 'armored';
+  world.rangeReflectorAngle = 36;
+  world.rangeForceOverlimit = true;
+  world.rangeDamageBuckets = new Float64Array(180);
+  world.rangeBucketCursor = 0;
+  world.rangePrevTotalDmg = 0;
+  world.rangeRealizedDps = 0;
+  world.rangeRespawnTimer = 0;
+  world.pendingSwapWeapon = null;
+  world.reserveTroops = 0;
+  world.triFusionTimer = 0;
   world.gateStreak = 0;
+  world.swarmDirectorTimer = 0.18;
+  world.swarmDirectorCycle = 0;
+  world.swarmSpatialCursor = 0;
+  world.swarmPeakTier = 1;
+  world.swarmBreachGrace = 0;
+  world.nukeCharge = 1.0;
+  world.nukeDropTimer = 0;
+  world.nukeBlastTimer = 0;
+  world.nukeTargetX = 0;
+  world.nukeTargetZ = NUKE_TARGET_Z;
+  world.isNukeDetonating = false;
+  world.playerHasSteered = false;
+  world.afkIdleTimer = 0;
   world.fireCooldown = 0;
   world.volleyIndex = 0;
 
-  world.bladesCount = 0;
+  world.bladesCount = !world.mods.fairTrial && world.mods.starterBlade ? 1 : 0;
   world.bladesAngle = 0;
   world.masteryCount = 0;
 
@@ -217,8 +339,39 @@ export function createSimWorld(): SimWorld {
     auxCooldowns: { pulse: 0.18, scatter: 0.24, rail: 0.3, plasma: 0.36, cryo: 0.22 },
     overclockStacks: 0,
     rampageStacks: 0,
+    rampageKillCounter: 0,
     rampageTimer: 0,
+    activeLoadout: [],
+    primaryFusion: null,
+    activeDualSynergy: null,
+    overlimitResonance: null,
+    overlimitTickCounter: 0,
+    isFiringRange: false,
+    rangePreset: 'armored',
+    rangeReflectorAngle: 36,
+    rangeForceOverlimit: true,
+    rangeDamageBuckets: new Float64Array(180),
+    rangeBucketCursor: 0,
+    rangePrevTotalDmg: 0,
+    rangeRealizedDps: 0,
+    rangeRespawnTimer: 0,
+    pendingSwapWeapon: null,
+    reserveTroops: 0,
+    triFusionTimer: 0,
     gateStreak: 0,
+    swarmDirectorTimer: 0.18,
+    swarmDirectorCycle: 0,
+    swarmSpatialCursor: 0,
+    swarmPeakTier: 1,
+    swarmBreachGrace: 0,
+    nukeCharge: 1.0,
+    nukeDropTimer: 0,
+    nukeBlastTimer: 0,
+    nukeTargetX: 0,
+    nukeTargetZ: NUKE_TARGET_Z,
+    isNukeDetonating: false,
+    playerHasSteered: false,
+    afkIdleTimer: 0,
     fireCooldown: 0,
     volleyIndex: 0,
 
@@ -252,6 +405,7 @@ export function createSimWorld(): SimWorld {
     activeFusions: [],
     seekerBlades: [],
     damageBySource: {
+      blades: 0,
       pulse: 0,
       scatter: 0,
       rail: 0,
@@ -266,6 +420,63 @@ export function createSimWorld(): SimWorld {
     reflectors: [],
     contractWalls: [],
     doomOrbs: [],
+    skyCargos: [],
+    maglevTrains: [],
+    magRails: [],
+    capTowers: [],
+    phaseGates: [],
+    coreShards: [],
+    weatherState: 'none',
+    onMagRail: false,
+    magBoostTimer: 0,
+    phaseSyncTimer: 0,
+    collectedShards: 0,
+    collapseRifts: [],
+    highSpires: [],
+    tacticalEvents: [],
+    coreReactorTier: 0,
+    reactorPrismRingTimer: 0,
+    reactorWallActive: false,
+    reactorWallZ: 0,
+    reactorDropUpgrades: 0,
+    pantheonStage: 1,
+    pantheonClears: 0,
+    pantheonArenaInitialized: false,
+    pantheonCoBoss: null,
+    abyssalHeat: 0,
+    lastAbyssVanguardStage: 0,
+    bossHarmonicShield: false,
+    bossApexMove: null,
+    bossApexTimer: 4.2,
+    bossApexActiveTimer: 0,
+    bossApexSafeX: 0,
+    wingmanId: null,
+    wingmanFormation: 'volley_sync',
+    wingmanOrbitAngle: 0,
+    wingmanFireTimer: 0.24,
+    wingmanPulseTimer: 0.2,
+    wingmanLeftPos: { x: -1.5, y: 1.25, z: PLAYER_Z - 0.5 },
+    wingmanRightPos: { x: 1.5, y: 1.25, z: PLAYER_Z - 0.5 },
+    nemesis: null,
+    nemesisSpawned: false,
+    nirvanaCharge: 0,
+    nirvanaActiveTimer: 0,
+    nirvanaArchetype: null,
+    triPrismLatticeTimer: 0,
+    triPrismTickTimer: 0.12,
+    triPrismLinks: [],
+    lastWingmanMirrorTick: -999,
+    lastFixedMirrorTick: -999,
+    v23RefractedDmg: 0,
+    v23LatticeDmg: 0,
+    v23NirvanaDmg: 0,
+    lastVertStage: 0,
+    lastFormationStage: 0,
+    lastDropEventStage: 0,
+    lastTacStage: 0,
+    spectacleIdSeq: 0,
+    lastCargoStage: 0,
+    lastMaglevStage: 0,
 
     gateRows: [],
     gates: [],
@@ -306,7 +517,7 @@ export function resetSimWorldForSector(
       resonanceMult: Math.max(1, mods.resonanceMult ?? 1),
       manualOverdrive: mods.manualOverdrive === true,
       layoutSeed: Math.max(0, Math.floor(mods.layoutSeed ?? 0)),
-      bossHpMult: Math.max(1, mods.bossHpMult ?? 1),
+      bossHpMult: Math.max(1, (mods.bossHpMult ?? 1) * (mods.fairTrial ? 1 : 1 + computeAbyssalHeatTier(mods.abyssalPacts) * 0.08)),
       endless: mods.endless === true,
       manualEndlessDraft: mods.manualEndlessDraft === true,
       aegisCooldownSec: mods.aegisCooldownSec,
@@ -315,32 +526,74 @@ export function resetSimWorldForSector(
       critChance: mods.critChance,
       blitz: mods.blitz === true,
       mutators: mods.mutators ? [...mods.mutators] : undefined,
+      fairTrial: mods.fairTrial === true,
+      starterWeapon: mods.starterWeapon,
+      starterBlade: mods.starterBlade === true,
+      specRicochet: mods.fairTrial ? 0 : Math.max(0, Math.min(3, Math.floor(mods.specRicochet ?? 0))),
+      specVortex: mods.fairTrial ? 0 : Math.max(0, Math.min(3, Math.floor(mods.specVortex ?? 0))),
+      specShatter: mods.fairTrial ? 0 : Math.max(0, Math.min(3, Math.floor(mods.specShatter ?? 0))),
+      equippedChips: mods.fairTrial || !mods.equippedChips ? [] : mods.equippedChips.slice(0, 3),
+      firingRange: mods.firingRange === true,
+      pantheon: mods.pantheon === true,
+      aimAssist: mods.fairTrial ? false : mods.aimAssist === true,
+      abyssalPacts: mods.fairTrial || !mods.abyssalPacts ? [] : [...mods.abyssalPacts],
+      wingmanId: mods.fairTrial ? null : (mods.wingmanId ?? (mods as { equippedWingman?: typeof mods.wingmanId }).equippedWingman ?? null),
+      wingmanFormation: mods.wingmanFormation ?? 'volley_sync',
+      expeditionNode: mods.fairTrial ? undefined : mods.expeditionNode,
+      expeditionNodeKind: mods.fairTrial ? undefined : (mods.expeditionNode?.kind ?? mods.expeditionNodeKind),
+      expeditionRelics: mods.fairTrial || !mods.expeditionRelics ? undefined : [...mods.expeditionRelics],
+      forceNemesisAmbush: mods.fairTrial ? false : mods.forceNemesisAmbush,
+      customBlueprint: mods.fairTrial ? undefined : mods.customBlueprint,
     };
+  } else {
+    world.mods = { bonusSquad: 0, damageMult: 1, resonanceMult: 1 };
   }
-  const endless = world.mods.endless === true;
-  const blitz = world.mods.blitz === true && !endless;
+  const pantheon = world.mods.pantheon === true;
+  const endless = world.mods.endless === true && !pantheon;
+  const blitz = world.mods.blitz === true && !endless && !pantheon;
   world.endless = endless ? { wave: 1, bossesDefeated: 0, completedDistance: 0, upgrades: {}, offers: [] } : null;
-  const sectorCfg = endless
-    ? generateEndlessStage(world.mods.layoutSeed ?? 1, 1)
-    : blitz
-      ? generateBlitzScript(world.mods.layoutSeed || 1)
-      : getSectorScript(sector, world.mods.layoutSeed ?? 0);
+  let compiledCustom: ReturnType<typeof compileCustomBlueprint> | null = null;
+  if (world.mods.customBlueprint && !world.mods.fairTrial) {
+    compiledCustom = compileCustomBlueprint(world.mods.customBlueprint);
+    world.mods.customTrackProps = compiledCustom.runtimeProps.map((p) => ({ ...p, spawned: false }));
+    if (world.mods.customBlueprint.forceNemesis) world.mods.forceNemesisAmbush = true;
+    if (world.mods.customBlueprint.abyssalPacts?.length) {
+      world.mods.abyssalPacts = [...world.mods.customBlueprint.abyssalPacts];
+    }
+  }
+  const sectorCfg = compiledCustom
+    ? compiledCustom.script
+    : world.mods.expeditionNode && !world.mods.fairTrial
+      ? buildExpeditionNodeScript(world.mods.expeditionNode, world.mods.layoutSeed || 202623, 24 + world.mods.bonusSquad)
+      : pantheon
+        ? generatePantheonStageScript(world.mods.layoutSeed || 202621, 1)
+        : endless
+          ? generateEndlessStage(world.mods.layoutSeed ?? 1, 1)
+          : blitz
+            ? generateBlitzScript(world.mods.layoutSeed || 1)
+            : getSectorScript(sector, world.mods.layoutSeed ?? 0);
   world.script = sectorCfg;
   world.mirrorFlags =
     endless || blitz
       ? []
       : computeMirrorFlags(sectorCfg.encounters, world.mods.layoutSeed ?? 0, sector);
   clearCoreRunFields(world, sectorCfg.startSquad + world.mods.bonusSquad);
-  if (blitz) {
-    world.weapon = 'pulse';
+  if (blitz || pantheon) {
+    const bw = !world.mods.fairTrial && world.mods.starterWeapon ? world.mods.starterWeapon : 'pulse';
+    world.weapon = bw;
     world.weaponLevel = 2;
-    world.learnedWeaponLevels.pulse = 2;
+    world.learnedWeaponLevels[bw] = 2;
+    if (bw !== 'pulse') world.activeLoadout = [bw];
     world.stats.vaultsCracked = 1;
     syncActiveFusions(world);
   }
   world.phase = 'PLAYING';
-  world.currentScrollSpeed = sectorCfg.scrollSpeed;
-  spawnReadyRunwayEncounters(world);
+  if (world.mods.firingRange) {
+    initFiringRangeWorld(world);
+  } else {
+    world.currentScrollSpeed = sectorCfg.scrollSpeed;
+    spawnReadyRunwayEncounters(world);
+  }
   reconcileFormationAndDps(world);
 }
 
@@ -380,6 +633,15 @@ function stepWorldEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
       barrel.prevZ = barrel.z;
       const vz = barrel.vz !== null ? barrel.vz : world.currentScrollSpeed;
       barrel.z += vz * FIXED_DT;
+      // Round 4 (`barrel_carnival`): Volatile Overheat Barrels glow & auto-ignite if allowed to drift to point-blank!
+      if (hasMutator(world, 'barrel_carnival') && !barrel.detonated && barrel.z >= PLAYER_Z - 7.6 && barrel.z <= PLAYER_Z - 1.2) {
+        barrel.overheat = clamp((barrel.z - (PLAYER_Z - 7.6)) / 5.8, 0, 1);
+        if (barrel.overheat >= 0.99 && barrel.chainTimer === null) {
+          barrel.chainTimer = 0.02;
+          barrel.chainScheduledAt = -1;
+          barrel.scheduledChainIndex = 1;
+        }
+      }
     }
   }
 
@@ -390,13 +652,21 @@ function stepWorldEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
       lens.prevX = lens.x;
       lens.prevZ = lens.z;
       lens.age += FIXED_DT;
-      const vz = lens.vz !== null ? lens.vz : world.currentScrollSpeed;
-      lens.z += vz * FIXED_DT;
-      if (lens.driftAmp !== 0 && lens.driftFreq !== 0) {
-        const rawX = lens.baseX + lens.driftAmp * Math.sin(lens.age * lens.driftFreq);
+      if (lens.driftFreq === -999) {
         lens.x = normalizeZero(
-          clamp(rawX, -TRACK_HALF_WIDTH + lens.halfWidth, TRACK_HALF_WIDTH - lens.halfWidth),
+          clamp(world.squadX, -TRACK_HALF_WIDTH + lens.halfWidth, TRACK_HALF_WIDTH - lens.halfWidth),
         );
+        lens.z = PLAYER_Z - 4.2;
+        if (lens.age >= 3.8) lens.active = false;
+      } else {
+        const vz = lens.vz !== null ? lens.vz : world.currentScrollSpeed;
+        lens.z += vz * FIXED_DT;
+        if (lens.driftAmp !== 0 && lens.driftFreq !== 0) {
+          const rawX = lens.baseX + lens.driftAmp * Math.sin(lens.age * lens.driftFreq);
+          lens.x = normalizeZero(
+            clamp(rawX, -TRACK_HALF_WIDTH + lens.halfWidth, TRACK_HALF_WIDTH - lens.halfWidth),
+          );
+        }
       }
     }
   }
@@ -407,6 +677,12 @@ function stepWorldEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
 }
 
 function cullExpiredEntities(world: SimWorld): void {
+  for (let i = world.reflectors.length - 1; i >= 0; i--) {
+    const rf = world.reflectors[i]!;
+    if (!rf.isWingmanMirror && (!rf.active || rf.z > DESPAWN_Z)) {
+      world.reflectors.splice(i, 1);
+    }
+  }
   for (let i = world.gateRows.length - 1; i >= 0; i--) {
     const row = world.gateRows[i];
     if (!row || !row.active || row.z > DESPAWN_Z) {
@@ -539,6 +815,9 @@ function decayTimersAndPulses(world: SimWorld): void {
     }
   }
 
+  if (world.swarmBreachGrace > 0) {
+    world.swarmBreachGrace = snapTimerZero(world.swarmBreachGrace - FIXED_DT);
+  }
   if (world.boss && world.boss.hitPulse > 0) {
     world.boss.hitPulse = snapTimerZero(world.boss.hitPulse - HIT_PULSE_DECAY_PER_SEC * FIXED_DT);
   }
@@ -557,9 +836,14 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
 
   // Step 1: Input & Squad X
   world.prevSquadX = world.squadX;
+  if (Math.abs(input.dragDeltaX) > 1e-4 || input.keyAxisX !== 0) {
+    world.playerHasSteered = true;
+  }
+  const railSpeedMult = world.onMagRail ? 1.55 : 1.0;
   const rawSquadX =
-    world.squadX + input.dragDeltaX + input.keyAxisX * KEYBOARD_MOVE_SPEED * FIXED_DT;
+    world.squadX + input.dragDeltaX * railSpeedMult + input.keyAxisX * KEYBOARD_MOVE_SPEED * railSpeedMult * FIXED_DT;
   world.squadX = clampSquadX(rawSquadX, world.formationRadius);
+  applyAimAssistNudge(world, Math.abs(input.dragDeltaX) > 1e-4 || input.keyAxisX !== 0);
   applyContractWallClamp(world);
   if (input.overdrive === true) {
     tryStartManualOverdrive(world, events);
@@ -567,18 +851,90 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
   if (input.aegisPulse === true) {
     tryTriggerAegisPulse(world, events, false);
   }
+  if (input.nukeStrike === true) {
+    tryTriggerNukeStrike(world, events);
+  }
+  if (input.swapWeapon === true) {
+    trySwapLeadWeapon(world, events);
+  }
+  if (input.cycleWingman === true) {
+    cycleWingmanFormation(world, events);
+  }
+  if (input.nirvanaBurst === true) {
+    tryTriggerNirvanaBurst(world, events);
+  }
 
-  // Step 2: Track & Spawner
-  stepTrackAndSpawner(world, events);
+  // Round 1: Endless Wave 2+ Orbital Anti-AFK Lockout — punishes pure 0-movement AFK parking while never touching active players!
+  if (world.endless && world.endless.wave >= 2) {
+    const moved =
+      Math.abs(world.squadX - world.prevSquadX) > 0.006 ||
+      input.overdrive === true ||
+      input.aegisPulse === true ||
+      input.nukeStrike === true ||
+      input.swapWeapon === true;
+    if (moved) {
+      world.afkIdleTimer = 0;
+    } else {
+      world.afkIdleTimer += FIXED_DT;
+      if (world.afkIdleTimer >= 5.2) {
+        world.afkIdleTimer = 1.6;
+        events.push({ type: 'AFK_LOCK_STRIKE', x: world.squadX, z: PLAYER_Z - 14 });
+        if (world.boss && world.boss.active) {
+          world.boss.hazardZones.push({
+            id: world.nextEntityId++,
+            x: world.squadX,
+            z: -6.0,
+            halfWidth: 1.85,
+            depth: 28.0,
+            warningProgress: 0.72,
+            firing: false,
+            warningDuration: 1.25,
+            elapsed: 0.9,
+            fireDuration: 0.35,
+            strikeLoss: 10,
+            damageApplied: false,
+          });
+        } else {
+          spawnGateRow(world, {
+            layout: 'standalone',
+            z: PLAYER_Z - 15.0,
+            vz: world.currentScrollSpeed,
+            single: { x: world.squadX, halfWidth: 2.2, op: 'div', value: 3, mutable: false },
+          });
+        }
+      }
+    }
+  }
+
+  // Step 2: Track, Spawner & Tactical Nuke Descent/Detonation
+  if (!world.isFiringRange) stepTrackAndSpawner(world, events);
+  stepNukeStrike(world, events);
 
   // Step 3: Projectiles, Auto-Fire, Orbital/Seeker Blades & Fusion Singularities
   stepProjectilesAndAutoFire(world, events);
   stepOrbitalBlades(world, events);
+  if (world.triFusionTimer > 0) {
+    const nextTri = world.triFusionTimer - FIXED_DT;
+    world.triFusionTimer = nextTri <= 1e-9 ? 0 : nextTri;
+    if (world.triFusionTimer === 0) {
+      syncActiveFusions(world);
+    }
+  }
   stepSingularities(world, events);
 
   // Step 4: World Entities Z, Set-Pieces, Jump Arc & Enemy / Boss AI
   stepWorldEntitiesMotion(world, events);
   stepCompetitionEntitiesMotion(world, events);
+  if (!world.isFiringRange) stepMidRunSpectacles(world, events);
+  stepV20SetPieces(world, events);
+  stepV21Verticality(world, events);
+  stepTacticalFormations(world, events);
+  stepTacticalDropEvents(world, events);
+  stepPantheonCoBoss(world, events);
+  checkAndStepBossOmegaOverdrive(world, events);
+  stepCoreShards(world, events);
+  stepV22WingmenAndAbyss(world, events);
+  stepV23Systems(world, events);
   stepJumpArc(world, events);
 
   // Step 5: Swept Projectile Collisions (Lenses, Enemies, Shootable Gates, Vaults, Barrels, Boss)
@@ -588,7 +944,7 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
   stepChainExplosions(world, events, applyBarrelBlastToBoss);
 
   // Step 7: Boss Victory Check (locks VICTORY before Step 8/9 attrition!)
-  if (checkBossVictory(world, events)) {
+  if (!world.isFiringRange && checkBossVictory(world, events)) {
     cullExpiredEntities(world);
     reconcileFormationAndDps(world);
     return events;
@@ -614,7 +970,12 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
     return events;
   }
 
-  // Step 10: Formation, True DPS, Culling & Timers
+  // Step 10: Formation, True DPS, Culling & Timers (+ Firing Range Telemetry)
+  if (world.isFiringRange) {
+    stepFiringRangeWorld(world, events);
+  }
+  syncActiveFusions(world, events);
+  syncCoreReactorAwakening(world, events);
   decayTimersAndPulses(world);
   cullExpiredEntities(world);
   reconcileFormationAndDps(world);
@@ -680,6 +1041,7 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
     enemies.push({
       id: e.id,
       kind: e.kind,
+      tier: ENEMY_CONFIGS[e.kind].tier,
       x: e.x,
       z: e.z,
       radius: e.radius,
@@ -690,6 +1052,10 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       linkedGateId: e.linkedGateId,
       hitPulse: e.hitPulse,
       ...(e.isBountyElite ? { isBountyElite: true } : {}),
+      ...(e.maxShieldHp > 0 && e.shieldHp > 0 ? { shieldRatio: e.shieldHp / e.maxShieldHp } : {}),
+      ...(e.frenzyBuffed ? { frenzyBuffed: true } : {}),
+      ...(e.armorBroken ? { armorBroken: true } : {}),
+      ...(e.formationId ? { formationId: e.formationId, formationKind: e.formationKind, isFormationLeader: Boolean(e.isFormationLeader) } : {}),
     });
   }
 
@@ -707,6 +1073,7 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       displayHp: b.displayHp,
       detonated: b.detonated,
       hitPulse: b.hitPulse,
+      ...(b.overheat > 0 ? { overheat: b.overheat } : {}),
     });
   }
 
@@ -770,6 +1137,9 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       z: b.z,
       hp: b.hp,
       maxHp: b.maxHp,
+      titanRank: b.titanRank,
+      titanScale: b.titanScale,
+      hpBars: b.hpBars,
       secondaryCore: b.secondaryCore
         ? {
             x: b.secondaryCore.x,
@@ -788,6 +1158,7 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
         hp: pt.hp,
         maxHp: pt.maxHp,
         hitPulse: pt.hitPulse,
+        telegraph: pt.telegraph,
         destroyed: pt.destroyed,
       })),
       breakTimer: b.breakTimer,
@@ -795,6 +1166,29 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       hitPulse: b.hitPulse,
       introProgress: b.introProgress,
       enrage: b.enrage,
+      ...(world.bossHarmonicShield ? { harmonicShield: true } : {}),
+      ...(world.bossApexActiveTimer > 0 && world.bossApexMove
+        ? {
+            apexMoveKind: world.bossApexMove,
+                abyssalMutation: world.bossApexMove,
+            apexMoveTimer: world.bossApexActiveTimer,
+            apexSafeX: world.bossApexSafeX,
+          }
+        : {}),
+      ...(b.omegaOverdrive
+        ? {
+            omegaOverdrive: true,
+            omegaBeamState: b.omegaBeamState ?? 'idle',
+            omegaBeamX: b.omegaBeamX ?? 0,
+            omegaBeamProgress:
+              b.omegaBeamState === 'charging'
+                ? clamp(1 - (b.omegaBeamTimer ?? 0) / 1.45, 0, 1)
+                : b.omegaBeamState === 'firing'
+                  ? 1
+                  : 0,
+            omegaExecuted: Boolean(b.omegaExecuted),
+          }
+        : {}),
     };
   }
 
@@ -834,7 +1228,31 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
     aegisTimer: world.aegisTimer,
     aegisCooldown: world.aegisCooldown,
     aegisMaxCooldown: world.aegisMaxCooldown,
+    nukeCharge: world.nukeCharge,
+    nukeDropTimer: world.nukeDropTimer,
+    nukeDropDuration: NUKE_DROP_DURATION,
+    nukeBlastTimer: world.nukeBlastTimer,
+    nukeTargetX: world.nukeTargetX,
+    nukeTargetZ: world.nukeTargetZ,
     trueSquadDps: world.trueSquadDps,
+    effectiveSquadDps: computeAuthoritativeEffectiveDps(world, true),
+    activeLoadout: [...world.activeLoadout],
+    activeDualSynergy: world.activeDualSynergy,
+    overlimitResonance: world.overlimitResonance,
+    ...(world.isFiringRange
+      ? {
+          isFiringRange: true,
+          rangeRealizedDps: world.rangeRealizedDps,
+          rangeCounterMult: computeRangeFrontCounterMult(world),
+          rangeReflectorAngle: world.rangeReflectorAngle,
+          rangePreset: world.rangePreset,
+        }
+      : {}),
+    pendingSwapWeapon: world.pendingSwapWeapon,
+    reserveTroops: world.reserveTroops,
+    triFusionTimer: world.triFusionTimer,
+    swarmMult: computeDynamicSwarmProfile(world).swarmMult,
+    swarmTier: computeDynamicSwarmProfile(world).swarmTier,
     defeatReason: world.defeatReason,
     stats: {
       kills: world.stats.kills,
@@ -868,7 +1286,9 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       x: r.x,
       z: r.z,
       lean: r.lean,
+      ...(r.angleDeg !== undefined ? { angleDeg: r.angleDeg } : {}),
       pulse: r.pulse,
+      ...(r.isWingmanMirror ? { isWingmanMirror: true } : {}),
     })),
     contractWalls: world.contractWalls.map((w) => ({
       id: w.id,
@@ -886,6 +1306,112 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       reflected: o.reflected,
       hitPulse: o.hitPulse,
     })),
+    skyCargos: world.skyCargos.map((c) => ({
+      id: c.id,
+      x: c.x,
+      y: c.y,
+      z: c.z,
+      hp: c.hp,
+      maxHp: c.maxHp,
+      state: c.state,
+      hitPulse: c.hitPulse,
+    })),
+    maglevTrains: world.maglevTrains.map((tr) => ({
+      id: tr.id,
+      z: tr.z,
+      dir: tr.dir,
+      trainX: tr.trainX,
+      state: tr.state,
+      warningProgress: tr.warningProgress,
+    })),
+    magRails: world.magRails.map((r) => ({
+      id: r.id,
+      x: r.x,
+      z: r.z,
+      length: r.length,
+      halfWidth: r.halfWidth,
+      polarity: r.polarity,
+    })),
+    capTowers: world.capTowers.filter((c) => c.active && !c.discharged).map((c) => ({
+      id: c.id,
+      x: c.x,
+      z: c.z,
+      charge: c.charge,
+      maxCharge: c.maxCharge,
+      hitPulse: c.hitPulse,
+    })),
+    phaseGates: world.phaseGates.filter((pg) => pg.active && !pg.triggered).map((pg) => ({
+      id: pg.id,
+      x: pg.x,
+      z: pg.z,
+      halfWidth: pg.halfWidth,
+      attune: pg.attune,
+    })),
+    coreShards: world.coreShards.filter((cs) => cs.active).map((cs) => ({
+      id: cs.id,
+      x: cs.x,
+      z: cs.z,
+      value: cs.value,
+    })),
+    weatherState: world.weatherState,
+    magBoostTimer: world.magBoostTimer,
+    phaseSyncTimer: world.phaseSyncTimer,
+    collectedShards: world.collectedShards,
+    collapseRifts: world.collapseRifts.filter((r) => r.active).map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      x: r.x,
+      z: r.z,
+      length: r.length,
+      halfWidth: r.halfWidth,
+    })),
+    highSpires: world.highSpires.filter((sp) => sp.active && !sp.destroyed).map((sp) => ({
+      id: sp.id,
+      x: sp.x,
+      z: sp.z,
+      elevationY: sp.elevationY,
+      hp: sp.hp,
+      maxHp: sp.maxHp,
+      shieldRatio: sp.maxShieldHp > 0 ? sp.shieldHp / sp.maxShieldHp : 0,
+      chargeProgress: clamp(sp.chargeTimer / Math.max(0.1, sp.chargeDuration), 0, 1),
+      hitPulse: sp.hitPulse,
+    })),
+    tacticalEvents: world.tacticalEvents.filter((te) => te.active && !te.completed).map((te) => ({
+      id: te.id,
+      kind: te.kind,
+      x: te.x,
+      z: te.z,
+      radius: te.radius,
+      hp: te.hp,
+      maxHp: te.maxHp,
+      captureProgress: te.captureProgress,
+      timer: te.timer,
+      hitPulse: te.hitPulse,
+    })),
+    coreReactorTier: world.coreReactorTier,
+    reactorPrismRingTimer: world.reactorPrismRingTimer,
+    reactorWallZ: world.reactorWallActive ? world.reactorWallZ : null,
+    ...(world.abyssalHeat > 0 ? { abyssalHeat: world.abyssalHeat, abyssalHeatTier: world.abyssalHeat, abyssalPacts: world.mods.abyssalPacts ?? [] } : {}),
+    wingmanState: buildWingmanSnapshot(world),
+    nemesis: buildNemesisSnapshot(world),
+    nirvanaCharge: world.nirvanaCharge,
+    nirvanaActiveTimer: world.nirvanaActiveTimer,
+    nirvanaArchetype: world.nirvanaArchetype,
+    triPrismLatticeTimer: world.triPrismLatticeTimer,
+    triPrismLinks: world.triPrismLinks,
+    refractionDmgTotal: world.v23RefractedDmg,
+    latticeDmgTotal: world.v23LatticeDmg,
+    nirvanaDmgTotal: world.v23NirvanaDmg,
+    ...(world.mods.expeditionNode ? { expeditionActive: true, expeditionAct: world.mods.expeditionNode.act } : {}),
+    ...(world.mods.customBlueprint ? { customTrackTitle: world.mods.customBlueprint.title } : {}),
+    ...(world.mods.pantheon
+      ? {
+          pantheonActive: true,
+          pantheonStage: world.pantheonStage,
+          pantheonAffixName: PANTHEON_STAGE_META[world.pantheonStage - 1]?.affixName ?? '',
+          pantheonCoBoss: buildPantheonCoBossSnapshot(world.pantheonCoBoss),
+        }
+      : {}),
     gates,
     vaults,
     enemies,

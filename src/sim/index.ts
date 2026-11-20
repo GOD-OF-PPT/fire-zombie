@@ -1,11 +1,13 @@
 import type {
   InputSample,
+  RangeControlCommand,
   RunModifiers,
   SectorId,
   SimEvent,
   SimSnapshot,
   SimulationController,
 } from '../types/game';
+import { applyFiringRangeCommand } from './firingRange';
 import { ACCUMULATOR_EPS, FIXED_DT, MAX_WALL_DT } from '../config/constants';
 import { chooseEndlessUpgrade } from './endless';
 import type { EndlessUpgradeId } from '../types/game';
@@ -36,14 +38,39 @@ export {
   normalizeZero,
 } from './math';
 export { intersectSweptSegmentAABB, sweepCircleVsMovingAABB } from './ccd';
+export { computeDynamicSwarmProfile, SWARM_TIER_NAMES } from './spawner';
+import { ReplayPlayer, ReplayRecorder, verifyDeterministicReplay, type DeterministicReplayLog } from './replay';
+export { ReplayPlayer, ReplayRecorder, verifyDeterministicReplay };
+export type { DeterministicReplayLog, ReplayHighlightMarker, ReplayKeyframe, ReplayMarkerKind, ReplayVerifyResult } from './replay';
+export {
+  EXPEDITION_NODE_META,
+  EXPEDITION_RELICS,
+  NIRVANA_META,
+  advanceExpeditionAfterVictory,
+  generateExpeditionMap,
+  getExpeditionNodes,
+  pickExpeditionRelicDrop,
+  resolveNirvanaArchetype,
+} from './v23Mechanics';
+export {
+  BUILTIN_TRACK_PRESETS,
+  compileCustomBlueprint,
+  decodeTrackShareCode,
+  encodeTrackShareCode,
+} from './trackEditor';
 
 export function createSimulation(): SimulationController {
   const world = createSimWorld();
+  const recorder = new ReplayRecorder();
   let accumulator = 0;
   let pendingDragDeltaX = 0;
   let cachedSnapshot: SimSnapshot | null = null;
   let pendingOverdrive = false;
   let pendingAegisPulse = false;
+  let pendingNukeStrike = false;
+  let pendingSwapWeapon = false;
+  let pendingCycleWingman = false;
+  let pendingNirvanaBurst = false;
   let initialMods: Partial<RunModifiers> = {};
 
   function invalidateSnapshot(): void {
@@ -56,9 +83,14 @@ export function createSimulation(): SimulationController {
       pendingDragDeltaX = 0;
       pendingOverdrive = false;
       pendingAegisPulse = false;
+      pendingNukeStrike = false;
+      pendingSwapWeapon = false;
+      pendingCycleWingman = false;
+      pendingNirvanaBurst = false;
       // explicit (possibly empty) mods replace the previous run's modifiers
       initialMods = { ...mods };
       resetSimWorldForSector(world, sector, initialMods);
+      recorder.start(world.sector, world.mods.layoutSeed ?? 0, initialMods);
       invalidateSnapshot();
     },
 
@@ -81,11 +113,13 @@ export function createSimulation(): SimulationController {
     chooseEndlessUpgrade(id: EndlessUpgradeId): boolean {
       const chosen = chooseEndlessUpgrade(world, id);
       if (chosen) {
+        recorder.recordProtocol(id);
         reconcileFormationAndDps(world);
         accumulator = 0;
         pendingDragDeltaX = 0;
         pendingOverdrive = false;
         pendingAegisPulse = false;
+        pendingNukeStrike = false;
         invalidateSnapshot();
       }
       return chosen;
@@ -96,7 +130,9 @@ export function createSimulation(): SimulationController {
       pendingDragDeltaX = 0;
       pendingOverdrive = false;
       pendingAegisPulse = false;
+      pendingNukeStrike = false;
       resetSimWorldForSector(world, world.sector, initialMods);
+      recorder.start(world.sector, world.mods.layoutSeed ?? 0, initialMods);
       invalidateSnapshot();
     },
 
@@ -123,7 +159,19 @@ export function createSimulation(): SimulationController {
       const keyAxisX = Number.isFinite(input.keyAxisX)
         ? Math.max(-1, Math.min(1, input.keyAxisX))
         : 0;
-      const events = stepWorldFixed(world, { dragDeltaX, keyAxisX, overdrive: input.overdrive === true, aegisPulse: input.aegisPulse === true });
+      const stepInp: InputSample = {
+        dragDeltaX,
+        keyAxisX,
+        overdrive: input.overdrive === true,
+        aegisPulse: input.aegisPulse === true,
+        nukeStrike: input.nukeStrike === true,
+        swapWeapon: input.swapWeapon === true,
+        cycleWingman: input.cycleWingman === true,
+        nirvanaBurst: input.nirvanaBurst === true,
+      };
+      recorder.recordStep(stepInp);
+      const events = stepWorldFixed(world, stepInp);
+      recorder.recordEvents(events);
       invalidateSnapshot();
       return events;
     },
@@ -144,6 +192,10 @@ export function createSimulation(): SimulationController {
       pendingDragDeltaX += dragDeltaX;
       if (input.overdrive === true) pendingOverdrive = true;
       if (input.aegisPulse === true) pendingAegisPulse = true;
+      if (input.nukeStrike === true) pendingNukeStrike = true;
+      if (input.swapWeapon === true) pendingSwapWeapon = true;
+      if (input.cycleWingman === true) pendingCycleWingman = true;
+      if (input.nirvanaBurst === true) pendingNirvanaBurst = true;
       accumulator += clampedWallDt * world.speedMultiplier;
 
       const stepsToRun = Math.floor((accumulator + ACCUMULATOR_EPS) / FIXED_DT);
@@ -164,14 +216,25 @@ export function createSimulation(): SimulationController {
         if (accumulator < ACCUMULATOR_EPS) {
           accumulator = 0;
         }
-        const stepEvents = stepWorldFixed(world, {
+        const stepInp: InputSample = {
           dragDeltaX: perStepDrag,
           keyAxisX,
           overdrive: pendingOverdrive,
           aegisPulse: pendingAegisPulse,
-        });
+          nukeStrike: pendingNukeStrike,
+          swapWeapon: pendingSwapWeapon,
+          cycleWingman: pendingCycleWingman,
+          nirvanaBurst: pendingNirvanaBurst,
+        };
+        recorder.recordStep(stepInp);
+        const stepEvents = stepWorldFixed(world, stepInp);
+        recorder.recordEvents(stepEvents);
         pendingOverdrive = false;
         pendingAegisPulse = false;
+        pendingNukeStrike = false;
+        pendingSwapWeapon = false;
+        pendingCycleWingman = false;
+        pendingNirvanaBurst = false;
         for (let j = 0; j < stepEvents.length; j++) {
           const ev = stepEvents[j];
           if (ev !== undefined) {
@@ -182,6 +245,25 @@ export function createSimulation(): SimulationController {
 
       invalidateSnapshot();
       return frameEvents;
+    },
+
+    configureRange(cmd: RangeControlCommand): void {
+      applyFiringRangeCommand(world, cmd);
+      reconcileFormationAndDps(world);
+      invalidateSnapshot();
+    },
+
+    exportReplayLog(): DeterministicReplayLog {
+      return recorder.finalize(world.phase, world.squadCount, world.stats.kills);
+    },
+
+    seekReplayTick(log: DeterministicReplayLog, targetTick: number): ReplayPlayer {
+      accumulator = 0;
+      pendingDragDeltaX = 0;
+      const player = new ReplayPlayer(log);
+      player.seekToWorldTick(world, targetTick);
+      invalidateSnapshot();
+      return player;
     },
 
     getSnapshot(): SimSnapshot {

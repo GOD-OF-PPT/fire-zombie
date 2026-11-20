@@ -80,9 +80,9 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
         const targetPylon = alivePylons[0]!;
         score -= Math.abs(cx - targetPylon.x) * 75;
       } else if (aliveParts.length > 0 && !boss.shielded && (boss.breakTimer ?? 0) <= 0) {
-        // Shatter Boss Shoulder Pods to trigger 4.0s 2.0x BREAK stagger!
-        const targetPart = aliveParts[0]!;
-        score -= Math.abs(cx - targetPart.x) * 72;
+        // Shatter Boss Shoulder Pods (prioritizing charging shoulder telegraph!) to trigger 4.0s 2.0x BREAK stagger!
+        const targetPart = aliveParts.find((pt) => (pt.telegraph ?? 0) > 0.2) ?? aliveParts[0]!;
+        score -= Math.abs(cx - targetPart.x) * (targetPart.telegraph && targetPart.telegraph > 0.2 ? 95 : 72);
       } else if (boss.secondaryCore) {
         const aimX = !boss.shielded ? boss.x : boss.secondaryCore.x;
         score -= Math.abs(cx - aimX) * 65;

@@ -140,22 +140,20 @@ describe('Endless Protocol', () => {
     expect(world.squadCount).toBe(44); // 8 + 12 base + 24 logistics
   });
 
-  it('lets the standard-strength autopilot clear the first boss across varied seeds', () => {
-    for (const seed of [1, 2, 3, 4, 5, 6]) {
-      const sim = createSimulation();
-      sim.startSector(4, { endless: true, layoutSeed: seed });
-      let steps = 0;
-      while (sim.getSnapshot().phase === 'PLAYING' && (sim.getSnapshot().endless?.wave ?? 1) === 1 && steps < 12000) {
-        const snap = sim.getSnapshot();
-        const drag = Math.max(-0.32, Math.min(0.32, chooseHeuristicTargetX(snap) - snap.squadX));
-        sim.stepFixed({ dragDeltaX: drag, keyAxisX: 0, overdrive: true });
-        steps++;
-      }
+  it.each([1, 2, 3, 4, 5, 6])('lets the standard-strength autopilot clear the first endless boss on seed %i', (seed) => {
+    const sim = createSimulation();
+    sim.startSector(4, { endless: true, layoutSeed: seed });
+    let steps = 0;
+    while (sim.getSnapshot().phase === 'PLAYING' && (sim.getSnapshot().endless?.wave ?? 1) === 1 && steps < 12000) {
       const snap = sim.getSnapshot();
-      expect(snap.endless?.wave, `seed ${seed}: ${snap.phase}, squad ${snap.squadCount}`).toBeGreaterThanOrEqual(2);
-      expect(snap.endless?.bosses).toBe(1);
-      expect(snap.squadCount).toBeGreaterThan(0);
+      const drag = Math.max(-0.32, Math.min(0.32, chooseHeuristicTargetX(snap) - snap.squadX));
+      sim.stepFixed({ dragDeltaX: drag, keyAxisX: 0, overdrive: true });
+      steps++;
     }
+    const snap = sim.getSnapshot();
+    expect(snap.endless?.wave, `seed ${seed}: ${snap.phase}, squad ${snap.squadCount}`).toBeGreaterThanOrEqual(2);
+    expect(snap.endless?.bosses).toBe(1);
+    expect(snap.squadCount).toBeGreaterThan(0);
   });
 
   it('can play through multiple real generated stages with the normal fixed-step pipeline', () => {

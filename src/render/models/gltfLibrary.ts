@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { EnemyKind, RewardId, WeaponId } from '../../types/game';
+import { buildProceduralEnemyTemplates } from './proceduralLibrary';
 import { regradeMechTexture } from './mechPalette';
 import { addHeroEquipment } from './heroEquipment';
 import { buildBladeGeo } from './soldiers';
@@ -901,6 +902,7 @@ export function loadGltfLibrary(baseUrl = import.meta.env.BASE_URL ?? '/'): Prom
     });
     if (mech.texture) regradeMechTexture(mech.texture);
 
+    const procEnemies = buildProceduralEnemyTemplates();
     const enemies: Record<EnemyKind, ActorTemplate> = {
       crawler: buildTemplate(crawlerGltf, { targetHeight: 1.28, facingYaw: 0, refRadius: 0.48 }),
       dasher: buildTemplate(dasherGltf, { targetHeight: 1.72, facingYaw: 0, refRadius: 0.58 }),
@@ -912,6 +914,15 @@ export function loadGltfLibrary(baseUrl = import.meta.env.BASE_URL ?? '/'): Prom
         refRadius: 0.68,
         hoverOffset: 0.35,
       }),
+      bomber: procEnemies.bomber,
+      phalanx: procEnemies.phalanx,
+      stalker: procEnemies.stalker,
+      brood: procEnemies.brood,
+      howler: procEnemies.howler,
+      glacier: procEnemies.glacier,
+      beholder: procEnemies.beholder,
+      burrower: procEnemies.burrower,
+      necromancer: procEnemies.necromancer,
     };
 
     const bosses = {
@@ -931,4 +942,157 @@ export function loadGltfLibrary(baseUrl = import.meta.env.BASE_URL ?? '/'): Prom
   })();
 
   return cachedPromise;
+}
+
+
+export interface BakedPosePair {
+  geo: THREE.BufferGeometry;
+  outlineGeo: THREE.BufferGeometry;
+}
+
+export interface BakedEnemyPoseSet {
+  /** 6 evenly-spaced locomotion poses (Walk / Run / Flying_Idle) */
+  locomotion: BakedPosePair[];
+  /** 1 signature combat/telegraph/attack pose (Bite_Front / Duck / Weapon / Slash / Prime / Howl / Spawn) */
+  action: BakedPosePair;
+}
+
+const ENEMY_PRIMARY_CLIP: Record<EnemyKind, string> = {
+  crawler: 'Walk',
+  dasher: 'Run',
+  bastion: 'Walk',
+  mitosis: 'Walk',
+  siphon: 'Flying_Idle',
+  bomber: 'Run',
+  phalanx: 'Walk',
+  stalker: 'Run',
+  brood: 'Walk',
+  howler: 'Walk',
+  glacier: 'Walk',
+  beholder: 'Flying_Idle',
+  burrower: 'Run',
+  necromancer: 'Flying_Idle',
+};
+
+const ENEMY_ACTION_CLIP: Record<EnemyKind, string> = {
+  crawler: 'Bite_Front',
+  dasher: 'Duck',
+  bastion: 'Weapon',
+  mitosis: 'Walk',
+  siphon: 'Fast_Flying',
+  bomber: 'Prime',
+  phalanx: 'Bash',
+  stalker: 'Slash',
+  brood: 'Spawn',
+  howler: 'Howl',
+  glacier: 'Smash',
+  beholder: 'Focus',
+  burrower: 'Drill',
+  necromancer: 'Cast',
+};
+
+/**
+ * Bakes 6 locomotion keyframes + 1 combat-action keyframe of an Enemy ActorTemplate into static
+ * actor-space BufferGeometries (with pre-applied bone transforms, baseScale, groundYOffset, and facingYaw)
+ * plus welded smooth cartoon outline geometries — enabling 100% GPU InstancedMesh horde rendering!
+ */
+export function bakeEnemyPoseFrames(kind: EnemyKind, template: ActorTemplate): BakedEnemyPoseSet {
+  const probe = spawnActor(template);
+  const v0 = new THREE.Vector3();
+  const v1 = new THREE.Vector3();
+  const n0 = new THREE.Vector3();
+  const invRoot = new THREE.Matrix4();
+  const relMat = new THREE.Matrix4();
+
+  const samplePose = (clipName: string, normTime: number): BakedPosePair => {
+    probe.resetAnimation();
+    const clip = template.clips.get(clipName) ?? [...template.clips.values()][0];
+    if (clip) {
+      const act = probe.actions.get(clip.name);
+      if (act) {
+        act.reset();
+        act.play();
+        probe.mixer.update(Math.max(0, clip.duration * normTime));
+      }
+    }
+    probe.root.position.set(0, 0, 0);
+    probe.root.rotation.set(0, 0, 0);
+    probe.root.scale.set(1, 1, 1);
+    probe.root.updateMatrixWorld(true);
+    invRoot.copy(probe.root.matrixWorld).invert();
+
+    const parts: THREE.BufferGeometry[] = [];
+    probe.inner.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const mat = Array.isArray(m.material) ? m.material[0] : m.material;
+      // Skip BackSide inverted-hull outline child meshes; we weld a clean static outline from the baked body
+      if (mat && mat.side === THREE.BackSide) return;
+
+      const srcGeo = (m as unknown as { _workGeos?: Map<THREE.BufferGeometry, { srcGeo: THREE.BufferGeometry }> })._workGeos?.get(m.geometry)?.srcGeo ?? m.geometry;
+      const posAttr = srcGeo.attributes.position;
+      if (!posAttr) return;
+      const normAttr = srcGeo.attributes.normal;
+      const colAttr = srcGeo.attributes.color;
+      const glowAttr = srcGeo.attributes.aPartGlow;
+      const uvAttr = srcGeo.attributes.uv;
+      const count = posAttr.count;
+
+      relMat.multiplyMatrices(invRoot, m.matrixWorld);
+      const outPos = new Float32Array(count * 3);
+      const outNorm = new Float32Array(count * 3);
+      const isSkinned = Boolean((m as THREE.SkinnedMesh).skeleton && srcGeo.attributes.skinIndex);
+
+      for (let i = 0; i < count; i++) {
+        v0.fromBufferAttribute(posAttr, i);
+        if (normAttr) n0.fromBufferAttribute(normAttr, i);
+        else n0.set(0, 1, 0);
+        v1.copy(v0).addScaledVector(n0, 0.02);
+
+        if (isSkinned) {
+          (m as THREE.SkinnedMesh).applyBoneTransform(i, v0);
+          (m as THREE.SkinnedMesh).applyBoneTransform(i, v1);
+        }
+        v0.applyMatrix4(relMat);
+        v1.applyMatrix4(relMat);
+        v1.sub(v0).normalize();
+
+        const i3 = i * 3;
+        outPos[i3] = v0.x;
+        outPos[i3 + 1] = v0.y;
+        outPos[i3 + 2] = v0.z;
+        outNorm[i3] = v1.x;
+        outNorm[i3 + 1] = v1.y;
+        outNorm[i3 + 2] = v1.z;
+      }
+
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(outPos, 3));
+      g.setAttribute('normal', new THREE.BufferAttribute(outNorm, 3));
+      if (colAttr) g.setAttribute('color', colAttr);
+      if (glowAttr) {
+        g.setAttribute('aPartGlow', glowAttr);
+      } else {
+        g.setAttribute('aPartGlow', new THREE.BufferAttribute(new Float32Array(count), 1));
+      }
+      if (uvAttr) g.setAttribute('uv', uvAttr);
+      if (srcGeo.index) g.setIndex(srcGeo.index);
+      parts.push(g);
+    });
+
+    const merged = parts.length === 1 ? parts[0]! : mergeGeometries(parts, false)!;
+    merged.computeBoundingBox();
+    merged.computeBoundingSphere();
+    const outlineGeo = buildOutlineGeometry(merged);
+    return { geo: merged, outlineGeo };
+  };
+
+  const locoClip = ENEMY_PRIMARY_CLIP[kind];
+  const locomotion: BakedPosePair[] = [];
+  const FRAMES = 6;
+  for (let f = 0; f < FRAMES; f++) {
+    locomotion.push(samplePose(locoClip, f / FRAMES));
+  }
+  const action = samplePose(ENEMY_ACTION_CLIP[kind], 0.45);
+  return { locomotion, action };
 }

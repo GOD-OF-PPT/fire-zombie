@@ -191,7 +191,8 @@ export function computeTrueSquadDps(
   const n = clampSquadCount(squadCount);
   if (n <= 0) return 0;
   const weaponStats = getWeaponLevelStats(weapon, weaponLevel);
-  const masteryMult = 1 + MASTERY_DAMAGE_PER_VAULT * Math.max(0, masteryCount);
+  const m = Math.max(0, masteryCount);
+  const masteryMult = m <= 6 ? 1 + MASTERY_DAMAGE_PER_VAULT * m : 1 + MASTERY_DAMAGE_PER_VAULT * 6 + (m - 6) * 0.03;
   const overdriveMult = overdriveActive ? OVERDRIVE_FIRE_RATE_MULT : 1.0;
   return BASE_DRONE_DPS * n * weaponStats.dpsMult * masteryMult * overdriveMult;
 }

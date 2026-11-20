@@ -17,7 +17,7 @@ import {
   formatGateLabel,
   normalizeZero,
 } from './math';
-import { hasMutator } from './competition';
+import { deployReserveIfAvailable, grantSquadWithReserve, hasMutator } from './competition';
 import { addResonance } from './resonance';
 
 export interface GateRowSpawnOptions {
@@ -377,18 +377,37 @@ export function resolveGateRowCrossings(world: SimWorld, events: SimEvent[]): bo
       }
 
       if (chosenGate) {
+        const beforeGate = world.squadCount;
         const effValue =
           hasMutator(world, 'glass_cannon') && chosenGate.polarity === 'negative' && chosenGate.op === 'sub'
-            ? chosenGate.value * 2
+            ? Math.round(chosenGate.value * 2.2)
             : chosenGate.value;
         const { after, actualDelta } = applyGateOperation(
-          world.squadCount,
+          beforeGate,
           chosenGate.op,
           effValue,
         );
         world.squadCount = after;
         if (after > world.stats.peakSquad) {
           world.stats.peakSquad = after;
+        }
+        // Convert near-cap / above-999 supply overflow into Reserve Troops + Overdrive Surge!
+        if (chosenGate.polarity === 'positive') {
+          const rawTheo =
+            chosenGate.op === 'mul'
+              ? beforeGate * Math.max(1, effValue)
+              : beforeGate + Math.max(0, effValue);
+          const capOverflow = Math.max(0, rawTheo - after);
+          const nearCapBonus = beforeGate >= 760 ? Math.min(24, Math.max(2, Math.floor(Math.max(1, effValue) * 0.35))) : 0;
+          const reserveAdd = capOverflow + nearCapBonus;
+          if (reserveAdd > 0) {
+            world.reserveTroops = Math.min(180, (world.reserveTroops ?? 0) + reserveAdd);
+            addResonance(world, Math.min(0.42, reserveAdd * 0.01), events);
+            if (beforeGate >= 920 && world.overdriveTimer <= 0) {
+              world.overdriveTimer = 2.2;
+              events.push({ type: 'OVERDRIVE_START', x: world.squadX, z: PLAYER_Z });
+            }
+          }
         }
 
         events.push({
@@ -402,6 +421,9 @@ export function resolveGateRowCrossings(world: SimWorld, events: SimEvent[]): bo
 
         if (chosenGate.polarity === 'positive' && actualDelta > 0) {
           world.gateStreak += 1;
+          if (actualDelta >= 6) {
+            world.swarmDirectorTimer = Math.min(world.swarmDirectorTimer, 0.06);
+          }
           addResonance(
             world,
             RESONANCE_GAIN_POSITIVE_GATE + Math.min(4, Math.max(0, world.gateStreak - 1)) * 0.04,
@@ -409,13 +431,7 @@ export function resolveGateRowCrossings(world: SimWorld, events: SimEvent[]): bo
           );
           if (world.gateStreak >= 2) {
             const streakBonus = Math.min(6, world.gateStreak - 1);
-            const beforeBonus = world.squadCount;
-            const boosted = clampSquadCount(beforeBonus + streakBonus);
-            const added = boosted - beforeBonus;
-            world.squadCount = boosted;
-            if (boosted > world.stats.peakSquad) {
-              world.stats.peakSquad = boosted;
-            }
+            const added = grantSquadWithReserve(world, streakBonus, events);
             if (added > 0) {
               events.push({
                 type: 'GATE_STREAK',
@@ -440,6 +456,7 @@ export function resolveGateRowCrossings(world: SimWorld, events: SimEvent[]): bo
             lost: -actualDelta,
             reason: lossReason,
           });
+          deployReserveIfAvailable(world, -actualDelta, events);
         }
 
         if (world.squadCount === 0) {

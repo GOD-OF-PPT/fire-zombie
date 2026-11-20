@@ -16,8 +16,10 @@ import {
 import { allocEntityId, type SimBarrel, type SimWorld } from './entities';
 import { damageEnemy } from './enemies';
 import { applyFlatDeltaToGate, applyProjectileHitToGate } from './gates';
-import { clamp, normalizeZero } from './math';
+import { clamp, clampSquadCount, normalizeZero } from './math';
+import { PLAYER_Z } from '../config/constants';
 import { hasMutator, recordDamage } from './competition';
+import { chargeCapacitorTower, hasChip, spawnCoreShard } from './v20Mechanics';
 import { addResonance } from './resonance';
 import { damageVault } from './weapons';
 
@@ -53,6 +55,7 @@ export function spawnBarrel(
   barrel.chainScheduledAt = null;
   barrel.scheduledChainIndex = 1;
   barrel.hitPulse = 0;
+  barrel.overheat = 0;
   barrel.active = true;
   world.barrels.push(barrel);
   return barrel;
@@ -69,6 +72,7 @@ export function detonateBarrel(
   chainIndex: number,
   events: SimEvent[],
   onBossBlast: BarrelBossBlastCallback,
+  amplifiedHit = false,
 ): void {
   if (!barrel.active || barrel.detonated) {
     return;
@@ -85,7 +89,16 @@ export function detonateBarrel(
 
   const bx = barrel.x;
   const bz = barrel.z;
-  const blastR = barrel.blastRadius;
+  const vortexScale =
+    (1 + Math.max(0, world.mods.specVortex ?? 0) * 0.10) *
+    (hasChip(world, 'chip_volatile_core') ? 1.25 : 1.0);
+  const blastR = barrel.blastRadius * (amplifiedHit ? 1.22 : 1.0) * vortexScale;
+  // Scales smoothly in mid/late game while keeping exact 130 floor in early sectors & unit tests!
+  const scaledBlastDmg = Math.round(
+    Math.max(BARREL_BLAST_DAMAGE, world.simTime >= 12 ? world.trueSquadDps * 0.56 : BARREL_BLAST_DAMAGE) *
+      (amplifiedHit ? 1.32 : 1.0),
+  );
+  const gateBoostDelta = amplifiedHit ? BARREL_GATE_BOOST_DELTA + 3 : BARREL_GATE_BOOST_DELTA;
   let killsInBlast = 0;
 
   // 2a. AoE enemy damage (snapshot current length so newly split Mitosis shards aren't double-blasted by same barrel)
@@ -96,8 +109,8 @@ export function detonateBarrel(
       continue;
     }
     if (Math.hypot(enemy.x - bx, enemy.z - bz) <= blastR + enemy.radius) {
-      recordDamage(world, 'explosives', Math.min(enemy.hp, BARREL_BLAST_DAMAGE));
-      if (damageEnemy(world, enemy, BARREL_BLAST_DAMAGE, 0, events)) {
+      recordDamage(world, 'explosives', Math.min(enemy.hp, scaledBlastDmg));
+      if (damageEnemy(world, enemy, scaledBlastDmg, 0, events, { bypassShield: true })) {
         killsInBlast += 1;
       }
     }
@@ -110,14 +123,24 @@ export function detonateBarrel(
       continue;
     }
     if (Math.hypot(vault.x - bx, vault.z - bz) <= blastR + vault.halfWidth) {
-      damageVault(world, vault, BARREL_BLAST_DAMAGE, events);
+      damageVault(world, vault, scaledBlastDmg, events);
     }
   }
 
-  // 2c. AoE Boss & Shield Pylon damage
-  onBossBlast(world, bx, bz, blastR, BARREL_BLAST_DAMAGE, events);
+  // 2c. AoE Boss & Shield Pylon damage + Capacitor Tower Supercharge!
+  onBossBlast(world, bx, bz, blastR, scaledBlastDmg, events);
+  for (let i = 0; i < world.capTowers.length; i++) {
+    const cap = world.capTowers[i];
+    if (cap && cap.active && !cap.discharged && Math.hypot(cap.x - bx, cap.z - bz) <= blastR + 4.0) {
+      chargeCapacitorTower(world, cap, scaledBlastDmg * 1.8, true, events);
+    }
+  }
+  if (hasChip(world, 'chip_volatile_core')) {
+    spawnCoreShard(world, bx - 0.4, bz, 1);
+    spawnCoreShard(world, bx + 0.4, bz, 1);
+  }
 
-  // 3. Mutable Gate Boost (+5 within r = 5.0, or 130 lock damage on Lock-Flip gates)
+  // 3. Mutable Gate Boost (+5 or +8 on Reflector/Lens amplified bank-shot!)
   for (let i = 0; i < world.gates.length; i++) {
     const gate = world.gates[i];
     if (!gate || !gate.active || !gate.mutable || gate.triggered || gate.dimmed) {
@@ -125,9 +148,9 @@ export function detonateBarrel(
     }
     if (Math.hypot(gate.x - bx, gate.z - bz) <= BARREL_GATE_BOOST_RADIUS) {
       if (gate.isLockFlip) {
-        applyProjectileHitToGate(world, gate, BARREL_BLAST_DAMAGE, events);
+        applyProjectileHitToGate(world, gate, scaledBlastDmg, events);
       } else {
-        applyFlatDeltaToGate(world, gate, BARREL_GATE_BOOST_DELTA, true, events);
+        applyFlatDeltaToGate(world, gate, gateBoostDelta, true, events);
       }
     }
   }
@@ -162,6 +185,23 @@ export function detonateBarrel(
     chainIndex === 1 ? RESONANCE_GAIN_BARREL_EXPLODE : RESONANCE_GAIN_BARREL_CHAIN;
   addResonance(world, resGain, events);
 
+  // Challenge Mutator Risk (`barrel_carnival`): point-blank blast backwash singes squad if detonated right in your face!
+  if (
+    hasMutator(world, 'barrel_carnival') &&
+    world.aegisTimer <= 0 &&
+    world.squadAirY <= 0.6 &&
+    world.squadCount > 3 &&
+    bz >= PLAYER_Z - 3.6 &&
+    bz <= PLAYER_Z + 1.2 &&
+    Math.abs(bx - world.squadX) <= 2.4
+  ) {
+    const singe = Math.min(world.squadCount - 1, 3);
+    if (singe > 0) {
+      world.squadCount = clampSquadCount(world.squadCount - singe);
+      events.push({ type: 'SQUAD_LOSS', x: bx, z: PLAYER_Z, lost: singe, reason: 'ENEMY_BREACH' });
+    }
+  }
+
   events.push({
     type: 'BARREL_EXPLODE',
     x: bx,
@@ -169,6 +209,7 @@ export function detonateBarrel(
     radius: blastR,
     chainIndex,
     kills: killsInBlast,
+    ...(amplifiedHit ? { amplified: true } : {}),
   });
 }
 
@@ -178,6 +219,7 @@ export function damageBarrel(
   damage: number,
   events: SimEvent[],
   onBossBlast: BarrelBossBlastCallback,
+  amplifiedHit = false,
 ): void {
   if (!barrel.active || barrel.detonated || damage <= 0) {
     return;
@@ -189,7 +231,7 @@ export function damageBarrel(
 
   if (barrel.hp <= 0) {
     const idx = barrel.scheduledChainIndex >= 1 ? barrel.scheduledChainIndex : 1;
-    detonateBarrel(world, barrel, idx, events, onBossBlast);
+    detonateBarrel(world, barrel, idx, events, onBossBlast, amplifiedHit);
   }
 }
 

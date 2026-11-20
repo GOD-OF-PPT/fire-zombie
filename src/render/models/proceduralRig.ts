@@ -85,21 +85,24 @@ export function kitToRgb(geo: THREE.BufferGeometry): THREE.BufferGeometry {
   if (c && c.itemSize === 3) return geo;
   const n = geo.getAttribute('position').count;
   const rgb = new Float32Array(n * 3).fill(1);
+  const glow = new Float32Array(n);
   if (c) {
     for (let i = 0; i < n; i++) {
       rgb[i * 3] = c.getX(i);
       rgb[i * 3 + 1] = c.getY(i);
       rgb[i * 3 + 2] = c.getZ(i);
+      glow[i] = c.itemSize >= 4 ? Math.min(1, Math.max(0, c.getW(i) / 2.6)) : 0;
     }
   }
   geo.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
+  geo.setAttribute('aPartGlow', new THREE.BufferAttribute(glow, 1));
   return geo;
 }
 
 function bakePart(geo: THREE.BufferGeometry, joint: V3, scale: number, boneIndex: number): THREE.BufferGeometry {
   const g = geo.index ? geo.toNonIndexed() : geo.clone();
   for (const key of Object.keys(g.attributes)) {
-    if (key !== 'position' && key !== 'normal' && key !== 'color') g.deleteAttribute(key);
+    if (key !== 'position' && key !== 'normal' && key !== 'color' && key !== 'aPartGlow') g.deleteAttribute(key);
   }
   if (!g.getAttribute('normal')) g.computeVertexNormals();
   g.scale(scale, scale, scale).translate(joint[0], joint[1], joint[2]);

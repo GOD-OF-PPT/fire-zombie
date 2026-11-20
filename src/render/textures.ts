@@ -1,5 +1,15 @@
 import * as THREE from 'three';
-import type { GateSnapshot, RewardId } from '../types/game';
+import type { ColorblindMode, GateSnapshot, RewardId } from '../types/game';
+
+let activeGateColorblindMode: ColorblindMode = 'none';
+
+export function setGateColorblindMode(mode: ColorblindMode): void {
+  activeGateColorblindMode = mode;
+}
+
+export function getGateColorblindMode(): ColorblindMode {
+  return activeGateColorblindMode;
+}
 import { REWARD_META } from '../app/meta';
 
 export const COLORS = {
@@ -38,13 +48,20 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 }
 
 export function gateColors(g: Pick<GateSnapshot, 'polarity'>): { main: string; dark: string } {
+  if (activeGateColorblindMode === 'deuteranopia') {
+    if (g.polarity === 'positive') return { main: '#38b6ff', dark: '#042042' };
+    if (g.polarity === 'negative') return { main: '#ff9f1c', dark: '#3e1e04' };
+  } else if (activeGateColorblindMode === 'tritanopia') {
+    if (g.polarity === 'positive') return { main: '#00f0b5', dark: '#042e28' };
+    if (g.polarity === 'negative') return { main: '#ff38a8', dark: '#3e062c' };
+  }
   if (g.polarity === 'positive') return { main: COLORS.positive, dark: COLORS.positiveDark };
   if (g.polarity === 'negative') return { main: COLORS.negative, dark: COLORS.negativeDark };
   return { main: COLORS.neutral, dark: COLORS.neutralDark };
 }
 
 export function gateTextureKey(g: GateSnapshot): string {
-  return `${g.label}|${g.polarity}|${g.mutable ? 1 : 0}|${Math.round(g.chargeRatio * 20)}|${Math.ceil(g.lockHp)}|${g.dimmed ? 1 : 0}`;
+  return `${g.label}|${g.polarity}|${g.mutable ? 1 : 0}|${Math.round(g.chargeRatio * 20)}|${Math.ceil(g.lockHp)}|${g.dimmed ? 1 : 0}|${activeGateColorblindMode}`;
 }
 
 /** Paints a gate's holographic number plate with high-contrast chamfered glass, scanlines, and crisp typography. */
@@ -152,6 +169,15 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
     }
     ctx.closePath();
     ctx.fill();
+    if (activeGateColorblindMode !== 'none') {
+      ctx.save();
+      ctx.font = `900 34px ${FONT}`;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(g.polarity === 'positive' ? '▲+' : '✖-', w - 36, cy);
+      ctx.restore();
+    }
   }
 
   if (isLock) {
@@ -208,30 +234,39 @@ export function paintVaultPlate(
   reward: RewardId,
   hp: number,
   maxHp: number,
+  relationTag?: string,
+  relationColor?: string,
 ): void {
   const meta = REWARD_META[reward];
+  const badgeCol = relationColor || meta.color;
   ctx.clearRect(0, 0, w, h);
   const bg = ctx.createLinearGradient(0, 0, 0, h);
-  bg.addColorStop(0, 'rgba(18,10,46,0.92)');
-  bg.addColorStop(1, 'rgba(6,8,24,0.95)');
+  bg.addColorStop(0, 'rgba(18,10,46,0.94)');
+  bg.addColorStop(1, 'rgba(6,8,24,0.96)');
   roundRect(ctx, 8, 8, w - 16, h - 16, 26);
   ctx.fillStyle = bg;
   ctx.fill();
   ctx.lineWidth = 7;
-  ctx.strokeStyle = meta.color;
+  ctx.strokeStyle = badgeCol;
   ctx.stroke();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `900 62px ${FONT}`;
+  ctx.font = `900 58px ${FONT}`;
   ctx.fillStyle = meta.color;
-  ctx.fillText(meta.glyph, 68, 70);
+  ctx.fillText(meta.glyph, 64, 68);
   ctx.textAlign = 'left';
-  ctx.font = `900 42px ${FONT}`;
+  ctx.font = `900 40px ${FONT}`;
   ctx.fillStyle = '#fff';
-  ctx.fillText(meta.name, 120, 52);
-  ctx.font = `800 27px ${FONT}`;
-  ctx.fillStyle = meta.color;
-  ctx.fillText(`${meta.short}武装 · 射击解锁`, 122, 95);
+  ctx.fillText(meta.name, 114, 48);
+  const subText = relationTag || `${meta.short}武装 · 射击解锁`;
+  let subFont = 26;
+  ctx.font = `900 ${subFont}px ${FONT}`;
+  while (ctx.measureText(subText).width > w - 132 && subFont > 19) {
+    subFont -= 2;
+    ctx.font = `900 ${subFont}px ${FONT}`;
+  }
+  ctx.fillStyle = badgeCol;
+  ctx.fillText(subText, 116, 94);
   const bx = 28;
   const bw = w - 56;
   const by = h - 60;

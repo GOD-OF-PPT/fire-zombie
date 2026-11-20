@@ -137,8 +137,11 @@ function trooper(heavy: boolean): SoldierModel {
     .add(box(0.09, 0.03, 0.07), armor, 0, { p: [-0.145, 0.26, 0.15], r: [0, 0, 0.38] })
     .add(cyl(0.011, 0.014, 0.17, 6), SUIT_DARK, 0, { p: [0.085, 0.365, 0.15] })
     .add(sph(0.02, 8, 6), accent, 3, { p: [0.085, 0.46, 0.15] })
+    // Twin camera-facing plasma micro-thrusters on all troopers
+    .add(cone(0.036, 0.095, 8).rotateX(Math.PI), accent, 3.0, { p: [0.068, 0.045, 0.185] })
+    .add(cone(0.036, 0.095, 8).rotateX(Math.PI), accent, 3.0, { p: [-0.068, 0.045, 0.185] })
     // Layered shoulder pauldrons
-    .add(sph(0.09, 12, 8), armor, 0, { p: [0.185, 0.272, 0], s: [1.15, 0.85, 1.12] })
+    .add(sph(0.096, 12, 8), armor, 0, { p: [0.188, 0.275, 0], s: [1.18, 0.88, 1.14] })
     .add(sph(0.09, 12, 8), armor, 0, { p: [-0.185, 0.272, 0], s: [1.15, 0.85, 1.12] })
     .add(box(0.024, 0.024, 0.13), accent, 2.2, { p: [0.205, 0.315, 0] })
     .add(box(0.024, 0.024, 0.13), accent, 2.2, { p: [-0.205, 0.315, 0] });
