@@ -57,6 +57,7 @@ import { mitigateLossWithAegis } from './aegis';
 import { deployReserveIfAvailable, grantBountyJackpot, hasMutator, recordDamage, stepSeekerBlades } from './competition';
 import { addNukeKillCharge } from './nuke';
 import { triggerFormationLeaderBacklash } from './v21Mechanics';
+import { addNirvanaCharge } from './v23Mechanics';
 import { allocEntityId, type SimEnemy, type SimWorld } from './entities';
 import { applyFlatDeltaToGate, findGateById } from './gates';
 import { clamp, clampSquadCount, normalizeZero } from './math';
@@ -262,6 +263,7 @@ export function damageEnemy(
     enemy.active = false;
     world.stats.kills += 1;
     addNukeKillCharge(world);
+    addNirvanaCharge(world, ENEMY_CONFIGS[enemy.kind].tier >= 3 ? 0.012 : 0.0045);
 
     if (enemy.isBountyElite) {
       grantBountyJackpot(world, killedX, killedZ, events);
@@ -314,6 +316,7 @@ export function damageEnemy(
             other.active = false;
             world.stats.kills += 1;
             addNukeKillCharge(world, 0.0004);
+            addNirvanaCharge(world, 0.003);
             events.push({
               type: 'ENEMY_HIT',
               x: other.x,

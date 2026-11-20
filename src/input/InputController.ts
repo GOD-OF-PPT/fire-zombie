@@ -114,10 +114,25 @@ export class InputController {
       }
     };
 
-    const matchesBind = (pressedKey: string, bindKey: string): boolean => {
-      if (bindKey === ' ') return pressedKey === ' ';
-      return pressedKey.toLowerCase() === bindKey.toLowerCase();
+    const matchesBind = (e: KeyboardEvent, bindKey: string): boolean => {
+      if (!bindKey) return false;
+      const pressedKey = e.key;
+      if (bindKey === ' ') return pressedKey === ' ' || e.code === 'Space';
+      if (pressedKey.toLowerCase() === bindKey.toLowerCase()) return true;
+      if (
+        (pressedKey === 'Process' || pressedKey === 'Unidentified' || e.isComposing) &&
+        bindKey.length === 1 &&
+        /^[a-z]$/i.test(bindKey) &&
+        e.code === `Key${bindKey.toUpperCase()}`
+      ) {
+        return true;
+      }
+      return false;
     };
+
+    const matchesChar = (e: KeyboardEvent, ch: string): boolean =>
+      e.key.toLowerCase() === ch ||
+      ((e.key === 'Process' || e.key === 'Unidentified' || e.isComposing) && e.code === `Key${ch.toUpperCase()}`);
 
     const keydown = (e: KeyboardEvent): void => {
       if (this.captureCallback) {
@@ -135,52 +150,52 @@ export class InputController {
 
       if (e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.closest('input, textarea, select'))) return;
       const k = e.key;
-      const isLeft = k === 'ArrowLeft' || matchesBind(k, this.keybinds.moveLeft);
-      const isRight = k === 'ArrowRight' || matchesBind(k, this.keybinds.moveRight);
+      const isLeft = k === 'ArrowLeft' || matchesBind(e, this.keybinds.moveLeft);
+      const isRight = k === 'ArrowRight' || matchesBind(e, this.keybinds.moveRight);
 
       if (isLeft || isRight) {
         this.keys.add(isLeft ? '__left' : '__right');
         e.preventDefault();
         if (this.enabled) this.fireFirst();
-      } else if (matchesBind(k, this.keybinds.overdrive)) {
+      } else if (matchesBind(e, this.keybinds.overdrive)) {
         if (this.enabled) {
           this.overdriveRequested = true;
           e.preventDefault();
           this.fireFirst();
         }
-      } else if (matchesBind(k, this.keybinds.aegis) || k === 'Shift') {
+      } else if (matchesBind(e, this.keybinds.aegis) || k === 'Shift') {
         if (this.enabled && !e.repeat) {
           this.aegisRequested = true;
           this.fireFirst();
         }
-      } else if (matchesBind(k, this.keybinds.nuke) || k === 'r' || k === 'R') {
+      } else if (matchesBind(e, this.keybinds.nuke) || matchesChar(e, 'r')) {
         if (this.enabled && !e.repeat) {
           this.nukeRequested = true;
           this.fireFirst();
         }
-      } else if ((matchesBind(k, this.keybinds.swapWeapon) || k === 'c' || k === 'C') && !e.repeat) {
+      } else if ((matchesBind(e, this.keybinds.swapWeapon) || matchesChar(e, 'c')) && !e.repeat) {
         if (this.enabled) {
           e.preventDefault();
           this.swapWeaponRequested = true;
           this.fireFirst();
         }
-      } else if (matchesBind(k, this.keybinds.wingmanMode) && !e.repeat) {
+      } else if (matchesBind(e, this.keybinds.wingmanMode) && !e.repeat) {
         if (this.enabled) {
           e.preventDefault();
           this.wingmanCycleRequested = true;
           this.fireFirst();
         }
-      } else if (matchesBind(k, this.keybinds.nirvanaBurst) && !e.repeat) {
+      } else if (matchesBind(e, this.keybinds.nirvanaBurst) && !e.repeat) {
         if (this.enabled) {
           e.preventDefault();
           this.nirvanaRequested = true;
           this.fireFirst();
         }
-      } else if ((k === 'p' || k === 'P') && !e.repeat) {
+      } else if (matchesChar(e, 'p') && !e.repeat) {
         e.preventDefault();
         if (this.onPhotoModeKey) this.onPhotoModeKey();
         else this.onPauseKey?.();
-      } else if ((k === 'x' || k === 'X') && !e.repeat) {
+      } else if (matchesChar(e, 'x') && !e.repeat) {
         this.onSpeedKey?.();
       } else if (k === 'Escape') {
         this.onPauseKey?.();
@@ -189,8 +204,8 @@ export class InputController {
 
     const keyup = (e: KeyboardEvent): void => {
       const k = e.key;
-      if (k === 'ArrowLeft' || matchesBind(k, this.keybinds.moveLeft)) this.keys.delete('__left');
-      if (k === 'ArrowRight' || matchesBind(k, this.keybinds.moveRight)) this.keys.delete('__right');
+      if (k === 'ArrowLeft' || matchesBind(e, this.keybinds.moveLeft)) this.keys.delete('__left');
+      if (k === 'ArrowRight' || matchesBind(e, this.keybinds.moveRight)) this.keys.delete('__right');
     };
     const blur = (): void => {
       this.keys.clear();
@@ -444,9 +459,6 @@ export class InputController {
   consumeWeaponSwap(): boolean {
     const requested = this.swapWeaponRequested;
     this.swapWeaponRequested = false;
-    this.wingmanCycleRequested = false;
-    this.nirvanaRequested = false;
-    this.wingmanCycleRequested = false;
     return requested;
   }
 
@@ -489,6 +501,8 @@ export class InputController {
     this.aegisRequested = false;
     this.nukeRequested = false;
     this.swapWeaponRequested = false;
+    this.wingmanCycleRequested = false;
+    this.nirvanaRequested = false;
     this.activePointer = null;
     this.flickFired = false;
     this.gamepadAxisX = 0;

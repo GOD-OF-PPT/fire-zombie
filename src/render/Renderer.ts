@@ -500,6 +500,9 @@ export class Renderer {
   private posts!: THREE.InstancedMesh;
   private postMat!: THREE.MeshBasicMaterial;
   private hemi!: THREE.HemisphereLight;
+  private dirLight!: THREE.DirectionalLight;
+  private readonly baseFogColor = new THREE.Color(0x122a68);
+  private readonly nukeFogColor = new THREE.Color(0xff9c42);
 
   // squad & shared VFX meshes
   private squadGlow!: THREE.Mesh;
@@ -666,6 +669,10 @@ export class Renderer {
   private nukeGroundScorchMat!: THREE.MeshBasicMaterial;
   private nukeCraterRing!: THREE.Mesh;
   private nukeCraterRingMat!: THREE.MeshBasicMaterial;
+  private nukeSunPillar!: THREE.Mesh;
+  private nukeSunPillarMat!: THREE.MeshBasicMaterial;
+  private nukeBlastRing2!: THREE.Mesh;
+  private nukeBlastRing2Mat!: THREE.MeshBasicMaterial;
   private nukeJustDetonated = false;
   private jumpTex!: THREE.CanvasTexture;
   private reflectorTex!: THREE.CanvasTexture;
@@ -692,7 +699,7 @@ export class Renderer {
   private tmpA = new THREE.Vector3();
   private tmpB = new THREE.Vector3();
 
-  // camera
+  // camera & seismic screen shake
   private camX = 0;
   private prevSquadXForCam = 0;
   private camBankRoll = 0;
@@ -703,6 +710,14 @@ export class Renderer {
   private camKickRoll = 0;
   private bossBlend = 0;
   private fov = 58;
+  private nukeQuakeTimer = 0;
+  private nukeQuakeDur = 2.65;
+  private nukeQuakeStrength = 0;
+  private nukeWaveTimer = 0;
+  private nukeWaveDur = 1.15;
+  private nukeHeatAmt = 0;
+  private nukeDescentTremor = 0;
+  private readonly screenShakeOut = { x: 0, y: 0, rotDeg: 0, scale: 1 };
 
   constructor(canvas: HTMLCanvasElement, opts: { forceProcedural?: boolean; trialArt?: boolean } = {}) {
     this.forceProcedural = opts.forceProcedural === true;
@@ -835,6 +850,8 @@ export class Renderer {
           uSplitTone: { value: 0.0 },
           uPhotoFilter: { value: 0.0 },
           uPhotoTime: { value: 0.0 },
+          uNukeWave: { value: 0.0 },
+          uNukeHeat: { value: 0.0 },
           uCenter: { value: new THREE.Vector2(0.5, 0.5) },
         },
         vertexShader: /* glsl */ `
@@ -850,28 +867,48 @@ export class Renderer {
           uniform float uSplitTone;
           uniform float uPhotoFilter;
           uniform float uPhotoTime;
+          uniform float uNukeWave;
+          uniform float uNukeHeat;
           uniform vec2 uCenter;
           varying vec2 vUv;
           void main() {
             vec2 dir = vUv - uCenter;
             float dist = length(dir);
-            if (uChroma <= 0.0002 && uRadialBlur <= 0.001 && uSplitTone <= 0.001 && uPhotoFilter < 0.5) {
+            if (uChroma <= 0.0002 && uRadialBlur <= 0.001 && uSplitTone <= 0.001 && uPhotoFilter < 0.5 && uNukeWave <= 0.001 && uNukeHeat <= 0.001) {
               gl_FragColor = texture2D(tDiffuse, vUv);
               return;
             }
-            vec2 cOff = dir * uChroma * (0.35 + dist * 1.45);
+            vec2 uvBase = vUv;
+            float shockBand = 0.0;
+            if (uNukeWave > 0.001) {
+              float ringR = uNukeWave * 1.42;
+              float dRing = (dist - ringR) / 0.088;
+              shockBand = exp(-dRing * dRing) * (1.0 - uNukeWave * 0.72);
+              vec2 nDir = dist > 0.0005 ? dir / dist : vec2(0.0, 1.0);
+              uvBase = clamp(vUv - nDir * shockBand * 0.044, 0.001, 0.999);
+            }
+            vec2 dirW = uvBase - uCenter;
+            float distW = length(dirW);
+            vec2 cOff = dirW * (uChroma + shockBand * 0.024) * (0.35 + distW * 1.45);
             vec3 acc = vec3(0.0);
             const int SAMPLES = 6;
             for (int i = 0; i < SAMPLES; i++) {
               float fi = float(i) / float(SAMPLES - 1);
-              float scale = 1.0 - uRadialBlur * 0.16 * fi * smoothstep(0.05, 0.65, dist);
-              vec2 suv = uCenter + dir * scale;
+              float scale = 1.0 - (uRadialBlur + shockBand * 0.24) * 0.16 * fi * smoothstep(0.05, 0.65, distW);
+              vec2 suv = uCenter + dirW * scale;
               float r = texture2D(tDiffuse, clamp(suv + cOff, 0.001, 0.999)).r;
               float g = texture2D(tDiffuse, clamp(suv, 0.001, 0.999)).g;
               float b = texture2D(tDiffuse, clamp(suv - cOff, 0.001, 0.999)).b;
               acc += vec3(r, g, b);
             }
             vec3 finalCol = acc / float(SAMPLES);
+            if (shockBand > 0.001) {
+              finalCol += vec3(1.18, 0.80, 0.38) * shockBand * 0.34;
+            }
+            if (uNukeHeat > 0.001) {
+              float edgeHeat = smoothstep(0.18, 0.95, dist);
+              finalCol = mix(finalCol, finalCol * vec3(1.24, 0.96, 0.72) + vec3(0.16, 0.07, 0.01), uNukeHeat * (0.28 + 0.42 * edgeHeat));
+            }
             if (uSplitTone > 0.001) {
               float luma = dot(finalCol, vec3(0.299, 0.587, 0.114));
               vec3 hiTint = vec3(1.15, 1.08, 0.88);
@@ -1153,9 +1190,9 @@ export class Renderer {
     // Sculptural 3-point lighting: deep indigo ground fill + crisp 3/4 directional key + subtle rim kicker
     this.hemi = new THREE.HemisphereLight(0xcfe8ff, 0x1b1642, 0.56);
     this.scene.add(this.hemi);
-    const dir = new THREE.DirectionalLight(0xfff0dc, 1.45);
-    dir.position.set(-9, 14, 6);
-    this.scene.add(dir);
+    this.dirLight = new THREE.DirectionalLight(0xfff0dc, 1.45);
+    this.dirLight.position.set(-9, 14, 6);
+    this.scene.add(this.dirLight);
     const back = new THREE.DirectionalLight(0x6ad8ff, 0.45);
     back.position.set(5, 7, -14);
     this.scene.add(back);
@@ -2175,6 +2212,7 @@ export class Renderer {
       this.skyTextures.set(sector, sky);
     }
     this.scene.background = sky;
+    this.baseFogColor.set(pal.fog);
     this.scene.fog = new THREE.Fog(pal.fog, 68, 172);
     (this.trackMat.uniforms.uTrack!.value as THREE.Color).set(pal.track);
     (this.trackMat.uniforms.uGrid!.value as THREE.Color).set(pal.grid);
@@ -2363,9 +2401,26 @@ export class Renderer {
     this.trauma = Math.min(1, this.trauma + amount * this.shakeScale);
   }
 
+  /** Triggers multi-wave seismic camera + viewport oscillation (respects accessibility shakeScale) */
+  triggerScreenQuake(durationSec = 2.65, strength = 1.0): void {
+    const dur = Math.max(0.25, durationSec);
+    if (this.nukeQuakeTimer <= 0 || strength >= this.nukeQuakeStrength) {
+      this.nukeQuakeDur = dur;
+      this.nukeQuakeTimer = dur;
+      this.nukeQuakeStrength = Math.max(this.nukeQuakeStrength, strength);
+    } else {
+      this.nukeQuakeTimer = Math.max(this.nukeQuakeTimer, dur * 0.6);
+    }
+  }
+
+  /** Returns synchronized viewport oscillation offsets (px, deg, overscan scale) for DOM/canvas seismic shake */
+  getScreenShakeOffset(): Readonly<{ x: number; y: number; rotDeg: number; scale: number }> {
+    return this.screenShakeOut;
+  }
+
   /** Directional ballistic camera punch (pushes lens along Z + subtle roll snap) */
   kickCamera(punchZ: number, dirX = 0): void {
-    this.camKickZ = Math.min(0.65, this.camKickZ + punchZ);
+    this.camKickZ = Math.min(1.65, this.camKickZ + punchZ);
     this.camKickRoll = THREE.MathUtils.clamp(this.camKickRoll + dirX * 0.014, -0.045, 0.045);
   }
 
@@ -2571,6 +2626,18 @@ export class Renderer {
     this.shockwaveAmt = 0;
     this.chromaAmt = 0;
     this.radialBlurAmt = 0;
+    this.nukeQuakeTimer = 0;
+    this.nukeQuakeStrength = 0;
+    this.nukeWaveTimer = 0;
+    this.nukeHeatAmt = 0;
+    this.nukeDescentTremor = 0;
+    this.screenShakeOut.x = 0;
+    this.screenShakeOut.y = 0;
+    this.screenShakeOut.rotDeg = 0;
+    this.screenShakeOut.scale = 1;
+    if (this.hemi) this.hemi.intensity = 1.02;
+    if (this.dirLight) this.dirLight.intensity = 1.45;
+    if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.copy(this.baseFogColor);
     this.phaseCamTimer = 0;
     this.execCamTimer = 0;
     this.awakenCamTimer = 0;
@@ -2708,15 +2775,20 @@ export class Renderer {
             ? 2.0
             : 0.0
         : 0.0;
+      const nukeWaveProg = this.nukeWaveTimer > 0 ? 1 - this.nukeWaveTimer / Math.max(0.1, this.nukeWaveDur) : 0;
       this.impactPass.uniforms.uChroma!.value = snap.inBlitzDrill ? 0 : this.chromaAmt;
       this.impactPass.uniforms.uRadialBlur!.value = snap.inBlitzDrill ? 0 : this.radialBlurAmt;
       this.impactPass.uniforms.uSplitTone!.value = this.splitToneAmt;
       this.impactPass.uniforms.uPhotoFilter!.value = pf;
       this.impactPass.uniforms.uPhotoTime!.value = t;
+      this.impactPass.uniforms.uNukeWave!.value = snap.inBlitzDrill ? 0 : nukeWaveProg;
+      this.impactPass.uniforms.uNukeHeat!.value = snap.inBlitzDrill ? 0 : this.nukeHeatAmt;
       (this.impactPass.uniforms.uCenter!.value as THREE.Vector2).copy(this.impactCenter);
     }
     if (this.composer) {
-      if (this.bloomPass) this.bloomPass.strength = snap.inBlitzDrill ? 0.16 : 0.32;
+      if (this.bloomPass) {
+        this.bloomPass.strength = snap.inBlitzDrill ? 0.16 : 0.32 + this.nukeHeatAmt * 0.68;
+      }
       this.composer.render();
     } else {
       this.renderer.render(this.scene, this.camera);
@@ -5430,10 +5502,26 @@ export class Renderer {
       this.nukeWilsonDomeMat,
     );
 
+    this.nukeSunPillarMat = additive(0xfff6d2, 0.92);
+    this.nukeSunPillar = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.15, 2.35, 38, 20, 1, true),
+      this.nukeSunPillarMat,
+    );
+    this.nukeSunPillar.position.y = 19;
+
+    this.nukeBlastRing2Mat = additive(0xff922b, 0.88);
+    this.nukeBlastRing2 = new THREE.Mesh(
+      new THREE.CylinderGeometry(1, 1.06, 3.8, 48, 1, true),
+      this.nukeBlastRing2Mat,
+    );
+    this.nukeBlastRing2.position.y = 1.9;
+
     this.nukeBlastGroup.add(
       this.nukeGroundScorch,
       this.nukeCraterRing,
       this.nukeShockWall,
+      this.nukeBlastRing2,
+      this.nukeSunPillar,
       this.nukeFireball,
       this.nukeCoreDome,
       this.nukeStem,
@@ -5449,16 +5537,36 @@ export class Renderer {
 
   triggerNukeDetonationVfx(x: number, z: number): void {
     this.nukeJustDetonated = true;
-    this.shake(1.65);
+    this.shake(1.0);
+    this.triggerScreenQuake(2.65, 1.0);
+    this.nukeWaveDur = 1.15;
+    this.nukeWaveTimer = 1.15;
+    this.nukeHeatAmt = 1.0;
+    this.kickCamera(1.15 * this.shakeScale, (Math.random() - 0.5) * 1.4);
+    this.tmpV.set(x, 1.8, z).project(this.camera);
+    this.impactCenter.set(
+      THREE.MathUtils.clamp(this.tmpV.x * 0.5 + 0.5, 0.18, 0.82),
+      THREE.MathUtils.clamp(this.tmpV.y * 0.5 + 0.5, 0.22, 0.78),
+    );
     const fx = this.effects;
-    fx.ring(x, z, 0xffffff, 34, 0.72);
-    fx.ring(x, z, 0xffd84a, 24, 1.02);
-    fx.ring(x, z, 0xff4820, 17, 1.38);
-    fx.after(0.12, () => fx.ring(x, z - 28, 0xffe07d, 26, 0.68));
-    fx.after(0.24, () => fx.ring(x, z - 58, 0xff8c24, 28, 0.72));
-    fx.burst(x, 1.4, z, 0xfff8d6, 130, { speed: 26, size: 1.05, life: 1.25, up: 1.4, gravity: 3.5 });
-    fx.burst(x, 2.8, z, 0xff7a1a, 130, { speed: 20, size: 0.92, life: 1.65, up: 1.75, gravity: 2.2 });
-    fx.burst(x, 4.4, z, 0xff2a55, 85, { speed: 15, size: 0.84, life: 1.95, up: 2.0, gravity: 1.2 });
+    fx.ring(x, z, 0xffffff, 42, 0.76);
+    fx.ring(x, z, 0xffd84a, 30, 1.08);
+    fx.ring(x, z, 0xff4820, 22, 1.45);
+    // Forward shockwaves sweeping directly past the squad & camera lens + horizon shockwaves!
+    fx.after(0.10, () => fx.ring(x, z + 11, 0xfff0b2, 26, 0.58));
+    fx.after(0.22, () => fx.ring(x, z + 22, 0xffa630, 32, 0.65));
+    fx.after(0.12, () => fx.ring(x, z - 28, 0xffe07d, 30, 0.72));
+    fx.after(0.24, () => fx.ring(x, z - 58, 0xff8c24, 34, 0.78));
+    fx.after(0.36, () => fx.ring(x, z - 88, 0xff4420, 36, 0.82));
+    fx.burst(x, 1.6, z, 0xfff8d6, 150, { speed: 30, size: 1.18, life: 1.35, up: 1.55, gravity: 3.2 });
+    fx.burst(x, 3.2, z, 0xff7a1a, 145, { speed: 23, size: 1.04, life: 1.75, up: 1.9, gravity: 2.0 });
+    fx.burst(x, 4.8, z, 0xff2a55, 95, { speed: 17, size: 0.92, life: 2.05, up: 2.15, gravity: 1.1 });
+    fx.shatter(x, 2.2, z, 0xffae34, 34, true);
+    // Secondary shockwave arrival ember cascade synced with Wave 2 camera slam!
+    fx.after(0.26, () => {
+      fx.burst(x, 5.2, z, 0xffe066, 75, { speed: 22, size: 0.95, life: 1.35, up: 1.6, gravity: 1.8 });
+      fx.shatter(x, 1.6, z + 10, 0xff6820, 20, true);
+    });
   }
 
   private updateNukeVisuals(snap: SimSnapshot, dt: number, t: number): void {
@@ -5471,6 +5579,7 @@ export class Renderer {
       const p = THREE.MathUtils.clamp(1 - dropRem / dropDur, 0, 1);
       const eased = 0.52 * p + 0.48 * p * p * p;
       const warheadY = 15.2 * (1 - eased) + 1.75;
+      this.nukeDescentTremor = p > 0.35 ? Math.pow((p - 0.35) / 0.65, 2) * 0.28 : 0;
 
       this.nukeDropGroup.visible = true;
       this.nukeDropGroup.position.set(tx, 0, tz);
@@ -5493,7 +5602,7 @@ export class Renderer {
 
       this.nukeWarhead.position.set(0, warheadY, 0);
       this.nukeWarhead.rotation.set(0.05 * Math.sin(t * 10), t * 4.4, 0.05 * Math.cos(t * 10));
-      this.nukeWarhead.scale.setScalar(1.68);
+      this.nukeWarhead.scale.setScalar(1.76);
       this.nukePlume.scale.set(1 + Math.sin(t * 48) * 0.18, 0.95 + Math.sin(t * 58) * 0.28, 1 + Math.cos(t * 48) * 0.18);
 
       if (Math.random() < dt * 42) {
@@ -5506,6 +5615,7 @@ export class Renderer {
         });
       }
     } else {
+      this.nukeDescentTremor = 0;
       this.nukeDropGroup.visible = false;
     }
 
@@ -5517,94 +5627,116 @@ export class Renderer {
       this.nukeBlastGroup.visible = true;
       this.nukeBlastGroup.position.set(tx, 0, tz);
 
-      this.hemi.intensity = 0.9 + Math.max(0, 1 - p * 2.6) * 1.45;
+      const thermalFlash = Math.max(0, 1 - p * 2.2);
+      this.hemi.intensity = 1.02 + thermalFlash * 1.95;
+      if (this.dirLight) {
+        this.dirLight.intensity = 1.45 + thermalFlash * 2.2;
+      }
+      if (this.scene.fog instanceof THREE.Fog) {
+        this.scene.fog.color.copy(this.baseFogColor).lerp(this.nukeFogColor, thermalFlash * 0.62);
+      }
 
-      const scorchScale = 11 + p * 18;
+      const scorchScale = 14 + p * 24;
       this.nukeGroundScorch.scale.set(scorchScale, scorchScale, 1);
-      this.nukeGroundScorchMat.opacity = 0.78 * fade;
+      this.nukeGroundScorchMat.opacity = 0.86 * fade;
 
-      const craterR = 4.2 + Math.pow(p, 0.4) * 9.5;
+      const craterR = 5.0 + Math.pow(p, 0.4) * 12.5;
       this.nukeCraterRing.scale.set(craterR, craterR, 1);
-      this.nukeCraterRingMat.opacity = Math.max(0, (1 - p * 1.25) * 0.72);
+      this.nukeCraterRingMat.opacity = Math.max(0, (1 - p * 1.18) * 0.82);
 
       const shockP = Math.min(1, p / 0.42);
-      const shockR = 1.2 + Math.pow(shockP, 0.68) * 112.0;
-      this.nukeShockWall.scale.set(shockR, Math.max(0.25, 1.45 - shockP * 1.1), shockR);
-      this.nukeShockWallMat.opacity = p < 0.42 ? (1 - shockP) * 0.85 : 0;
-      this.nukeShockWallMat.color.setHex(p < 0.09 ? 0xffffff : 0xffbe42);
+      const shockR = 1.5 + Math.pow(shockP, 0.66) * 128.0;
+      this.nukeShockWall.scale.set(shockR, Math.max(0.32, 1.95 - shockP * 1.35), shockR);
+      this.nukeShockWallMat.opacity = p < 0.42 ? (1 - shockP) * 0.92 : 0;
+      this.nukeShockWallMat.color.setHex(p < 0.11 ? 0xffffff : 0xffbe42);
 
-      const fbRadius = p < 0.16 ? 1.8 + (p / 0.16) * 8.2 : 10.0 + (p - 0.16) * 3.8;
-      const fbFade = Math.max(0, 1 - p * 2.05);
-      this.nukeFireball.scale.set(fbRadius, fbRadius * 0.72, fbRadius);
-      this.nukeFireballMat.opacity = 0.74 * fbFade;
-      this.nukeFireballMat.color.setHex(p < 0.08 ? 0xfff6cc : 0xff6820);
+      const shock2P = THREE.MathUtils.clamp((p - 0.065) / 0.40, 0, 1);
+      const shock2R = 1.8 + Math.pow(shock2P, 0.68) * 96.0;
+      this.nukeBlastRing2.visible = p >= 0.065 && p < 0.47;
+      this.nukeBlastRing2.scale.set(shock2R, Math.max(0.25, 1.45 - shock2P * 1.0), shock2R);
+      this.nukeBlastRing2Mat.opacity = p >= 0.065 && p < 0.47 ? (1 - shock2P) * 0.86 : 0;
 
-      const capY = 2.6 + Math.pow(p, 0.50) * 8.2;
-      const stemH = Math.max(1.2, capY - 0.35);
-      this.nukeStem.scale.set(0.92 + p * 0.45, stemH, 0.92 + p * 0.45);
+      const pillarP = Math.min(1, p / 0.34);
+      this.nukeSunPillar.visible = p < 0.34;
+      const pillarRad = 0.75 + Math.sin(pillarP * Math.PI) * 2.4;
+      this.nukeSunPillar.scale.set(pillarRad, 1.0 + pillarP * 0.35, pillarRad);
+      this.nukeSunPillarMat.opacity = p < 0.34 ? Math.pow(1 - pillarP, 1.45) * 0.9 : 0;
+      this.nukeSunPillarMat.color.setHex(p < 0.1 ? 0xffffff : 0xffcf54);
+
+      const fbRadius = p < 0.16 ? 2.4 + (p / 0.16) * 10.6 : 13.0 + (p - 0.16) * 4.6;
+      const fbFade = Math.max(0, 1 - p * 1.88);
+      this.nukeFireball.scale.set(fbRadius, fbRadius * 0.76, fbRadius);
+      this.nukeFireballMat.opacity = 0.84 * fbFade;
+      this.nukeFireballMat.color.setHex(p < 0.10 ? 0xfff8d8 : 0xff6820);
+
+      const capY = 3.2 + Math.pow(p, 0.48) * 10.2;
+      const stemH = Math.max(1.4, capY - 0.35);
+      this.nukeStem.scale.set(1.15 + p * 0.58, stemH, 1.15 + p * 0.58);
       this.nukeStem.position.y = stemH * 0.48;
-      this.nukeStem.rotation.set(0, t * 1.8, 0);
+      this.nukeStem.rotation.set(0, t * 2.0, 0);
       this.nukeStemMat.uniforms.uTime!.value = t;
       this.nukeStemMat.uniforms.uProgress!.value = p;
-      this.nukeStemMat.uniforms.uOpacity!.value = 0.96 * fade;
+      this.nukeStemMat.uniforms.uOpacity!.value = 0.98 * fade;
 
-      const capScale = 0.76 + Math.pow(p, 0.44) * 1.88;
+      const capScale = 0.96 + Math.pow(p, 0.42) * 2.38;
       this.nukeCap.position.y = capY;
-      this.nukeCap.scale.set(capScale * 1.24, capScale * 0.88, capScale * 1.24);
-      this.nukeCap.rotation.set(0, -t * 1.15, 0);
+      this.nukeCap.scale.set(capScale * 1.28, capScale * 0.92, capScale * 1.28);
+      this.nukeCap.rotation.set(0, -t * 1.25, 0);
       this.nukeCapMat.uniforms.uTime!.value = t;
       this.nukeCapMat.uniforms.uProgress!.value = p;
-      this.nukeCapMat.uniforms.uOpacity!.value = 0.98 * fade;
+      this.nukeCapMat.uniforms.uOpacity!.value = 0.99 * fade;
 
-      this.nukeCrown.position.y = capY + 0.55 * capScale;
-      this.nukeCrown.scale.set(capScale * 1.36, capScale * 0.74, capScale * 1.36);
-      this.nukeCrown.rotation.set(0, t * 0.9, 0);
+      this.nukeCrown.position.y = capY + 0.58 * capScale;
+      this.nukeCrown.scale.set(capScale * 1.42, capScale * 0.78, capScale * 1.42);
+      this.nukeCrown.rotation.set(0, t * 0.95, 0);
       this.nukeCrownMat.uniforms.uTime!.value = t;
       this.nukeCrownMat.uniforms.uProgress!.value = p * 0.82;
-      this.nukeCrownMat.uniforms.uOpacity!.value = 0.97 * fade;
+      this.nukeCrownMat.uniforms.uOpacity!.value = 0.98 * fade;
 
       this.nukeCoreDome.position.y = capY * 0.92;
-      this.nukeCoreDome.scale.setScalar(capScale * 1.75);
-      this.nukeCoreDomeMat.opacity = Math.max(0, (1 - p * 1.45) * 0.68) * fade;
-      this.nukeCoreDomeMat.color.setHex(p < 0.2 ? 0xffffff : 0xffaa28);
+      this.nukeCoreDome.scale.setScalar(capScale * 2.05);
+      this.nukeCoreDomeMat.opacity = Math.max(0, (1 - p * 1.35) * 0.78) * fade;
+      this.nukeCoreDomeMat.color.setHex(p < 0.22 ? 0xffffff : 0xffaa28);
 
       // Horizontal spin around Y axis so plasma vortex rings hug the vertical stem & mushroom skirt cleanly!
       const lowCycle = (p * 2.2) % 1.0;
       this.nukeVortexLower.position.y = stemH * (0.20 + lowCycle * 0.65);
-      this.nukeVortexLower.scale.setScalar(0.92 + lowCycle * 0.88 + p * 0.32);
-      this.nukeVortexLower.rotation.set(0, t * 3.5, 0);
-      this.nukeVortexLowerMat.opacity = Math.sin(lowCycle * Math.PI) * 0.76 * fade;
+      this.nukeVortexLower.scale.setScalar(1.12 + lowCycle * 1.08 + p * 0.38);
+      this.nukeVortexLower.rotation.set(0, t * 3.8, 0);
+      this.nukeVortexLowerMat.opacity = Math.sin(lowCycle * Math.PI) * 0.84 * fade;
 
       this.nukeVortexUpper.position.y = capY - 0.36 * capScale;
-      this.nukeVortexUpper.scale.setScalar(capScale * 1.16);
-      this.nukeVortexUpper.rotation.set(0, -t * 2.6, 0);
-      this.nukeVortexUpperMat.opacity = 0.72 * fade;
+      this.nukeVortexUpper.scale.setScalar(capScale * 1.24);
+      this.nukeVortexUpper.rotation.set(0, -t * 2.8, 0);
+      this.nukeVortexUpperMat.opacity = 0.82 * fade;
 
-      const wilsonP = Math.min(1, p / 0.36);
-      const wilsonR = 3.2 + wilsonP * 18.5;
+      const wilsonP = Math.min(1, p / 0.38);
+      const wilsonR = 4.2 + wilsonP * 24.0;
       this.nukeWilsonDome.position.y = 0.2;
-      this.nukeWilsonDome.scale.set(wilsonR, wilsonR * 0.72, wilsonR);
-      this.nukeWilsonDomeMat.opacity = p < 0.36 ? Math.sin(wilsonP * Math.PI) * 0.42 : 0;
+      this.nukeWilsonDome.scale.set(wilsonR, wilsonR * 0.75, wilsonR);
+      this.nukeWilsonDomeMat.opacity = p < 0.38 ? Math.sin(wilsonP * Math.PI) * 0.54 : 0;
 
-      const machR = 2.8 + p * 28.0;
+      const machR = 3.5 + p * 36.0;
       this.nukeMachRing.position.y = capY * 0.82;
       this.nukeMachRing.scale.set(machR, machR, 1);
-      this.nukeMachRingMat.opacity = Math.max(0, (1 - p * 1.25) * 0.78);
+      this.nukeMachRingMat.opacity = Math.max(0, (1 - p * 1.18) * 0.86);
 
-      if (p < 0.78 && Math.random() < dt * 28) {
+      if (p < 0.82 && Math.random() < dt * 40) {
         const ang = Math.random() * Math.PI * 2;
-        const rad = capScale * 2.6;
-        this.effects.burst(tx + Math.cos(ang) * rad, capY, tz + Math.sin(ang) * rad, 0xffb838, 2, {
-          speed: 4.8,
-          size: 0.72,
-          life: 0.62,
-          up: 1.35,
+        const rad = capScale * 2.9;
+        this.effects.burst(tx + Math.cos(ang) * rad, capY, tz + Math.sin(ang) * rad, p < 0.35 ? 0xffe478 : 0xff7824, 3, {
+          speed: 6.2,
+          size: 0.82,
+          life: 0.72,
+          up: 1.5,
           gravity: -1.6,
         });
       }
     } else {
       if (this.nukeBlastGroup.visible) {
         this.hemi.intensity = 1.02;
+        if (this.dirLight) this.dirLight.intensity = 1.45;
+        if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.copy(this.baseFogColor);
       }
       this.nukeBlastGroup.visible = false;
     }
@@ -5954,6 +6086,10 @@ export class Renderer {
   // ---------------------------------------------------------------- AAA Dynamic Camera State Machine
   private updateCamera(snap: SimSnapshot, dt: number, cinematic: boolean): void {
     if (this.photoModeState && this.photoModeState.active) {
+      this.screenShakeOut.x = 0;
+      this.screenShakeOut.y = 0;
+      this.screenShakeOut.rotDeg = 0;
+      this.screenShakeOut.scale = 1;
       const pm = this.photoModeState;
       const focusX = snap.squadX * 0.45;
       const focusY = 1.15 + (snap.squadAirY ?? 0) * 0.4;
@@ -5984,25 +6120,68 @@ export class Renderer {
     const targetBank = THREE.MathUtils.clamp(-rawVx * 0.0042, -0.048, 0.048);
     this.camBankRoll += (targetBank - this.camBankRoll) * (1 - Math.exp(-safeDt * 10));
 
-    // 2. Speed/Overdrive/Airborne Dynamic FOV + Chromatic Shockwave Decay
+    // Advance nuclear shockwave ripple, thermal heat glow & multi-wave seismic quake timers
+    if (this.nukeWaveTimer > 0) {
+      this.nukeWaveTimer = Math.max(0, this.nukeWaveTimer - dt);
+    }
+    if (this.nukeHeatAmt > 0) {
+      this.nukeHeatAmt *= Math.exp(-safeDt * 1.45);
+      if (this.nukeHeatAmt < 0.003) this.nukeHeatAmt = 0;
+    }
+
+    let nukeQuakeAmp = 0;
+    let nukeFovPunch = 0;
+    let nukeElapsed = 0;
+    if (this.nukeQuakeTimer > 0) {
+      this.nukeQuakeTimer = Math.max(0, this.nukeQuakeTimer - dt);
+      nukeElapsed = Math.max(0, this.nukeQuakeDur - this.nukeQuakeTimer);
+      // 4-Wave Seismic Envelope:
+      //  Wave 1: Ground-zero impact slam (0.00s..0.55s)
+      //  Wave 2: Hypersonic shockwave arrival slam right after initial flash clears (peaks @ 0.28s!)
+      //  Wave 3: Mushroom cloud tectonic aftershock #1 (peaks @ 0.78s)
+      //  Wave 4: Deep rumbling tectonic tail (peaks @ 1.45s -> 2.65s)
+      const w1 = Math.exp(-nukeElapsed * 3.8) * 1.15;
+      const d2 = (nukeElapsed - 0.28) / 0.16;
+      const w2 = Math.exp(-d2 * d2) * 1.05;
+      const d3 = (nukeElapsed - 0.78) / 0.24;
+      const w3 = Math.exp(-d3 * d3) * 0.48;
+      const d4 = (nukeElapsed - 1.45) / 0.42;
+      const w4 = Math.exp(-d4 * d4) * 0.24;
+      const fadeOut = this.nukeQuakeTimer < 0.35 ? this.nukeQuakeTimer / 0.35 : 1;
+      nukeQuakeAmp = Math.min(1.45, (w1 + w2 + w3 + w4) * this.nukeQuakeStrength * fadeOut);
+      // Dynamic FOV blast punch: brief vacuum pinch -> wide-angle shockwave blowout!
+      if (nukeElapsed < 0.12) {
+        nukeFovPunch = -5.0 * (1 - nukeElapsed / 0.12) * this.nukeQuakeStrength;
+      } else {
+        nukeFovPunch = 9.5 * Math.exp(-(nukeElapsed - 0.12) * 3.2) * this.nukeQuakeStrength;
+      }
+      if (this.nukeQuakeTimer <= 0) {
+        this.nukeQuakeStrength = 0;
+      }
+    }
+
+    // 2. Speed/Overdrive/Airborne Dynamic FOV + Chromatic Shockwave Decay + Nuclear Blast Punch
     const airY = snap.squadAirY ?? 0;
+    const descentZoom = this.nukeDescentTremor > 0 ? -this.nukeDescentTremor * 9.5 : 0;
     const targetFovOff =
       (snap.overdriveTimer > 0 ? 5.2 : 0) +
       (airY > 0.1 ? Math.min(6.2, airY * 2.2) : 0) +
-      (snap.blitzActive ? 2.0 : 0) -
+      (snap.blitzActive ? 2.0 : 0) +
+      nukeFovPunch * this.shakeScale +
+      descentZoom -
       (this.shockwaveAmt > 0.25 ? this.shockwaveAmt * 2.4 : 0) -
       (this.phaseCamTimer > 0 ? Math.sin((1 - this.phaseCamTimer / this.phaseCamDur) * Math.PI) * 6.2 : 0);
-    this.dynFovOffset += (targetFovOff - this.dynFovOffset) * (1 - Math.exp(-safeDt * 7.5));
-    const desiredFov = THREE.MathUtils.clamp(this.fov + this.dynFovOffset, 42, 74);
+    this.dynFovOffset += (targetFovOff - this.dynFovOffset) * (1 - Math.exp(-safeDt * 9.5));
+    const desiredFov = THREE.MathUtils.clamp(this.fov + this.dynFovOffset, 42, 78);
     if (Math.abs(this.camera.fov - desiredFov) > 0.03) {
       this.camera.fov = desiredFov;
       this.camera.updateProjectionMatrix();
     }
     this.shockwaveAmt *= Math.exp(-safeDt * 6.5);
     if (this.shockwaveAmt < 0.002) this.shockwaveAmt = 0;
-    this.chromaAmt *= Math.exp(-safeDt * 8.5);
+    this.chromaAmt *= Math.exp(-safeDt * 4.8);
     if (this.chromaAmt < 0.0002) this.chromaAmt = 0;
-    this.radialBlurAmt *= Math.exp(-safeDt * 7.5);
+    this.radialBlurAmt *= Math.exp(-safeDt * 4.5);
     if (this.radialBlurAmt < 0.001) this.radialBlurAmt = 0;
 
     let phaseZoomBell = 0;
@@ -6029,28 +6208,56 @@ export class Renderer {
     }
 
     this.camX += (snap.squadX * 0.35 - this.camX) * followAlpha;
-    const kickDecay = Math.exp(-safeDt * 18);
+    const kickDecay = Math.exp(-safeDt * 11.5);
     this.camKickZ *= kickDecay;
     this.camKickRoll *= kickDecay;
 
     const bb = this.bossBlend;
     const y = CAM_BASE_Y + bb * 1.65 - phaseZoomBell * 1.35 + airY * 0.38 + (cinematic ? 1.1 : 0) - this.camKickZ * 0.18;
     const z = CAM_BASE_Z + bb * 1.9 - phaseZoomBell * 3.6 + (snap.overdriveTimer > 0 ? 0.45 : 0) + (cinematic ? 1.4 : 0) + this.camKickZ;
-    this.trauma = Math.max(0, this.trauma - dt * 1.9);
+    this.trauma = Math.max(0, this.trauma - dt * 1.85);
     const sh = this.trauma * this.trauma;
-    const sx = (Math.random() - 0.5) * sh * 1.12;
-    const sy = (Math.random() - 0.5) * sh * 0.82;
-    if (this.replayCameraMode === 'tactical_top' && !cinematic) {
-      this.camera.position.set(this.camX * 0.45 + sx, y + 9.2 + sy, z + 3.2);
-      this.camera.lookAt(this.camX * 0.35, 0, -16.5 - bb * 2.5);
-    } else if (this.replayCameraMode === 'action_closeup' && !cinematic) {
-      this.camera.position.set(snap.squadX * 0.72 + sx, y - 2.35 + airY * 0.5 + sy, z - 3.4);
-      this.camera.lookAt(snap.squadX * 0.42, 1.05 + airY * 0.35, -13.5 - bb * 3.0);
-      this.camera.rotation.z += this.camBankRoll * 1.45 + this.camKickRoll;
+
+    // Multi-octave seismic harmonic oscillators for true physical shockwave vibration
+    const totalQuake = Math.min(1.5, nukeQuakeAmp + this.nukeDescentTremor) * this.shakeScale;
+    const qt = this.time;
+    const oscX = Math.sin(qt * 53.0) * 0.52 + Math.sin(qt * 27.4 + 1.1) * 0.34 + Math.cos(qt * 13.7 + 2.3) * 0.14;
+    const oscY = Math.cos(qt * 47.0 + 0.7) * 0.50 + Math.sin(qt * 23.1 + 2.0) * 0.36 + Math.sin(qt * 11.3) * 0.14;
+    const oscZ = Math.sin(qt * 37.0 + 0.4) * 0.6 + Math.cos(qt * 19.2) * 0.4;
+    const oscRoll = Math.sin(qt * 31.0 + 0.5) * 0.62 + Math.cos(qt * 15.8 + 1.7) * 0.38;
+
+    const sx = (Math.random() - 0.5) * sh * 1.18 + oscX * totalQuake * 1.38;
+    const sy = (Math.random() - 0.5) * sh * 0.86 + oscY * totalQuake * 1.08;
+    const sz = oscZ * totalQuake * 0.92;
+    const lookQx = oscX * totalQuake * 0.92 + (Math.random() - 0.5) * sh * 0.32;
+    const lookQy = oscY * totalQuake * 0.78 + (Math.random() - 0.5) * sh * 0.24;
+    const rollQuake = oscRoll * totalQuake * 0.082 + (Math.random() - 0.5) * sh * 0.026;
+
+    // Synchronized viewport CSS seismic shake (scaled by shakeScale, overscan zoom eliminates edge gaps)
+    if (!cinematic && (totalQuake > 0.008 || sh > 0.18)) {
+      const domAmp = totalQuake + Math.max(0, sh - 0.18) * 0.28;
+      this.screenShakeOut.x = oscX * 16.5 * totalQuake + (Math.random() - 0.5) * sh * 5.0;
+      this.screenShakeOut.y = oscY * 13.5 * totalQuake + (Math.random() - 0.5) * sh * 4.2;
+      this.screenShakeOut.rotDeg = oscRoll * 1.95 * totalQuake + (Math.random() - 0.5) * sh * 0.35;
+      this.screenShakeOut.scale = 1 + Math.min(0.058, domAmp * 0.044);
     } else {
-      this.camera.position.set(this.camX + awakenOrbitX + sx, y + sy, z);
-      this.camera.lookAt(this.camX * 0.56, 0.3 + airY * 0.25, -8.4 - bb * 2.2);
-      this.camera.rotation.z += this.camBankRoll + this.camKickRoll + (Math.random() - 0.5) * sh * 0.022;
+      this.screenShakeOut.x = 0;
+      this.screenShakeOut.y = 0;
+      this.screenShakeOut.rotDeg = 0;
+      this.screenShakeOut.scale = 1;
+    }
+
+    if (this.replayCameraMode === 'tactical_top' && !cinematic) {
+      this.camera.position.set(this.camX * 0.45 + sx, y + 9.2 + sy, z + 3.2 + sz);
+      this.camera.lookAt(this.camX * 0.35 + lookQx, lookQy, -16.5 - bb * 2.5);
+    } else if (this.replayCameraMode === 'action_closeup' && !cinematic) {
+      this.camera.position.set(snap.squadX * 0.72 + sx, y - 2.35 + airY * 0.5 + sy, z - 3.4 + sz);
+      this.camera.lookAt(snap.squadX * 0.42 + lookQx, 1.05 + airY * 0.35 + lookQy, -13.5 - bb * 3.0);
+      this.camera.rotation.z += this.camBankRoll * 1.45 + this.camKickRoll + rollQuake;
+    } else {
+      this.camera.position.set(this.camX + awakenOrbitX + sx, y + sy, z + sz);
+      this.camera.lookAt(this.camX * 0.56 + lookQx, 0.3 + airY * 0.25 + lookQy, -8.4 - bb * 2.2);
+      this.camera.rotation.z += this.camBankRoll + this.camKickRoll + rollQuake;
     }
   }
 

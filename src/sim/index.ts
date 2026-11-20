@@ -120,6 +120,9 @@ export function createSimulation(): SimulationController {
         pendingOverdrive = false;
         pendingAegisPulse = false;
         pendingNukeStrike = false;
+        pendingSwapWeapon = false;
+        pendingCycleWingman = false;
+        pendingNirvanaBurst = false;
         invalidateSnapshot();
       }
       return chosen;
@@ -131,6 +134,9 @@ export function createSimulation(): SimulationController {
       pendingOverdrive = false;
       pendingAegisPulse = false;
       pendingNukeStrike = false;
+      pendingSwapWeapon = false;
+      pendingCycleWingman = false;
+      pendingNirvanaBurst = false;
       resetSimWorldForSector(world, world.sector, initialMods);
       recorder.start(world.sector, world.mods.layoutSeed ?? 0, initialMods);
       invalidateSnapshot();

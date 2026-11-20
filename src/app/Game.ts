@@ -173,6 +173,8 @@ export class Game {
   private specialFloatClock = 0;
   private nukeHitStopTimer = 0;
   private hitStopCooldown = 0;
+  private nirvanaDenyClock = 0;
+  private viewportShakeActive = false;
   private bulletTimeTimer = 0;
   private bulletTimeDur = 0.22;
   private killBatchTimer = 0;
@@ -193,8 +195,8 @@ export class Game {
 
   constructor(
     private readonly stage: HTMLElement,
-    canvas: HTMLCanvasElement,
-    uiRoot: HTMLElement,
+    private readonly canvas: HTMLCanvasElement,
+    private readonly uiRoot: HTMLElement,
     opts: { standaloneCanvas?: boolean } = {},
   ) {
     const params = new URLSearchParams(location.search);
@@ -243,7 +245,16 @@ export class Game {
       onWatchReplay: () => this.startTacticalReplay(),
       onExitReplay: () => this.exitTacticalReplay(),
       onOpenRange: () => this.startFiringRange(),
-      onRangeControl: (cmd) => this.sim.configureRange(cmd),
+      onRangeControl: (cmd) => {
+        if (cmd.triggerNirvana && this.state === 'playing') {
+          const { triggerNirvana: _t, ...rest } = cmd;
+          if (Object.keys(rest).length > 0) this.sim.configureRange(rest);
+          this.audio.unlock();
+          this.input.requestNirvanaBurst();
+          return;
+        }
+        this.sim.configureRange(cmd);
+      },
       onOpenControls: () => {
         this.ui.showControls(true);
         this.ui.renderControls(
@@ -315,7 +326,10 @@ export class Game {
       onOpenExpedition: () => this.openExpeditionScreen(),
       onStartExpeditionNode: (nodeId) => this.startExpeditionNode(nodeId),
       onResetExpedition: () => this.resetExpeditionMap(),
-      onTriggerNirvana: () => this.input.requestNirvanaBurst(),
+      onTriggerNirvana: () => {
+        this.audio.unlock();
+        this.input.requestNirvanaBurst();
+      },
       onToggleLiveTelemetry: () => {
         this.save.showLiveTelemetry = !this.save.showLiveTelemetry;
         writeSave(this.save);
@@ -373,6 +387,7 @@ export class Game {
       onRetry: () => { void this.submitRanking(); },
     });
     this.input.setKeybinds(this.save.keybinds);
+    this.ui.setKeybindLabels(this.input.getKeybinds());
     this.input.onGamepadChange = (connected, name) => {
       if (connected) {
         this.ui.toast(html`🎮 手柄已接入：<b>${name.slice(0, 26)}</b>`, 2200);
@@ -397,7 +412,10 @@ export class Game {
       this.audio.unlock();
       this.input.requestNuke();
     };
-    this.ui.onNirvana = () => this.input.requestNirvanaBurst();
+    this.ui.onNirvana = () => {
+      this.audio.unlock();
+      this.input.requestNirvanaBurst();
+    };
     this.input.onPhotoModeKey = () => {
       if (this.state === 'photo') this.exitPhotoMode();
       else if (this.state === 'playing' || this.state === 'paused' || this.state === 'ready') this.enterPhotoMode();
@@ -927,6 +945,7 @@ export class Game {
       }
       this.save.keybinds[action] = newKey;
       this.input.setKeybinds(this.save.keybinds);
+      this.ui.setKeybindLabels(this.input.getKeybinds());
       writeSave(this.save);
       this.audio.click();
       btn.classList.remove('listening');
@@ -937,6 +956,7 @@ export class Game {
   private resetKeybinds(): void {
     this.save.keybinds = { ...DEFAULT_KEYBINDS };
     this.input.setKeybinds(this.save.keybinds);
+    this.ui.setKeybindLabels(this.input.getKeybinds());
     writeSave(this.save);
     this.audio.powerUp();
     this.ui.renderControls(this.save.keybinds, this.input.getConnectedGamepadName());
@@ -1070,6 +1090,20 @@ export class Game {
         const events = this.sim.tickFrame(simDt, { dragDeltaX: drag, keyAxisX: axis, overdrive, aegisPulse, nukeStrike, swapWeapon, cycleWingman, nirvanaBurst });
         snap = this.sim.getSnapshot();
         this.handleEvents(events, snap, true);
+        const nirvanaReadyNow =
+          !this.fairTrial && (Boolean(snap.isFiringRange) || (snap.nirvanaCharge ?? 0) >= 0.999);
+        if (nirvanaBurst && !nirvanaReadyNow && !events.some((ev) => ev.type === 'OVERLIMIT_NIRVANA_BURST')) {
+          if (this.nirvanaDenyClock <= 0) {
+            this.nirvanaDenyClock = 1.35;
+            this.ui.pulseNirvanaNotReady();
+            if (this.fairTrial) {
+              this.ui.toast('🔒 公平试炼模式已禁用终焉奥义', 1600);
+            } else if ((snap.nirvanaActiveTimer ?? 0) <= 0) {
+              const pct = Math.round(Math.max(0, Math.min(1, snap.nirvanaCharge ?? 0)) * 100);
+              this.ui.toast(`☀️ 奥义充能中 ${pct}% · 歼敌/折镜/超载快速蓄能`, 1500);
+            }
+          }
+        }
         this.liveChecks(snap, dt);
         this.stepGhostDuel(snap);
         break;
@@ -1115,6 +1149,19 @@ export class Game {
     }
     this.lastSnap = snap;
     this.renderer.render(snap, dt, this.state === 'outro' || this.state === 'result');
+    const sh = this.renderer.getScreenShakeOffset();
+    const allowViewportShake =
+      (this.state === 'playing' || this.state === 'replay') &&
+      (Math.abs(sh.x) > 0.05 || Math.abs(sh.y) > 0.05 || Math.abs(sh.rotDeg) > 0.01);
+    if (allowViewportShake) {
+      this.canvas.style.transform = `translate3d(${sh.x.toFixed(2)}px, ${sh.y.toFixed(2)}px, 0) rotate(${sh.rotDeg.toFixed(3)}deg) scale(${sh.scale.toFixed(4)})`;
+      this.uiRoot.style.transform = `translate3d(${(sh.x * 0.72).toFixed(2)}px, ${(sh.y * 0.72).toFixed(2)}px, 0) rotate(${(sh.rotDeg * 0.55).toFixed(3)}deg)`;
+      this.viewportShakeActive = true;
+    } else if (this.viewportShakeActive) {
+      this.canvas.style.transform = '';
+      this.uiRoot.style.transform = '';
+      this.viewportShakeActive = false;
+    }
     if (this.state !== 'title') {
       const airY = snap.squadAirY ?? 0;
       const badgeY = (snap.squadCount >= 55 ? 2.95 : snap.squadCount >= 14 ? 1.86 : 1.68) + airY;
@@ -1145,6 +1192,7 @@ export class Game {
       Boolean(snap.pantheonCoBoss?.active),
     );
     if (this.hitStopCooldown > 0) this.hitStopCooldown = Math.max(0, this.hitStopCooldown - dt);
+    if (this.nirvanaDenyClock > 0) this.nirvanaDenyClock = Math.max(0, this.nirvanaDenyClock - dt);
     if (this.critFloatClock > 0) this.critFloatClock = Math.max(0, this.critFloatClock - dt);
     if (this.specialFloatClock > 0) this.specialFloatClock = Math.max(0, this.specialFloatClock - dt);
     if (this.hintCooldown > 0) this.hintCooldown = Math.max(0, this.hintCooldown - dt);
@@ -1595,16 +1643,17 @@ export class Game {
         }
         case 'NUKE_DETONATE': {
           this.renderer.triggerNukeDetonationVfx(ev.x, ev.z);
-          this.renderer.triggerShockwave(1.15);
-          this.renderer.spawnDecal(ev.x, ev.z, 8.2, 0xff7a1f, 4, 22);
-          this.renderer.triggerCinematicImpact(0.020, 0.38, ev.x, ev.z);
+          this.renderer.triggerShockwave(1.2);
+          this.renderer.spawnDecal(ev.x, ev.z, 9.6, 0xff7a1f, 4, 24);
+          this.renderer.triggerCinematicImpact(0.022, 0.42, ev.x, ev.z);
           if (live) {
-            this.nukeHitStopTimer = 0.085;
-            this.input.rumble(1.0, 1.0, 480);
-            a.triggerUltimateDuck(0.85);
+            this.nukeHitStopTimer = 0.105;
+            this.input.rumble(1.0, 1.0, 950);
+            fx.after(0.30, () => this.input.rumble(0.95, 0.85, 520));
+            a.triggerUltimateDuck(0.95);
             a.nukeDetonate();
             a.nukeChainShatter(ev.kills);
-            this.ui.doFlash('rgba(255,250,220,0.95)', 0.82);
+            this.ui.doNukeFlash(1.0);
             this.addScore(450 + ev.kills * 30 + Math.round(ev.bossDamage * 0.45));
             const bossSub = ev.bossDamage > 0 ? ` · 首领重创 -${ev.bossDamage}` : '';
             this.ui.showBanner(
@@ -2412,6 +2461,8 @@ export class Game {
           fx.burst(ev.x, 1.5, ev.z, colNum, 150, { speed: 17, size: 0.66, life: 0.88, up: 1.3 });
           fx.shatter(ev.x, 1.4, ev.z, colNum, 28, true);
           this.renderer.spawnDecal(ev.x, ev.z, 4.4, colNum, decalKind, 20);
+          this.renderer.shake(0.88);
+          this.renderer.triggerScreenQuake(0.75, 0.48);
           this.renderer.triggerShockwave(1.05);
           this.renderer.triggerExecutionCam(1.1);
           this.renderer.triggerCinematicImpact(0.019, 0.36, ev.x, ev.z);

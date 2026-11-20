@@ -222,6 +222,9 @@ export class UI {
   private banner!: HTMLElement;
   private toastEl!: HTMLElement;
   private flash!: HTMLElement;
+  private nukeScorch!: HTMLElement;
+  private nukeScorchTimer: number | null = null;
+  private nirvanaKeyLabel = 'G';
   private vignette!: HTMLElement;
   private squadBadge!: HTMLElement;
   private squadNum!: HTMLElement;
@@ -507,8 +510,15 @@ export class UI {
     });
     this.nirvanaBtn.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      this.onNirvana?.();
-      this.cb.onTriggerNirvana();
+      if (this.onNirvana) this.onNirvana();
+      else this.cb.onTriggerNirvana();
+    });
+    this.nirvanaBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.detail === 0) {
+        if (this.onNirvana) this.onNirvana();
+        else this.cb.onTriggerNirvana();
+      }
     });
     this.liveTelToggleBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -522,8 +532,8 @@ export class UI {
     });
     this.wingmanChip.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      this.onWingmanCycle?.();
-      this.cb.onCycleWingman();
+      if (this.onWingmanCycle) this.onWingmanCycle();
+      else this.cb.onCycleWingman();
     });
     this.speedBtn.addEventListener('click', () => this.cb.onToggleSpeed());
     this.voxHudEl = this.hud.querySelector('.tactical-vox')!;
@@ -566,11 +576,12 @@ export class UI {
     this.toastEl = el('div', 'toast');
     this.toastEl.dataset.testid = 'toast';
     this.flash = el('div', 'flash');
+    this.nukeScorch = el('div', 'nuke-scorch');
     this.vignette = el('div', 'vignette');
     this.letterboxEl = el('div', 'cinema-letterbox');
     render(this.letterboxEl, html`<div class="lb-top"></div><div class="lb-bot"></div>`);
     this.letterboxEl.dataset.testid = 'cinema-letterbox';
-    this.root.append(this.vignette, this.letterboxEl, this.flash, this.banner, this.toastEl);
+    this.root.append(this.vignette, this.letterboxEl, this.flash, this.nukeScorch, this.banner, this.toastEl);
 
     this.pauseEl = el('div', 'screen modal pause-screen');
     this.pauseEl.dataset.testid = 'pause-screen';
@@ -1971,23 +1982,27 @@ export class UI {
     }
 
     // V23: 2nd-Order Overlimit Nirvana Burst Charge & Tri-Prism Lattice Indicator
-    const nirCharge = Math.max(0, Math.min(1, snap.nirvanaCharge ?? 0));
-    const nirActive = (snap.nirvanaActiveTimer ?? 0) > 0;
-    const latActive = (snap.triPrismLatticeTimer ?? 0) > 0;
-    const nirReady = !nirActive && nirCharge >= 0.999;
+    const fairDisabled = Boolean(snap.fairTrial);
+    const nirCharge = fairDisabled ? 0 : Math.max(0, Math.min(1, snap.nirvanaCharge ?? 0));
+    const nirActive = !fairDisabled && (snap.nirvanaActiveTimer ?? 0) > 0;
+    const latActive = !fairDisabled && (snap.triPrismLatticeTimer ?? 0) > 0;
+    const nirReady = !fairDisabled && !nirActive && (nirCharge >= 0.999 || Boolean(snap.isFiringRange));
     const partnerW = (snap.activeLoadout ?? []).find((w) => w !== snap.weapon) ?? null;
     const arch = resolveNirvanaArchetype(snap.weapon, partnerW);
     const archMeta = NIRVANA_META[arch];
     this.nirvanaBtn.classList.toggle('ready', nirReady);
     this.nirvanaBtn.classList.toggle('active', nirActive || latActive);
-    this.nirvanaFill.style.width = `${(nirActive ? 100 : nirCharge * 100).toFixed(1)}%`;
-    this.nirvanaText.textContent = nirActive
-      ? `${archMeta.glyph} 奥义释放!`
-      : nirReady
-        ? `${archMeta.glyph} ${archMeta.short} [G]`
-        : latActive
-          ? `🔺谐振 ${Math.round(nirCharge * 100)}%`
-          : `☀️ 奥义 ${Math.round(nirCharge * 100)}%`;
+    this.nirvanaBtn.classList.toggle('disabled', fairDisabled);
+    this.nirvanaFill.style.width = `${(nirActive || nirReady ? 100 : nirCharge * 100).toFixed(1)}%`;
+    this.nirvanaText.textContent = fairDisabled
+      ? '🔒 试炼禁用'
+      : nirActive
+        ? `${archMeta.glyph} 奥义释放!`
+        : nirReady
+          ? `${archMeta.glyph} ${archMeta.short} [${this.nirvanaKeyLabel}]`
+          : latActive
+            ? `🔺谐振 ${Math.round(nirCharge * 100)}%`
+            : `☀️ 奥义 ${Math.round(nirCharge * 100)}%`;
 
     // V23 Stage 4: Live Combat Breakdown & Refraction Efficiency Donut Pie + Bars
     if (this.liveTelOpen) {
@@ -2232,6 +2247,16 @@ export class UI {
     }
   }
 
+  setKeybindLabels(map: KeybindMap): void {
+    this.nirvanaKeyLabel = formatKeyLabel(map.nirvanaBurst || 'g');
+  }
+
+  pulseNirvanaNotReady(): void {
+    this.nirvanaBtn.classList.remove('not-ready-shake');
+    void this.nirvanaBtn.offsetWidth;
+    this.nirvanaBtn.classList.add('not-ready-shake');
+  }
+
   doFlash(color: string, strength = 0.6): void {
     const scaled = strength * this.flashScale;
     if (scaled <= 0.01) return;
@@ -2241,6 +2266,40 @@ export class UI {
     void this.flash.offsetWidth;
     this.flash.style.transition = 'opacity 0.45s ease-out';
     this.flash.style.opacity = '0';
+  }
+
+  /** Multi-stage thermonuclear blinding white-gold core flash -> searing amber thermal vignette */
+  doNukeFlash(strength = 1.0): void {
+    const scaled = Math.min(1, strength * this.flashScale);
+    if (scaled <= 0.01) return;
+    if (this.nukeScorchTimer !== null) {
+      clearTimeout(this.nukeScorchTimer);
+      this.nukeScorchTimer = null;
+    }
+    // Stage 1: Blinding solar-white core flash that clears swiftly (~260ms) so the mushroom cloud & screen quake shine!
+    this.flash.style.background =
+      'radial-gradient(circle at 50% 42%, rgba(255,255,248,0.98) 0%, rgba(255,238,165,0.94) 48%, rgba(255,126,28,0.86) 100%)';
+    this.flash.style.transition = 'none';
+    this.flash.style.opacity = String(Math.min(0.96, scaled * 0.96));
+    void this.flash.offsetWidth;
+    this.flash.style.transition = 'opacity 0.28s cubic-bezier(0.22, 1, 0.36, 1)';
+    this.flash.style.opacity = '0';
+
+    // Stage 2: Searing molten-orange radiation edge vignette pulsing through the shockwave aftermath!
+    this.nukeScorch.style.transition = 'none';
+    this.nukeScorch.style.opacity = String(Math.min(0.92, scaled * 0.88));
+    void this.nukeScorch.offsetWidth;
+    this.nukeScorch.style.transition = 'opacity 0.24s ease-out';
+    this.nukeScorch.style.opacity = String(Math.min(0.68, scaled * 0.64));
+    this.nukeScorchTimer = window.setTimeout(() => {
+      this.nukeScorchTimer = null;
+      // Secondary pulse on shockwave Wave 2 slam, then long organic thermal decay
+      this.nukeScorch.style.transition = 'none';
+      this.nukeScorch.style.opacity = String(Math.min(0.86, scaled * 0.80));
+      void this.nukeScorch.offsetWidth;
+      this.nukeScorch.style.transition = 'opacity 1.65s ease-out';
+      this.nukeScorch.style.opacity = '0';
+    }, 240);
   }
 
   hurt(): void {
@@ -2257,6 +2316,12 @@ export class UI {
       clearTimeout(this.toastTimer);
       this.toastTimer = null;
     }
+    if (this.nukeScorchTimer !== null) {
+      clearTimeout(this.nukeScorchTimer);
+      this.nukeScorchTimer = null;
+    }
+    this.nukeScorch.style.transition = 'none';
+    this.nukeScorch.style.opacity = '0';
     for (const f of this.floats) {
       f.alive = false;
       f.el.style.opacity = '0';
@@ -2987,7 +3052,7 @@ export class UI {
     if (!foot) return;
     foot.textContent =
       mode === 'gamepad'
-        ? '🎮 左摇杆/十字键 移动 · A/RT 超载 · B/LB 脉冲 · X/RB 切枪 · L3 僚机阵型 · Y/LT 核弹'
-        : '拖动/A D 移动 · 空格 超载 · E 脉冲 · Tab 切枪 · F 僚机阵型 · Q 核弹';
+        ? '🎮 左摇杆/十字键 移动 · A/RT 超载 · B/LB 脉冲 · X/RB 切枪 · L3 僚机 · LB+RB 奥义 · Y/LT 核弹'
+        : '拖动/A D 移动 · 空格 超载 · E 脉冲 · Tab 切枪 · F 僚机 · G 奥义 · Q 核弹';
   }
 }

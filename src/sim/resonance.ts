@@ -4,6 +4,7 @@ import { hasSynergy } from '../config/protocols';
 import { allocEntityId, type SimWorld } from './entities';
 import { normalizeZero } from './math';
 import { triggerCoreReactorDomainPulse } from './v21Mechanics';
+import { addNirvanaCharge } from './v23Mechanics';
 
 const FULL_EPS = 1e-9;
 
@@ -71,5 +72,6 @@ function startOverdrive(world: SimWorld, events: SimEvent[]): void {
     z: PLAYER_Z,
     ...(breakSync ? { overdriveBreakSync: true } : {}),
   });
+  addNirvanaCharge(world, 0.16);
   triggerCoreReactorDomainPulse(world, 'overdrive', events);
 }

@@ -692,6 +692,7 @@ export interface SimSnapshot {
   activeDualSynergy?: DualSynergyId | null;
   overlimitResonance?: OverlimitResonanceId | null;
   isFiringRange?: boolean;
+  fairTrial?: boolean;
   rangeRealizedDps?: number;
   rangeCounterMult?: number;
   rangeReflectorAngle?: number;

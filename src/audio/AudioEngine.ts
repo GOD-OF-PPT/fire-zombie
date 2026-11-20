@@ -2153,14 +2153,25 @@ export class AudioEngine {
     const ctx = this.ctx;
     if (!ctx || !this.sfx) return;
     const t = ctx.currentTime;
-    this.duckMusic(0.8, 1.3, 0.8);
-    this.subPunch(70, 140, 0.035, 0.24, t);
-    const b = t + 0.032;
-    this.playFoley('heavyBoom', { vol: 0.82, rate: 0.65, when: b, priority: true });
-    this.playFoley('heavyBoom', { vol: 0.64, rate: 0.88, when: b + 0.04, panX: -2.4, worldZ: -28, priority: true });
-    this.playFoley('heavyBoom', { vol: 0.64, rate: 0.82, when: b + 0.06, panX: 2.4, worldZ: -46, priority: true });
-    this.subPunch(135, 24, 1.8, 0.56, b);
-    this.noise(1.9, { warm: true, vol: 0.42, freq: 580, slideTo: 48, when: b + 0.04 });
+    this.duckMusic(0.86, 1.85, 0.9);
+    // Instant vacuum breath-in implosion right before the thermonuclear crack
+    this.subPunch(56, 175, 0.042, 0.28, t);
+    const b = t + 0.036;
+    // Wave 1: Ground-zero blinding thermonuclear detonation
+    this.playFoley('heavyBoom', { vol: 0.92, rate: 0.56, when: b, priority: true });
+    this.playFoley('heavyBoom', { vol: 0.72, rate: 0.84, when: b + 0.04, panX: -2.4, worldZ: -28, priority: true });
+    this.playFoley('heavyBoom', { vol: 0.72, rate: 0.78, when: b + 0.06, panX: 2.4, worldZ: -46, priority: true });
+    this.subPunch(165, 20, 2.25, 0.68, b);
+    this.noise(2.15, { warm: true, vol: 0.48, freq: 720, slideTo: 42, when: b + 0.03 });
+    // Wave 2: Hypersonic shockwave arrival slam synced with screen quake Wave 2 (+0.26s)
+    const w2 = b + 0.26;
+    this.playFoley('heavyBoom', { vol: 0.85, rate: 0.48, when: w2, priority: true });
+    this.subPunch(110, 18, 1.45, 0.54, w2);
+    this.noise(1.1, { warm: true, vol: 0.36, freq: 980, slideTo: 65, when: w2 });
+    // Wave 3: Rolling tectonic earthquake aftershock rumble (+0.78s)
+    const w3 = b + 0.78;
+    this.subPunch(68, 22, 1.35, 0.36, w3);
+    this.noise(1.55, { warm: true, vol: 0.26, freq: 240, slideTo: 36, when: w3 });
   }
 
   // ---------------------------------------------------------------- Musical FM Gates, Vaults & UI Rewards

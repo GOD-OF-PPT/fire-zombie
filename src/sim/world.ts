@@ -873,7 +873,9 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
       input.overdrive === true ||
       input.aegisPulse === true ||
       input.nukeStrike === true ||
-      input.swapWeapon === true;
+      input.swapWeapon === true ||
+      input.cycleWingman === true ||
+      input.nirvanaBurst === true;
     if (moved) {
       world.afkIdleTimer = 0;
     } else {
@@ -1241,6 +1243,7 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
     activeLoadout: [...world.activeLoadout],
     activeDualSynergy: world.activeDualSynergy,
     overlimitResonance: world.overlimitResonance,
+    ...(world.mods.fairTrial ? { fairTrial: true } : {}),
     ...(world.isFiringRange
       ? {
           isFiringRange: true,
