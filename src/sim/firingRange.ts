@@ -181,11 +181,10 @@ export function stepFiringRangeWorld(world: SimWorld, events: SimEvent[]): void 
   world.runwayProgress = 0.5;
   if (world.squadCount < 120) world.squadCount = 120;
   if (world.resonance < 1.0 && world.overdriveTimer <= 0) {
-    world.resonance = Math.min(1.0, world.resonance + FIXED_DT * 0.45);
+    world.resonance = Math.min(1.0, world.resonance + FIXED_DT * 0.85);
   }
-  if (world.nukeCharge < 1.0 && world.nukeDropTimer <= 0 && world.nukeBlastTimer <= 0) {
-    world.nukeCharge = Math.min(1.0, world.nukeCharge + FIXED_DT * 0.25);
-  }
+  world.nukeStocks = world.nukeMaxStocks;
+  world.nukeCharge = 1.0;
 
   // Keep stationary dummies anchored in the holographic target zone (`z <= -13.5`)
   for (let i = 0; i < world.enemies.length; i++) {

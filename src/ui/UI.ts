@@ -504,9 +504,17 @@ export class UI {
       e.stopPropagation();
       this.onAegis?.();
     });
+    this.aegisBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.detail === 0) this.onAegis?.();
+    });
     this.nukeBtn.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
       this.onNuke?.();
+    });
+    this.nukeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.detail === 0) this.onNuke?.();
     });
     this.nirvanaBtn.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -1886,9 +1894,9 @@ export class UI {
 
     const aegisTimer = snap.aegisTimer ?? 0;
     const aegisCd = snap.aegisCooldown ?? 0;
-    const aegisMax = Math.max(1, snap.aegisMaxCooldown ?? 14);
-    const aegisActive = aegisTimer > 0;
-    const aegisReady = !aegisActive && aegisCd <= 0.01;
+    const aegisMax = Math.max(1, snap.aegisMaxCooldown ?? 5.5);
+    const aegisReady = aegisCd <= 0.01;
+    const aegisActive = aegisTimer > 0 && !aegisReady;
     this.aegisBtn.classList.toggle('active', aegisActive);
     this.aegisBtn.classList.toggle('ready', aegisReady);
     const fillPct = aegisActive ? 100 : aegisReady ? 100 : Math.max(0, (1 - aegisCd / aegisMax) * 100);
@@ -1902,21 +1910,28 @@ export class UI {
     const nukeDrop = snap.nukeDropTimer ?? 0;
     const nukeBlast = snap.nukeBlastTimer ?? 0;
     const nukeCharge = snap.nukeCharge ?? 1;
+    const maxStocks = Math.max(1, snap.nukeMaxStocks ?? 3);
+    const stocks = snap.nukeStocks ?? (nukeCharge >= 0.999 ? 1 : 0);
+    const activeStrikes = snap.nukeStrikes?.length ?? 0;
     const nukeDropping = nukeDrop > 0;
     const nukeBlasting = !nukeDropping && nukeBlast > 0;
-    const nukeReady = !nukeDropping && !nukeBlasting && nukeCharge >= 0.999;
-    this.nukeBtn.classList.toggle('dropping', nukeDropping || nukeBlasting);
+    const salvoActive = activeStrikes > 0 || nukeDropping || nukeBlasting;
+    const nukeReady = stocks >= 1 || nukeCharge >= 0.999 || Boolean(snap.isFiringRange);
+    const salvoHot = nukeReady && salvoActive;
+    this.nukeBtn.classList.toggle('dropping', !nukeReady && salvoActive);
     this.nukeBtn.classList.toggle('ready', nukeReady);
-    const nukePct = nukeDropping ? 100 : Math.max(0, Math.min(100, nukeCharge * 100));
+    this.nukeBtn.classList.toggle('salvo-hot', salvoHot);
+    const nukePct = nukeReady ? 100 : Math.max(0, Math.min(100, nukeCharge * 100));
     this.nukeFill.style.width = `${nukePct.toFixed(1)}%`;
-    const estCdSec = Math.max(1, Math.ceil((1 - nukeCharge) * 46 + nukeBlast));
-    this.nukeText.textContent = nukeDropping
-      ? `☢ 落弹 ${nukeDrop.toFixed(1)}s`
-      : nukeBlasting
-        ? `☢ 核爆 ${nukeBlast.toFixed(1)}s`
-        : nukeReady
-          ? '☢ 核弹 [Q]'
-          : `☢ 冷却 ${estCdSec}s`;
+    const estCdSec = Math.max(1, Math.ceil((1 - nukeCharge) * 7.5));
+    const stockBadge = maxStocks > 1 ? ` ×${Math.max(1, stocks)}` : '';
+    this.nukeText.textContent = salvoHot
+      ? `☢ 连发!${stockBadge} [Q]`
+      : nukeReady
+        ? `☢ 核弹${stockBadge} [Q]`
+        : nukeDropping
+          ? `☢ 落弹 ${nukeDrop.toFixed(1)}s`
+          : `☢ 充能 ${Math.round(nukeCharge * 100)}% (${estCdSec}s)`;
 
     const b = snap.boss;
     if (b && b.active) {
@@ -1986,17 +2001,18 @@ export class UI {
     const nirCharge = fairDisabled ? 0 : Math.max(0, Math.min(1, snap.nirvanaCharge ?? 0));
     const nirActive = !fairDisabled && (snap.nirvanaActiveTimer ?? 0) > 0;
     const latActive = !fairDisabled && (snap.triPrismLatticeTimer ?? 0) > 0;
-    const nirReady = !fairDisabled && !nirActive && (nirCharge >= 0.999 || Boolean(snap.isFiringRange));
+    const nirReady = !fairDisabled && (nirCharge >= 0.999 || (Boolean(snap.isFiringRange) && !nirActive));
+    const nirBursting = nirActive && !nirReady;
     const partnerW = (snap.activeLoadout ?? []).find((w) => w !== snap.weapon) ?? null;
     const arch = resolveNirvanaArchetype(snap.weapon, partnerW);
     const archMeta = NIRVANA_META[arch];
     this.nirvanaBtn.classList.toggle('ready', nirReady);
-    this.nirvanaBtn.classList.toggle('active', nirActive || latActive);
+    this.nirvanaBtn.classList.toggle('active', nirBursting || latActive);
     this.nirvanaBtn.classList.toggle('disabled', fairDisabled);
-    this.nirvanaFill.style.width = `${(nirActive || nirReady ? 100 : nirCharge * 100).toFixed(1)}%`;
+    this.nirvanaFill.style.width = `${(nirBursting || nirReady ? 100 : nirCharge * 100).toFixed(1)}%`;
     this.nirvanaText.textContent = fairDisabled
       ? '🔒 试炼禁用'
-      : nirActive
+      : nirBursting
         ? `${archMeta.glyph} 奥义释放!`
         : nirReady
           ? `${archMeta.glyph} ${archMeta.short} [${this.nirvanaKeyLabel}]`
@@ -2268,24 +2284,41 @@ export class UI {
     this.flash.style.opacity = '0';
   }
 
-  /** Multi-stage thermonuclear blinding white-gold core flash -> searing amber thermal vignette */
-  doNukeFlash(strength = 1.0): void {
+  /** Multi-stage thermonuclear core flash -> multi-spectrum radiation vignette cycling across chain salvos */
+  doNukeFlash(strength = 1.0, salvoIndex = 1): void {
     const scaled = Math.min(1, strength * this.flashScale);
     if (scaled <= 0.01) return;
     if (this.nukeScorchTimer !== null) {
       clearTimeout(this.nukeScorchTimer);
       this.nukeScorchTimer = null;
     }
-    // Stage 1: Blinding solar-white core flash that clears swiftly (~260ms) so the mushroom cloud & screen quake shine!
+    const pIdx = (Math.max(1, salvoIndex) - 1) % 3;
+    // Stage 1: Blinding core flash that clears swiftly (~260ms) so the mushroom cloud, orbital beam & screen quake shine!
     this.flash.style.background =
-      'radial-gradient(circle at 50% 42%, rgba(255,255,248,0.98) 0%, rgba(255,238,165,0.94) 48%, rgba(255,126,28,0.86) 100%)';
+      pIdx === 1
+        ? 'radial-gradient(circle at 50% 42%, rgba(248,255,255,0.98) 0%, rgba(130,248,255,0.94) 48%, rgba(36,120,255,0.86) 100%)'
+        : pIdx === 2
+          ? 'radial-gradient(circle at 50% 42%, rgba(255,248,255,0.98) 0%, rgba(255,150,255,0.94) 48%, rgba(168,36,255,0.86) 100%)'
+          : 'radial-gradient(circle at 50% 42%, rgba(255,255,248,0.98) 0%, rgba(255,238,165,0.94) 48%, rgba(255,126,28,0.86) 100%)';
     this.flash.style.transition = 'none';
     this.flash.style.opacity = String(Math.min(0.96, scaled * 0.96));
     void this.flash.offsetWidth;
     this.flash.style.transition = 'opacity 0.28s cubic-bezier(0.22, 1, 0.36, 1)';
     this.flash.style.opacity = '0';
 
-    // Stage 2: Searing molten-orange radiation edge vignette pulsing through the shockwave aftermath!
+    // Stage 2: Searing radiation edge vignette matched to the active warhead spectrum!
+    this.nukeScorch.style.background =
+      pIdx === 1
+        ? 'radial-gradient(circle at 50% 42%, rgba(220,255,255,0.0) 18%, rgba(46,232,255,0.48) 68%, rgba(18,78,255,0.88) 100%)'
+        : pIdx === 2
+          ? 'radial-gradient(circle at 50% 42%, rgba(255,230,255,0.0) 18%, rgba(255,66,245,0.48) 68%, rgba(128,18,235,0.88) 100%)'
+          : 'radial-gradient(circle at 50% 42%, rgba(255,248,210,0.0) 18%, rgba(255,148,28,0.48) 68%, rgba(255,42,16,0.88) 100%)';
+    this.nukeScorch.style.boxShadow =
+      pIdx === 1
+        ? 'inset 0 0 135px rgba(56, 228, 255, 0.92)'
+        : pIdx === 2
+          ? 'inset 0 0 135px rgba(242, 64, 255, 0.92)'
+          : 'inset 0 0 135px rgba(255, 118, 24, 0.92)';
     this.nukeScorch.style.transition = 'none';
     this.nukeScorch.style.opacity = String(Math.min(0.92, scaled * 0.88));
     void this.nukeScorch.offsetWidth;

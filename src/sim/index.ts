@@ -67,7 +67,7 @@ export function createSimulation(): SimulationController {
   let cachedSnapshot: SimSnapshot | null = null;
   let pendingOverdrive = false;
   let pendingAegisPulse = false;
-  let pendingNukeStrike = false;
+  let pendingNukeCount = 0;
   let pendingSwapWeapon = false;
   let pendingCycleWingman = false;
   let pendingNirvanaBurst = false;
@@ -83,7 +83,7 @@ export function createSimulation(): SimulationController {
       pendingDragDeltaX = 0;
       pendingOverdrive = false;
       pendingAegisPulse = false;
-      pendingNukeStrike = false;
+      pendingNukeCount = 0;
       pendingSwapWeapon = false;
       pendingCycleWingman = false;
       pendingNirvanaBurst = false;
@@ -119,7 +119,7 @@ export function createSimulation(): SimulationController {
         pendingDragDeltaX = 0;
         pendingOverdrive = false;
         pendingAegisPulse = false;
-        pendingNukeStrike = false;
+        pendingNukeCount = 0;
         pendingSwapWeapon = false;
         pendingCycleWingman = false;
         pendingNirvanaBurst = false;
@@ -133,7 +133,7 @@ export function createSimulation(): SimulationController {
       pendingDragDeltaX = 0;
       pendingOverdrive = false;
       pendingAegisPulse = false;
-      pendingNukeStrike = false;
+      pendingNukeCount = 0;
       pendingSwapWeapon = false;
       pendingCycleWingman = false;
       pendingNirvanaBurst = false;
@@ -145,6 +145,7 @@ export function createSimulation(): SimulationController {
     returnToTitle(): void {
       accumulator = 0;
       pendingDragDeltaX = 0;
+      pendingNukeCount = 0;
       resetSimWorldToTitle(world);
       invalidateSnapshot();
     },
@@ -198,7 +199,7 @@ export function createSimulation(): SimulationController {
       pendingDragDeltaX += dragDeltaX;
       if (input.overdrive === true) pendingOverdrive = true;
       if (input.aegisPulse === true) pendingAegisPulse = true;
-      if (input.nukeStrike === true) pendingNukeStrike = true;
+      if (input.nukeStrike === true) pendingNukeCount = Math.min(8, pendingNukeCount + 1);
       if (input.swapWeapon === true) pendingSwapWeapon = true;
       if (input.cycleWingman === true) pendingCycleWingman = true;
       if (input.nirvanaBurst === true) pendingNirvanaBurst = true;
@@ -222,12 +223,14 @@ export function createSimulation(): SimulationController {
         if (accumulator < ACCUMULATOR_EPS) {
           accumulator = 0;
         }
+        const fireNukeStep = pendingNukeCount > 0;
+        if (fireNukeStep) pendingNukeCount -= 1;
         const stepInp: InputSample = {
           dragDeltaX: perStepDrag,
           keyAxisX,
           overdrive: pendingOverdrive,
           aegisPulse: pendingAegisPulse,
-          nukeStrike: pendingNukeStrike,
+          nukeStrike: fireNukeStep,
           swapWeapon: pendingSwapWeapon,
           cycleWingman: pendingCycleWingman,
           nirvanaBurst: pendingNirvanaBurst,
@@ -237,7 +240,6 @@ export function createSimulation(): SimulationController {
         recorder.recordEvents(stepEvents);
         pendingOverdrive = false;
         pendingAegisPulse = false;
-        pendingNukeStrike = false;
         pendingSwapWeapon = false;
         pendingCycleWingman = false;
         pendingNirvanaBurst = false;

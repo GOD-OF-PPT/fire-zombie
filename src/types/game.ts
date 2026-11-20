@@ -601,8 +601,8 @@ export type SimEvent =
   | { type: 'VAULT_SALVAGE'; x: number; z: number; upgradedWeapon: WeaponId; newLevel: number; reserveGain: number }
   | { type: 'TRI_FUSION_CLIMAX'; duration: number }
   | { type: 'RESERVE_DEPLOY'; count: number }
-  | { type: 'NUKE_LAUNCH'; x: number; z: number; duration: number }
-  | { type: 'NUKE_DETONATE'; x: number; z: number; kills: number; bossDamage: number }
+  | { type: 'NUKE_LAUNCH'; x: number; z: number; duration: number; salvoIndex?: number; remainingStocks?: number }
+  | { type: 'NUKE_DETONATE'; x: number; z: number; kills: number; bossDamage: number; salvoIndex?: number }
   | { type: 'SQUAD_LOSS'; x: number; z: number; lost: number; reason: Exclude<DefeatReason, null> }
   | { type: 'BOSS_INTRO'; bossId: BossSnapshot['id']; name: string; titanRank?: number }
   | { type: 'BOSS_PHASE_BREAK'; phase: 2 | 3; x: number; z: number; arenaShift?: string }
@@ -636,6 +636,17 @@ export type SimEvent =
   | { type: 'ENDLESS_STAGE_START'; wave: number; bosses: number; bonus: number }
   | { type: 'RUN_VICTORY'; sector: SectorId; finalSquad: number }
   | { type: 'RUN_DEFEAT'; sector: SectorId; reason: Exclude<DefeatReason, null> };
+
+export interface NukeStrikeSnapshot {
+  id: number;
+  x: number;
+  z: number;
+  dropTimer: number;
+  dropDuration: number;
+  blastTimer: number;
+  blastDuration: number;
+  salvoIndex: number;
+}
 
 export interface DronePosition {
   x: number;
@@ -680,9 +691,13 @@ export interface SimSnapshot {
   aegisTimer: number;          // >0 while Phase Aegis force-dome active
   aegisCooldown: number;       // >0 remaining cooldown seconds
   aegisMaxCooldown: number;    // max cooldown seconds for UI ring
-  nukeCharge: number;          // [0, 1] Tactical Nuke charge gauge (starts 1.0 ready!)
-  nukeDropTimer: number;       // >0 while 3D Tactical Nuclear Warhead slowly descends
-  nukeDropDuration: number;    // 1.75s total descent duration
+  nukeCharge: number;          // [0, 1] Tactical Nuke recharge progress toward next warhead
+  nukeStocks?: number;         // Ready warhead stocks in orbital magazine (0..nukeMaxStocks)
+  nukeMaxStocks?: number;      // Max stocked warheads (default 3)
+  nukeSalvoChain?: number;     // Consecutive rapid-tap salvo chain index
+  nukeStrikes?: readonly NukeStrikeSnapshot[]; // Active concurrent orbital warheads & mushroom clouds
+  nukeDropTimer: number;       // >0 while 3D Tactical Nuclear Warhead descends
+  nukeDropDuration: number;    // 1.15s total descent duration
   nukeBlastTimer: number;      // >0 while 3D thermonuclear mushroom cloud & shockwave active
   nukeTargetX: number;
   nukeTargetZ: number;

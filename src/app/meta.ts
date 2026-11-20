@@ -391,7 +391,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     color: '#fff36b',
     max: 5,
     costs: [40, 70, 110, 160, 220],
-    effect: (lv) => `充能 +${lv * 15}%`,
+    effect: (lv) => `充能 +${45 + lv * 22}%`,
   },
   {
     id: 'aegis',
@@ -401,7 +401,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     max: 5,
     costs: [55, 95, 145, 205, 275],
     effect: (lv) =>
-      `脉冲冷却 -${(lv * 1.1).toFixed(1)}s · 护盾 ${(1.25 + lv * 0.2).toFixed(2)}s${lv >= 3 ? ' · 绝境自启' : ''}`,
+      `脉冲冷却 ${(5.5 - lv * 0.55).toFixed(2)}s · 护盾 ${(1.25 + lv * 0.2).toFixed(2)}s${lv >= 3 ? ' · 绝境自启' : ''}`,
   },
   {
     id: 'crit',
@@ -582,9 +582,9 @@ export function runModsFromUpgrades(
   return {
     bonusSquad: squad * 2 + apex,
     damageMult: (1 + power * 0.06) * (1 + apex * 0.04),
-    resonanceMult: 1 + reso * 0.15,
+    resonanceMult: 1.45 + reso * 0.22,
     bossHpMult: 1 + (squad + power + reso) * 0.025 + apex * 0.02,
-    aegisCooldownSec: Math.max(7.5, 14 - aegis * 1.1),
+    aegisCooldownSec: Math.max(2.6, 5.5 - aegis * 0.55),
     aegisDurationSec: 1.25 + aegis * 0.2,
     autoAegisCharges: aegis >= 5 ? 2 : aegis >= 3 ? 1 : 0,
     critChance: crit * 0.05,

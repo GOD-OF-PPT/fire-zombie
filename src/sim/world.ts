@@ -65,9 +65,9 @@ import {
   normalizeZero,
 } from './math';
 import { computeDynamicSwarmProfile, computeMirrorFlags, getBlitzDrillCue, spawnReadyRunwayEncounters, stepTrackAndSpawner } from './spawner';
-import { getEffectiveOverdriveDuration, tryStartManualOverdrive } from './resonance';
+import { addResonance, getEffectiveOverdriveDuration, tryStartManualOverdrive } from './resonance';
 import { tryTriggerAegisPulse } from './aegis';
-import { NUKE_DROP_DURATION, NUKE_TARGET_Z, stepNukeStrike, tryTriggerNukeStrike } from './nuke';
+import { NUKE_BLAST_DURATION, NUKE_DROP_DURATION, NUKE_MAX_STOCKS, NUKE_TARGET_Z, stepNukeStrike, tryTriggerNukeStrike } from './nuke';
 import { computeAuthoritativeEffectiveDps, stepProjectilesAndAutoFire, trySwapLeadWeapon } from './weapons';
 import { computeRangeFrontCounterMult, initFiringRangeWorld, stepFiringRangeWorld } from './firingRange';
 import { checkAndStepBossOmegaOverdrive, stepCoreShards, stepV20SetPieces } from './v20Mechanics';
@@ -263,7 +263,12 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
   world.swarmSpatialCursor = 0;
   world.swarmPeakTier = 1;
   world.swarmBreachGrace = 0;
+  world.nukeMaxStocks = world.mods.fairTrial ? 1 : NUKE_MAX_STOCKS;
+  world.nukeStocks = world.nukeMaxStocks;
   world.nukeCharge = 1.0;
+  world.nukeSalvoChain = 0;
+  world.nukeChainWindowTimer = 0;
+  world.nukeSalvo = [];
   world.nukeDropTimer = 0;
   world.nukeBlastTimer = 0;
   world.nukeTargetX = 0;
@@ -283,7 +288,7 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
   world.overdriveJustStarted = false;
   world.aegisTimer = 0;
   world.aegisCooldown = 0;
-  world.aegisMaxCooldown = Math.max(4, world.mods.aegisCooldownSec ?? 14);
+  world.aegisMaxCooldown = Math.max(2.0, world.mods.aegisCooldownSec ?? 5.5);
   world.aegisDurationSec = Math.max(0.5, world.mods.aegisDurationSec ?? 1.25);
   world.autoAegisCharges = Math.max(0, Math.floor(world.mods.autoAegisCharges ?? 0));
   world.critSeed = ((world.mods.layoutSeed ?? 1) ^ 0x9e3779b9) >>> 0;
@@ -367,6 +372,11 @@ export function createSimWorld(): SimWorld {
     swarmPeakTier: 1,
     swarmBreachGrace: 0,
     nukeCharge: 1.0,
+    nukeStocks: NUKE_MAX_STOCKS,
+    nukeMaxStocks: NUKE_MAX_STOCKS,
+    nukeSalvoChain: 0,
+    nukeChainWindowTimer: 0,
+    nukeSalvo: [],
     nukeDropTimer: 0,
     nukeBlastTimer: 0,
     nukeTargetX: 0,
@@ -386,7 +396,7 @@ export function createSimWorld(): SimWorld {
     overdriveJustStarted: false,
     aegisTimer: 0,
     aegisCooldown: 0,
-    aegisMaxCooldown: 14,
+    aegisMaxCooldown: 5.5,
     aegisDurationSec: 1.25,
     autoAegisCharges: 0,
     critSeed: 0x9e3779b9,
@@ -760,6 +770,8 @@ function decayTimersAndPulses(world: SimWorld): void {
       const maxOd = getEffectiveOverdriveDuration(world);
       world.resonance = world.overdriveTimer > 0 ? world.overdriveTimer / maxOd : 0;
     }
+  } else if (world.mods.manualOverdrive && !world.mods.fairTrial && world.squadCount > 0 && world.resonance < 1) {
+    addResonance(world, 0.032 * FIXED_DT, []);
   }
   if (world.aegisTimer > 0) {
     world.aegisTimer = snapTimerZero(world.aegisTimer - FIXED_DT);
@@ -1233,6 +1245,19 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
     aegisCooldown: world.aegisCooldown,
     aegisMaxCooldown: world.aegisMaxCooldown,
     nukeCharge: world.nukeCharge,
+    nukeStocks: world.nukeStocks,
+    nukeMaxStocks: world.nukeMaxStocks,
+    nukeSalvoChain: world.nukeSalvoChain,
+    nukeStrikes: world.nukeSalvo.map((s) => ({
+      id: s.id,
+      x: s.x,
+      z: s.z,
+      dropTimer: s.dropTimer,
+      dropDuration: s.dropDuration,
+      blastTimer: s.blastTimer,
+      blastDuration: NUKE_BLAST_DURATION,
+      salvoIndex: s.salvoIndex,
+    })),
     nukeDropTimer: world.nukeDropTimer,
     nukeDropDuration: NUKE_DROP_DURATION,
     nukeBlastTimer: world.nukeBlastTimer,

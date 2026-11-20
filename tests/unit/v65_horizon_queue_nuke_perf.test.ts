@@ -80,10 +80,10 @@ describe('V6.5 Horizon Runway Horde Queueing & Strategic Long-Cooldown Nuke', ()
     }
   });
 
-  it('enforces a long ~46s strategic Tactical Nuke cooldown with post-blast lockout and full-horizon wipe', () => {
-    expect(NUKE_COOLDOWN_SEC).toBeGreaterThanOrEqual(44);
+  it('supports rapid-tap multi-warhead Tactical Nuke salvos, fast ~7.5s recharge without lockout, and full-horizon wipe', () => {
+    expect(NUKE_COOLDOWN_SEC).toBeLessThanOrEqual(8.0);
     expect(NUKE_BLAST_DURATION).toBeGreaterThanOrEqual(3.0);
-    expect(NUKE_KILL_CHARGE).toBeLessThanOrEqual(0.001);
+    expect(NUKE_KILL_CHARGE).toBeGreaterThanOrEqual(0.006);
 
     const world = createSimWorld();
     resetSimWorldForSector(world, 1, { bonusSquad: 20, damageMult: 1.5 });
@@ -95,33 +95,35 @@ describe('V6.5 Horizon Runway Horde Queueing & Strategic Long-Cooldown Nuke', ()
     spawnEnemy(world, 'crawler', 0, -88, { hp: 40, isSwarmFodder: true });
     spawnEnemy(world, 'bastion', 2, -125, { hp: 120, isSwarmFodder: true });
 
+    // Rapid-tap 3 warheads back-to-back without waiting for drop or blast lockout!
     expect(tryTriggerNukeStrike(world, events)).toBe(true);
-    // Advance 112 ticks (1.87s) through orbital drop into detonation
-    for (let t = 0; t < 112; t++) {
+    expect(tryTriggerNukeStrike(world, events)).toBe(true);
+    expect(tryTriggerNukeStrike(world, events)).toBe(true);
+    expect(world.nukeStocks).toBe(0);
+    expect(world.nukeSalvo.length).toBe(3);
+
+    // Advance 75 ticks (1.25s) through orbital drop into detonation
+    for (let t = 0; t < 75; t++) {
       stepNukeStrike(world, events);
     }
 
-    const det = events.find((e) => e.type === 'NUKE_DETONATE');
-    expect(det).toBeDefined();
-    if (det && det.type === 'NUKE_DETONATE') {
-      expect(det.kills).toBe(3); // Wiped near (-22), mid (-88), AND far horizon (-125)!
+    const dets = events.filter((e) => e.type === 'NUKE_DETONATE');
+    expect(dets.length).toBe(3);
+    if (dets[0] && dets[0].type === 'NUKE_DETONATE') {
+      expect(dets[0].kills).toBe(3); // Wiped near (-22), mid (-88), AND far horizon (-125)!
     }
 
-    // During the 3.25s mushroom-cloud blast aftermath, both passive and kill charge stay locked at 0!
-    addNukeKillCharge(world);
-    stepNukeStrike(world, events);
-    expect(world.nukeCharge).toBe(0);
-
-    // Clear blast timer, then step 20 seconds (1200 ticks) of passive recharge + 100 kills:
-    // Must still be well below 100% ready (no 8-second spam!)
-    world.nukeBlastTimer = 0;
-    for (let t = 0; t < 1200; t++) {
-      stepNukeStrike(world, events);
-    }
-    for (let k = 0; k < 100; k++) {
+    // Even during the 3.25s mushroom-cloud blast aftermath, passive + kill charge flow immediately without lockout!
+    const chargeBeforeKills = world.nukeCharge;
+    for (let k = 0; k < 40; k++) {
       addNukeKillCharge(world);
     }
-    expect(world.nukeCharge).toBeGreaterThan(0.42);
-    expect(world.nukeCharge).toBeLessThan(0.62);
+    expect(world.nukeCharge).toBeGreaterThan(chargeBeforeKills + 0.3);
+
+    // Step 8 seconds (480 ticks) of fast passive recharge -> refills warhead stocks!
+    for (let t = 0; t < 480; t++) {
+      stepNukeStrike(world, events);
+    }
+    expect(world.nukeStocks).toBeGreaterThanOrEqual(1);
   });
 });

@@ -5,10 +5,11 @@ import { computeDynamicSwarmProfile } from '../../src/sim/spawner';
 import { spawnEnemy } from '../../src/sim/enemies';
 
 describe('V5.6 Wall-to-Wall Swarm & Tactical Nuke Strike', () => {
-  it('starts every run with Tactical Nuke 100% charged, slowly descends over 1.75s, and wipes all screen monsters on detonation', () => {
+  it('starts every run with 3 Tactical Nuke stocks, descends swiftly over 1.15s, and wipes all screen monsters on detonation', () => {
     const world = createSimWorld();
     resetSimWorldForSector(world, 1, { bonusSquad: 25, damageMult: 1.5 });
     expect(world.nukeCharge).toBe(1);
+    expect(world.nukeStocks).toBe(3);
 
     // Populate a dense wall of 65 monsters across the bridge
     for (let i = 0; i < 65; i++) {
@@ -24,19 +25,20 @@ describe('V5.6 Wall-to-Wall Swarm & Tactical Nuke Strike', () => {
     // Trigger Nuke Strike
     const launchEvents = stepWorldFixed(world, { dragDeltaX: 0, keyAxisX: 0, nukeStrike: true });
     expect(launchEvents.some((e) => e.type === 'NUKE_LAUNCH')).toBe(true);
-    expect(world.nukeCharge).toBe(0);
-    expect(world.nukeDropTimer).toBeGreaterThan(1.7);
+    expect(world.nukeStocks).toBe(2);
+    expect(world.nukeCharge).toBeLessThan(0.02);
+    expect(world.nukeDropTimer).toBeGreaterThan(1.05);
 
-    // Step 60 ticks (1.0s): warhead is still descending in mid-air, monsters slowed in dread
-    for (let t = 0; t < 60; t++) {
+    // Step 36 ticks (0.6s): warhead is descending in mid-air, monsters slowed in dread
+    for (let t = 0; t < 36; t++) {
       stepWorldFixed(world, { dragDeltaX: 0, keyAxisX: 0 });
     }
-    expect(world.nukeDropTimer).toBeGreaterThan(0.65);
+    expect(world.nukeDropTimer).toBeGreaterThan(0.45);
     expect(world.enemies.some((e) => e.active && e.slowTimer > 0)).toBe(true);
 
-    // Step remaining 50 ticks to detonation!
+    // Step remaining 40 ticks to detonation!
     let detonateEvent: Extract<(typeof launchEvents)[number], { type: 'NUKE_DETONATE' }> | undefined;
-    for (let t = 0; t < 50; t++) {
+    for (let t = 0; t < 40; t++) {
       const evs = stepWorldFixed(world, { dragDeltaX: 0, keyAxisX: 0 });
       const found = evs.find((e) => e.type === 'NUKE_DETONATE');
       if (found && found.type === 'NUKE_DETONATE') {
@@ -48,8 +50,9 @@ describe('V5.6 Wall-to-Wall Swarm & Tactical Nuke Strike', () => {
     expect(detonateEvent!.kills).toBeGreaterThanOrEqual(50);
     expect(world.enemies.filter((e) => e.active && e.z >= -68).length).toBe(0);
     expect(world.nukeBlastTimer).toBeGreaterThan(2.0);
-    // Nuke detonation must NOT self-refund nukeCharge to 100% immediately
-    expect(world.nukeCharge).toBeLessThan(0.1);
+    // Nuke detonation must NOT self-refund nukeStocks back to 3 from its own kills
+    expect(world.nukeStocks).toBe(2);
+    expect(world.nukeCharge).toBeLessThan(0.35);
   });
 
   it('scales monster swarm exponentially into a wall-to-wall 150+ carpet when character grows strong', () => {
@@ -80,9 +83,11 @@ describe('V5.6 Wall-to-Wall Swarm & Tactical Nuke Strike', () => {
     const sim = createSimulation();
     sim.startSector(1, { bonusSquad: 15, damageMult: 1.5 });
     expect(sim.getSnapshot().nukeCharge).toBe(1);
+    expect(sim.getSnapshot().nukeStocks).toBe(3);
 
     const evs = sim.tickFrame(1 / 60, { dragDeltaX: 0, keyAxisX: 0, nukeStrike: true });
     expect(evs.some((e) => e.type === 'NUKE_LAUNCH')).toBe(true);
-    expect(sim.getSnapshot().nukeDropTimer).toBeGreaterThan(1.6);
+    expect(sim.getSnapshot().nukeDropTimer).toBeGreaterThan(1.05);
+    expect(sim.getSnapshot().nukeStocks).toBe(2);
   });
 });

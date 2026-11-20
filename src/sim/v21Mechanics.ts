@@ -19,6 +19,7 @@ import {
   spawnReflector,
 } from './competition';
 import { damageEnemy, spawnEnemy } from './enemies';
+import { grantNukeCharge } from './nuke';
 import type {
   SimCollapseRift,
   SimEnemy,
@@ -176,6 +177,7 @@ export function stepV21Verticality(world: SimWorld, events: SimEvent[]): void {
       if (vStage === 1) {
         spawnCollapseRift(world, side * 3.82, PLAYER_Z - 38.0, 7.0, 'flank_chasm');
         spawnHighSpire(world, -side * 3.35, PLAYER_Z - 40.0);
+        spawnJumpPad(world, -side * 2.25, PLAYER_Z - 35.0, world.currentScrollSpeed);
         const rf = spawnReflector(world, 0, PLAYER_Z - 33.5, 0, -side as 1 | -1);
         rf.angleDeg = -side * 37;
       } else {
@@ -720,7 +722,7 @@ export function resolvePantheonBossClear(
     grantSquadWithReserve(world, 20, events);
     world.resonance = 1.0;
     world.aegisCooldown = 0;
-    world.nukeCharge = Math.min(1.0, world.nukeCharge + 0.5);
+    grantNukeCharge(world, 1.0);
     const meta = PANTHEON_STAGE_META[nextStage - 1]!;
     events.push({
       type: 'PANTHEON_STAGE_START',

@@ -77,9 +77,16 @@ test('Tactical Nuke triggers multi-wave seismic screen shake, viewport oscillati
   await page.getByTestId('start-btn').click();
   await expect(page.getByTestId('hud')).toBeVisible();
 
-  // Trigger Tactical Nuke via HUD button
+  // Rapid-tap Tactical Nuke twice back-to-back via HUD button (`连点核弹`)!
+  await expect(page.getByTestId('nuke-btn')).toContainText('×3');
   await page.getByTestId('nuke-btn').click();
-  await expect.poll(() => page.evaluate(() => (window as any).__prism.sim.getSnapshot().nukeDropTimer ?? 0)).toBeGreaterThan(0.5);
+  await expect.poll(() => page.evaluate(() => (window as any).__prism.sim.getSnapshot().nukeStrikes?.length ?? 0)).toBe(1);
+  await expect(page.getByTestId('nuke-btn')).toHaveClass(/salvo-hot/);
+
+  // Second rapid click while first warhead is still descending in mid-air!
+  await page.getByTestId('nuke-btn').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__prism.sim.getSnapshot().nukeStrikes?.length ?? 0)).toBe(2);
+  await expect(page.locator('.banner')).toContainText('双星连环核打击');
 
   // Step warhead descent cleanly via sim.stepFixed, then sample real Game.frame(dt) across every seismic wave!
   const shakeSamples = await page.evaluate(() => {
@@ -88,17 +95,23 @@ test('Tactical Nuke triggers multi-wave seismic screen shake, viewport oscillati
     const uiRoot = document.querySelector<HTMLElement>('#ui-root')!;
     const scorch = document.querySelector<HTMLElement>('.nuke-scorch')!;
 
-    // Fast-step the 1.75s orbital descent until NUKE_DETONATE fires without burning 110 SwiftShader GPU frames
-    let detonated = false;
-    for (let step = 0; step < 140; step++) {
+    // Fast-step the 1.15s orbital descent until all launched warheads detonate (accounting for any warhead that already entered blastTimer during Playwright UI clicks!)
+    const preSnap = g.sim.getSnapshot();
+    let detonateCount = (preSnap.nukeStrikes ?? []).filter((s: any) => s.blastTimer > 0).length;
+    let maxSalvoIdx = (preSnap.nukeStrikes ?? []).reduce((m: number, s: any) => Math.max(m, s.salvoIndex ?? 1), 0);
+    for (let step = 0; step < 100; step++) {
+      if ((g.sim.getSnapshot().nukeStrikes ?? []).every((s: any) => s.dropTimer <= 0)) break;
       const evs = g.sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
       const snap = g.sim.getSnapshot();
       g.handleEvents(evs, snap, true);
-      if (evs.some((e: any) => e.type === 'NUKE_DETONATE')) {
-        detonated = true;
-        break;
+      for (const e of evs) {
+        if (e.type === 'NUKE_DETONATE') {
+          detonateCount++;
+          maxSalvoIdx = Math.max(maxSalvoIdx, e.salvoIndex ?? 1);
+        }
       }
     }
+    const detonated = detonateCount >= 2 && maxSalvoIdx >= 2;
 
     const sampleFrames = (dtStep: number, count: number) => {
       let peakMag = 0;
@@ -129,6 +142,11 @@ test('Tactical Nuke triggers multi-wave seismic screen shake, viewport oscillati
     const settledCanvasTransform = canvas.style.transform;
     const settledUiTransform = uiRoot.style.transform;
 
+    // Verify Meteor Sky-Slam landing VFX (`triggerJumpSlamVfx`) produces crisp 3D dome + screen quake!
+    g.renderer.triggerJumpSlamVfx(0, 17, 5);
+    const jumpSlamWave = sampleFrames(0.03, 3);
+    for (let i = 0; i < 6; i++) g.frame(0.15);
+
     // Verify shakeScale = 0 completely disables BOTH 3D quake and viewport CSS transform
     g.renderer.setAccessibility({ shakeScale: 0, flashScale: 1, colorblind: 'off', aimAssist: false });
     g.renderer.triggerNukeDetonationVfx(0, -19.5);
@@ -142,6 +160,7 @@ test('Tactical Nuke triggers multi-wave seismic screen shake, viewport oscillati
       wave1,
       wave2,
       wave3,
+      jumpSlamWave,
       settled,
       settledCanvasTransform,
       settledUiTransform,
@@ -152,6 +171,7 @@ test('Tactical Nuke triggers multi-wave seismic screen shake, viewport oscillati
 
   expect(shakeSamples.detonated).toBe(true);
   expect(shakeSamples.scorchOpacity).toBeGreaterThan(0.3);
+  expect(shakeSamples.jumpSlamWave.peakMag).toBeGreaterThan(1.5);
   // Wave 1 & Wave 2 deliver powerful multi-pixel screen oscillation + overscan zoom + tilt via real Game.frame()
   expect(shakeSamples.wave1.peakMag).toBeGreaterThan(5);
   expect(shakeSamples.wave1.peakScale).toBeGreaterThan(1.01);

@@ -419,7 +419,7 @@ button {
 }
 .nuke-btn {
   position: relative;
-  width: 118px;
+  width: 124px;
   height: 24px;
   border-radius: 12px;
   background: rgba(34, 10, 8, 0.86);
@@ -428,6 +428,10 @@ button {
   pointer-events: auto;
   cursor: pointer;
   flex: none;
+  transition: transform 0.08s ease-out, box-shadow 0.14s ease-out;
+}
+.nuke-btn:active {
+  transform: scale(0.94);
 }
 .nuke-fill {
   position: absolute;
@@ -449,13 +453,21 @@ button {
   box-shadow: inset 0 0 0 2px #fff, 0 0 22px #ff2a55;
   animation: odPulse 0.18s infinite alternate;
 }
+.nuke-btn.salvo-hot {
+  box-shadow: inset 0 0 0 2px #7ef9ff, 0 0 24px rgba(62, 243, 255, 0.92), 0 0 36px rgba(255, 66, 245, 0.62);
+  animation: odPulse 0.15s infinite alternate;
+}
+.nuke-btn.salvo-hot .nuke-fill {
+  background: linear-gradient(90deg, #ff2a85, #ff9a1a, #ffd84a, #3ef3ff);
+}
 .nuke-txt {
   position: relative;
   z-index: 1;
   font: 900 11px/24px system-ui, sans-serif;
   color: #fff8e6;
   text-shadow: 0 1px 3px #000;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
 }
 
 .reso {

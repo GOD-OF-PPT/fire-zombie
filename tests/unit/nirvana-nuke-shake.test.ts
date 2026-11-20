@@ -108,5 +108,120 @@ describe('Nirvana Ultimate Release Fix & Combat Charge Flow', () => {
     const sim = createSimulation();
     sim.startSector(4, { blitz: true, fairTrial: true, layoutSeed: 202611 });
     expect(sim.getSnapshot().fairTrial).toBe(true);
+    expect(sim.getSnapshot().nukeMaxStocks).toBe(1);
+  });
+
+  it('queues rapid multi-tap Nuke inputs without dropping taps, fires staggered multi-salvo warheads, shortens skill CDs, and keeps 0-drift replay', () => {
+    const stage = document.createElement('div');
+    document.body.appendChild(stage);
+    const input = new InputController(stage);
+    try {
+      // Rapid 3x click/tap before the next frame consumes one per tick cleanly instead of collapsing to 1!
+      input.requestNuke();
+      input.requestNuke();
+      input.requestNuke();
+      expect(input.consumeNuke()).toBe(true);
+      expect(input.consumeNuke()).toBe(true);
+      expect(input.consumeNuke()).toBe(true);
+      expect(input.consumeNuke()).toBe(false);
+    } finally {
+      input.destroy();
+      stage.remove();
+    }
+
+    const sim = createSimulation();
+    sim.startSector(1, { layoutSeed: 202611, bonusSquad: 20, damageMult: 1.5, manualOverdrive: true });
+    expect(sim.getSnapshot().aegisMaxCooldown).toBeLessThanOrEqual(5.5);
+    expect(sim.getSnapshot().nukeStocks).toBe(3);
+
+    // Buffer 3 rapid nuke requests in a single frame and step 4 fixed ticks -> 3 concurrent staggered warheads!
+    const launchEvs = [
+      ...sim.tickFrame(1 / 60, { dragDeltaX: 0, keyAxisX: 0, nukeStrike: true }),
+      ...sim.tickFrame(1 / 60, { dragDeltaX: 0, keyAxisX: 0, nukeStrike: true }),
+      ...sim.tickFrame(1 / 60, { dragDeltaX: 0, keyAxisX: 0, nukeStrike: true }),
+    ].filter((e) => e.type === 'NUKE_LAUNCH');
+
+    expect(launchEvs.length).toBe(3);
+    expect(launchEvs.map((e) => e.salvoIndex)).toEqual([1, 2, 3]);
+    // Staggered carpet-bombing coordinates across the highway
+    const uniqueZ = new Set(launchEvs.map((e) => e.z));
+    expect(uniqueZ.size).toBe(3);
+
+    const midSnap = sim.getSnapshot();
+    expect(midSnap.nukeStrikes?.length).toBe(3);
+    expect(midSnap.nukeStocks).toBe(0);
+
+    // Tapping a 4th time at 0 stocks triggers Orbital Thruster Overdrive (accelerates descent!)
+    const preBoostDrop = midSnap.nukeDropTimer ?? 0;
+    sim.tickFrame(1 / 60, { dragDeltaX: 0, keyAxisX: 0, nukeStrike: true });
+    expect(sim.getSnapshot().nukeDropTimer ?? 0).toBeLessThan(preBoostDrop - 0.3);
+
+    // Step through detonation and verify Aegis [E] can still fire immediately despite Nuke's thermal shield
+    for (let i = 0; i < 60; i++) {
+      sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
+    }
+    const aegisEvs = sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0, aegisPulse: true });
+    expect(aegisEvs.some((e) => e.type === 'AEGIS_PULSE')).toBe(true);
+    expect(sim.getSnapshot().aegisCooldown).toBeLessThanOrEqual(5.5);
+
+    const verify = verifyDeterministicReplay(sim.exportReplayLog());
+    expect(verify.matched).toBe(true);
+  });
+
+  it('populates abundant Mag-Lev Jump Pads across Sectors 1-4 & Blitz and triggers Meteor Sky-Slam shockwave + barrel ignition on touchdown', async () => {
+    const { SECTORS, getSectorScript } = await import('../../src/config/sectors');
+    const { generateBlitzScript } = await import('../../src/config/blitz');
+    const { spawnBarrel } = await import('../../src/sim/barrels');
+    const { spawnJumpPad } = await import('../../src/sim/competition');
+
+    expect(SECTORS[1].encounters.filter((e) => e.type === 'jump_pad').length).toBeGreaterThanOrEqual(5);
+    expect(SECTORS[2].encounters.filter((e) => e.type === 'jump_pad').length).toBeGreaterThanOrEqual(5);
+    expect(SECTORS[3].encounters.filter((e) => e.type === 'jump_pad').length).toBeGreaterThanOrEqual(6);
+    expect(getSectorScript(4, 42).encounters.filter((e) => e.type === 'jump_pad').length).toBeGreaterThanOrEqual(4);
+    expect(generateBlitzScript(3).encounters.filter((e) => e.type === 'jump_pad').length).toBeGreaterThanOrEqual(3);
+
+    const world = createSimWorld();
+    resetSimWorldForSector(world, 1, { bonusSquad: 12, damageMult: 1.5, manualOverdrive: true });
+    world.enemyPool.releaseAll(world.enemies);
+
+    const { PLAYER_Z } = await import('../../src/config/constants');
+    // Place a Jump Pad right ahead of PLAYER_Z
+    spawnJumpPad(world, 0, PLAYER_Z - 1.5, 14);
+    let launched = false;
+    for (let i = 0; i < 15; i++) {
+      const evs = stepWorldFixed(world, { dragDeltaX: 0, keyAxisX: 0 });
+      if (evs.some((e) => e.type === 'JUMP_LAUNCH')) {
+        launched = true;
+        break;
+      }
+    }
+    expect(launched).toBe(true);
+
+    // Mid-flight: place monsters + a Surge Barrel at the touchdown zone and step to JUMP_SLAM!
+    let peakAirY = 0;
+    let slamHits = -1;
+    let barrelBoom = false;
+    let planted = false;
+    for (let i = 0; i < 95; i++) {
+      if (world.squadAirY > peakAirY) peakAirY = world.squadAirY;
+      if (!planted && world.jumpTimer > 0 && world.jumpTimer <= 0.05) {
+        planted = true;
+        for (let k = 0; k < 4; k++) {
+          spawnEnemy(world, 'crawler', (k - 1.5) * 1.1, PLAYER_Z - 0.8, { hp: 80 });
+        }
+        spawnBarrel(world, 1.8, PLAYER_Z - 0.6, 0);
+      }
+      const evs = stepWorldFixed(world, { dragDeltaX: 0, keyAxisX: 0 });
+      if (evs.some((e) => e.type === 'BARREL_EXPLODE')) barrelBoom = true;
+      const slam = evs.find((e) => e.type === 'JUMP_SLAM');
+      if (slam && slam.type === 'JUMP_SLAM') {
+        slamHits = slam.hits;
+        break;
+      }
+    }
+    expect(peakAirY).toBeGreaterThan(3.0);
+    expect(slamHits).toBeGreaterThanOrEqual(4);
+    expect(barrelBoom).toBe(true);
+    expect(world.aegisTimer).toBeGreaterThan(0.2);
   });
 });

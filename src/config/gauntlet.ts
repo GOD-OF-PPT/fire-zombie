@@ -217,13 +217,29 @@ export function generateGauntlet(seed: number): { boss: BossConfig; encounters: 
 
   paired(36, { op: 'add', value: 6, mutable: false }, { op: 'add', value: 3, mutable: false });
   let prev = 36;
+  const gapStarts: number[] = [];
   for (let i = 0; i < rows.length; i++) {
     const gap = 64 + Math.floor(rand() * 24);
     const d = Math.min(L - 40, prev + gap);
+    gapStarts.push(prev);
     const set = pieces[i]!;
     set.forEach((p, k) => emitSetPiece(p, Math.round(prev + gap * (set.length === 1 ? 0.55 : 0.3 + k * 0.38))));
     emitRow(rows[i]!, d, i < 5);
     prev = d;
+  }
+
+  // Inject 4 tactical Mag-Lev Jump Pads across Acts 1-4 via isolated sub-PRNG (preserves exact gate/vault PRNG & avoids x=0 AFK lane!)
+  // Launching at prev + 16 lands ~21m ahead right into the mid-gap monster pack, well clear of the next gate row!
+  const jumpRand = mulberry32(((seed >>> 0) ^ 0x7f4a7c15) >>> 0);
+  const jumpSlots = [1, 4, 8, 11];
+  for (let k = 0; k < jumpSlots.length; k++) {
+    const idx = jumpSlots[k]!;
+    const base = gapStarts[idx];
+    if (base !== undefined && base + 42 < L - 40) {
+      const side = jumpRand() < 0.5 ? -1 : 1;
+      const laneX = round1((2.25 + jumpRand() * 0.65) * side);
+      out.push({ type: 'jump_pad', crossDist: base + 16, x: laneX });
+    }
   }
 
   out.sort((a, b) => a.crossDist - b.crossDist);

@@ -72,6 +72,6 @@ function startOverdrive(world: SimWorld, events: SimEvent[]): void {
     z: PLAYER_Z,
     ...(breakSync ? { overdriveBreakSync: true } : {}),
   });
-  addNirvanaCharge(world, 0.16);
+  addNirvanaCharge(world, 0.28);
   triggerCoreReactorDomainPulse(world, 'overdrive', events);
 }

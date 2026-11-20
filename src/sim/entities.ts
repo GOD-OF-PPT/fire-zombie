@@ -547,6 +547,16 @@ export interface EndlessRunState {
   offers: import('../types/game').EndlessUpgradeId[];
 }
 
+export interface SimNukeStrike {
+  id: number;
+  x: number;
+  z: number;
+  dropTimer: number;
+  dropDuration: number;
+  blastTimer: number;
+  salvoIndex: number;
+}
+
 export interface SimWorld {
   phase: GamePhase;
   mods: RunModifiers;
@@ -605,6 +615,11 @@ export interface SimWorld {
   swarmPeakTier: number;
   swarmBreachGrace: number;
   nukeCharge: number;
+  nukeStocks: number;
+  nukeMaxStocks: number;
+  nukeSalvoChain: number;
+  nukeChainWindowTimer: number;
+  nukeSalvo: SimNukeStrike[];
   nukeDropTimer: number;
   nukeBlastTimer: number;
   nukeTargetX: number;

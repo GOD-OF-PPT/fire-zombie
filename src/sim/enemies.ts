@@ -263,7 +263,10 @@ export function damageEnemy(
     enemy.active = false;
     world.stats.kills += 1;
     addNukeKillCharge(world);
-    addNirvanaCharge(world, ENEMY_CONFIGS[enemy.kind].tier >= 3 ? 0.012 : 0.0045);
+    addNirvanaCharge(world, ENEMY_CONFIGS[enemy.kind].tier >= 3 ? 0.030 : 0.012);
+    if (world.mods.manualOverdrive && !world.mods.fairTrial && world.overdriveTimer <= 0) {
+      world.resonance = Math.min(1.0, world.resonance + 0.005 * world.mods.resonanceMult);
+    }
 
     if (enemy.isBountyElite) {
       grantBountyJackpot(world, killedX, killedZ, events);
@@ -315,8 +318,8 @@ export function damageEnemy(
             other.consumed = true;
             other.active = false;
             world.stats.kills += 1;
-            addNukeKillCharge(world, 0.0004);
-            addNirvanaCharge(world, 0.003);
+            addNukeKillCharge(world, 0.005);
+            addNirvanaCharge(world, 0.008);
             events.push({
               type: 'ENEMY_HIT',
               x: other.x,

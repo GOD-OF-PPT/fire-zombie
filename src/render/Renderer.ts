@@ -426,6 +426,61 @@ function additive(color: number, opacity: number, map?: THREE.Texture): THREE.Me
   });
 }
 
+interface NukeDropSlot {
+  group: THREE.Group;
+  warhead: THREE.Group;
+  plumeMat: THREE.MeshBasicMaterial;
+  plume: THREE.Mesh;
+  reticleOuter: THREE.Mesh;
+  reticleOuterMat: THREE.MeshBasicMaterial;
+  reticleInner: THREE.Mesh;
+  reticleInnerMat: THREE.MeshBasicMaterial;
+  crosshair: THREE.Mesh;
+  crosshairMat: THREE.MeshBasicMaterial;
+  fillMat: THREE.MeshBasicMaterial;
+  lockBeam: THREE.Mesh;
+  lockBeamMat: THREE.MeshBasicMaterial;
+  helixRingA: THREE.Mesh;
+  helixRingAMat: THREE.MeshBasicMaterial;
+  helixRingB: THREE.Mesh;
+  helixRingBMat: THREE.MeshBasicMaterial;
+  sweepPillars: THREE.Mesh[];
+}
+
+interface NukeBlastSlot {
+  group: THREE.Group;
+  groundScorch: THREE.Mesh;
+  groundScorchMat: THREE.MeshBasicMaterial;
+  craterRing: THREE.Mesh;
+  craterRingMat: THREE.MeshBasicMaterial;
+  shockWall: THREE.Mesh;
+  shockWallMat: THREE.MeshBasicMaterial;
+  blastRing2: THREE.Mesh;
+  blastRing2Mat: THREE.MeshBasicMaterial;
+  sunPillar: THREE.Mesh;
+  sunPillarMat: THREE.MeshBasicMaterial;
+  equatorHalo: THREE.Mesh;
+  equatorHaloMat: THREE.MeshBasicMaterial;
+  fireball: THREE.Mesh;
+  fireballMat: THREE.MeshBasicMaterial;
+  coreDome: THREE.Mesh;
+  coreDomeMat: THREE.MeshBasicMaterial;
+  stem: THREE.Mesh;
+  stemMat: THREE.ShaderMaterial;
+  cap: THREE.Mesh;
+  capMat: THREE.ShaderMaterial;
+  crown: THREE.Mesh;
+  crownMat: THREE.ShaderMaterial;
+  vortexLower: THREE.Mesh;
+  vortexLowerMat: THREE.MeshBasicMaterial;
+  vortexUpper: THREE.Mesh;
+  vortexUpperMat: THREE.MeshBasicMaterial;
+  machRing: THREE.Mesh;
+  machRingMat: THREE.MeshBasicMaterial;
+  wilsonDome: THREE.Mesh;
+  wilsonDomeMat: THREE.MeshBasicMaterial;
+}
+
 export class Renderer {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -527,6 +582,19 @@ export class Renderer {
   private tethers: THREE.Mesh[] = [];
   private readonly riotShields = new RiotShields();
   private landingMarker!: THREE.Group;
+  private jumpSlamPool: Array<{
+    group: THREE.Group;
+    dome: THREE.Mesh;
+    domeMat: THREE.MeshBasicMaterial;
+    crown: THREE.Mesh;
+    crownMat: THREE.MeshBasicMaterial;
+    fissure: THREE.Mesh;
+    fissureMat: THREE.MeshBasicMaterial;
+    timer: number;
+    dur: number;
+    crowd: boolean;
+  }> = [];
+  private jumpSlamCursor = 0;
   public auraInstMesh!: THREE.InstancedMesh;
   public jugHaloInstMesh!: THREE.InstancedMesh;
   public shardDropInstMesh!: THREE.InstancedMesh;
@@ -636,43 +704,9 @@ export class Renderer {
   private mirrorGlow!: THREE.Mesh;
   private mirrorRing!: THREE.Mesh;
   private frameTick = 0;
-  private nukeDropGroup!: THREE.Group;
-  private nukeWarhead!: THREE.Group;
-  private nukePlume!: THREE.Mesh;
-  private nukeReticleOuter!: THREE.Mesh;
-  private nukeReticleInner!: THREE.Mesh;
-  private nukeCrosshair!: THREE.Mesh;
-  private nukeLockBeam!: THREE.Mesh;
-  private nukeSweepPillars: THREE.Mesh[] = [];
-  private nukeBlastGroup!: THREE.Group;
-  private nukeFireball!: THREE.Mesh;
-  private nukeFireballMat!: THREE.MeshBasicMaterial;
-  private nukeCoreDome!: THREE.Mesh;
-  private nukeCoreDomeMat!: THREE.MeshBasicMaterial;
-  private nukeShockWall!: THREE.Mesh;
-  private nukeShockWallMat!: THREE.MeshBasicMaterial;
-  private nukeStem!: THREE.Mesh;
-  private nukeStemMat!: THREE.ShaderMaterial;
-  private nukeCap!: THREE.Mesh;
-  private nukeCapMat!: THREE.ShaderMaterial;
-  private nukeCrown!: THREE.Mesh;
-  private nukeCrownMat!: THREE.ShaderMaterial;
-  private nukeVortexLower!: THREE.Mesh;
-  private nukeVortexLowerMat!: THREE.MeshBasicMaterial;
-  private nukeVortexUpper!: THREE.Mesh;
-  private nukeVortexUpperMat!: THREE.MeshBasicMaterial;
-  private nukeMachRing!: THREE.Mesh;
-  private nukeMachRingMat!: THREE.MeshBasicMaterial;
-  private nukeWilsonDome!: THREE.Mesh;
-  private nukeWilsonDomeMat!: THREE.MeshBasicMaterial;
-  private nukeGroundScorch!: THREE.Mesh;
-  private nukeGroundScorchMat!: THREE.MeshBasicMaterial;
-  private nukeCraterRing!: THREE.Mesh;
-  private nukeCraterRingMat!: THREE.MeshBasicMaterial;
-  private nukeSunPillar!: THREE.Mesh;
-  private nukeSunPillarMat!: THREE.MeshBasicMaterial;
-  private nukeBlastRing2!: THREE.Mesh;
-  private nukeBlastRing2Mat!: THREE.MeshBasicMaterial;
+  private nukeDropPool: NukeDropSlot[] = [];
+  private nukeBlastPool: NukeBlastSlot[] = [];
+  private nukeBlastWasActive = false;
   private nukeJustDetonated = false;
   private jumpTex!: THREE.CanvasTexture;
   private reflectorTex!: THREE.CanvasTexture;
@@ -716,6 +750,8 @@ export class Renderer {
   private nukeWaveTimer = 0;
   private nukeWaveDur = 1.15;
   private nukeHeatAmt = 0;
+  private nukeFlareAmt = 0;
+  private readonly nukeTintVec = new THREE.Vector3(1.18, 0.80, 0.38);
   private nukeDescentTremor = 0;
   private readonly screenShakeOut = { x: 0, y: 0, rotDeg: 0, scale: 1 };
 
@@ -852,6 +888,8 @@ export class Renderer {
           uPhotoTime: { value: 0.0 },
           uNukeWave: { value: 0.0 },
           uNukeHeat: { value: 0.0 },
+          uNukeFlare: { value: 0.0 },
+          uNukeTint: { value: new THREE.Vector3(1.18, 0.80, 0.38) },
           uCenter: { value: new THREE.Vector2(0.5, 0.5) },
         },
         vertexShader: /* glsl */ `
@@ -869,32 +907,38 @@ export class Renderer {
           uniform float uPhotoTime;
           uniform float uNukeWave;
           uniform float uNukeHeat;
+          uniform float uNukeFlare;
+          uniform vec3 uNukeTint;
           uniform vec2 uCenter;
           varying vec2 vUv;
           void main() {
             vec2 dir = vUv - uCenter;
             float dist = length(dir);
-            if (uChroma <= 0.0002 && uRadialBlur <= 0.001 && uSplitTone <= 0.001 && uPhotoFilter < 0.5 && uNukeWave <= 0.001 && uNukeHeat <= 0.001) {
+            if (uChroma <= 0.0002 && uRadialBlur <= 0.001 && uSplitTone <= 0.001 && uPhotoFilter < 0.5 && uNukeWave <= 0.001 && uNukeHeat <= 0.001 && uNukeFlare <= 0.001) {
               gl_FragColor = texture2D(tDiffuse, vUv);
               return;
             }
             vec2 uvBase = vUv;
             float shockBand = 0.0;
             if (uNukeWave > 0.001) {
-              float ringR = uNukeWave * 1.42;
-              float dRing = (dist - ringR) / 0.088;
-              shockBand = exp(-dRing * dRing) * (1.0 - uNukeWave * 0.72);
+              float ringR1 = uNukeWave * 1.48;
+              float d1 = (dist - ringR1) / 0.082;
+              float band1 = exp(-d1 * d1) * (1.0 - uNukeWave * 0.68);
+              float ringR2 = max(0.0, uNukeWave - 0.12) * 1.35;
+              float d2 = (dist - ringR2) / 0.062;
+              float band2 = uNukeWave > 0.12 ? exp(-d2 * d2) * (1.0 - uNukeWave * 0.78) * 0.72 : 0.0;
+              shockBand = band1 + band2;
               vec2 nDir = dist > 0.0005 ? dir / dist : vec2(0.0, 1.0);
-              uvBase = clamp(vUv - nDir * shockBand * 0.044, 0.001, 0.999);
+              uvBase = clamp(vUv - nDir * shockBand * 0.052, 0.001, 0.999);
             }
             vec2 dirW = uvBase - uCenter;
             float distW = length(dirW);
-            vec2 cOff = dirW * (uChroma + shockBand * 0.024) * (0.35 + distW * 1.45);
+            vec2 cOff = dirW * (uChroma + shockBand * 0.028) * (0.35 + distW * 1.45);
             vec3 acc = vec3(0.0);
             const int SAMPLES = 6;
             for (int i = 0; i < SAMPLES; i++) {
               float fi = float(i) / float(SAMPLES - 1);
-              float scale = 1.0 - (uRadialBlur + shockBand * 0.24) * 0.16 * fi * smoothstep(0.05, 0.65, distW);
+              float scale = 1.0 - (uRadialBlur + shockBand * 0.28) * 0.16 * fi * smoothstep(0.05, 0.65, distW);
               vec2 suv = uCenter + dirW * scale;
               float r = texture2D(tDiffuse, clamp(suv + cOff, 0.001, 0.999)).r;
               float g = texture2D(tDiffuse, clamp(suv, 0.001, 0.999)).g;
@@ -903,11 +947,26 @@ export class Renderer {
             }
             vec3 finalCol = acc / float(SAMPLES);
             if (shockBand > 0.001) {
-              finalCol += vec3(1.18, 0.80, 0.38) * shockBand * 0.34;
+              finalCol += uNukeTint * shockBand * 0.42;
+            }
+            // Crisp high-contrast anime solarized impact flash on initial detonation frames
+            if (uNukeWave > 0.001 && uNukeWave < 0.09) {
+              float impFade = 1.0 - uNukeWave / 0.09;
+              float lumImp = dot(finalCol, vec3(0.299, 0.587, 0.114));
+              vec3 solarRim = mix(vec3(0.04, 0.02, 0.08), uNukeTint * 1.35 + vec3(0.35), smoothstep(0.32, 0.78, lumImp));
+              finalCol = mix(finalCol, solarRim, impFade * 0.46);
+            }
+            // Cinema Horizontal Anamorphic Lens Flare Streak across epicenter
+            if (uNukeFlare > 0.001) {
+              float dy = abs(vUv.y - uCenter.y);
+              float dx = abs(vUv.x - uCenter.x);
+              float streakCore = exp(-dy * 68.0) * exp(-dx * 1.65);
+              float streakWide = exp(-dy * 18.0) * exp(-dx * 3.2) * 0.45;
+              finalCol += (uNukeTint * 0.85 + vec3(0.55)) * (streakCore + streakWide) * uNukeFlare * 1.25;
             }
             if (uNukeHeat > 0.001) {
-              float edgeHeat = smoothstep(0.18, 0.95, dist);
-              finalCol = mix(finalCol, finalCol * vec3(1.24, 0.96, 0.72) + vec3(0.16, 0.07, 0.01), uNukeHeat * (0.28 + 0.42 * edgeHeat));
+              float edgeHeat = smoothstep(0.16, 0.94, dist);
+              finalCol = mix(finalCol, finalCol * (vec3(0.88) + uNukeTint * 0.34) + uNukeTint * 0.12, uNukeHeat * (0.28 + 0.44 * edgeHeat));
             }
             if (uSplitTone > 0.001) {
               float luma = dot(finalCol, vec3(0.299, 0.587, 0.114));
@@ -1847,14 +1906,73 @@ export class Renderer {
     // V20 Stage 5: Single-Draw-Call InstancedMesh batching for Phalanx shields, Howler war-auras, Juggernaut halos, Core Shards & Dynamic Weather!
     this.scene.add(this.riotShields.mesh);
     this.landingMarker = new THREE.Group();
-    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xffce6b, transparent: true, opacity: 0.83, depthWrite: false });
+    const markerMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffce6b,
+      transparent: true,
+      opacity: 0.86,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
     for (let i = 0; i < 4; i++) {
-      const arc = new THREE.Mesh(new THREE.RingGeometry(2.4, 2.57, 12, 1, i * Math.PI / 2 + 0.16, 1.23), markerMaterial);
+      const arc = new THREE.Mesh(new THREE.RingGeometry(2.45, 2.75, 14, 1, i * Math.PI / 2 + 0.16, 1.23), markerMaterial);
       arc.rotation.x = -Math.PI / 2;
       this.landingMarker.add(arc);
     }
+    const innerBullseye = new THREE.Mesh(
+      new THREE.RingGeometry(0.68, 1.08, 24).rotateX(-Math.PI / 2),
+      additive(0x3ef3ff, 0.78),
+    );
+    innerBullseye.name = 'bullseye';
+    innerBullseye.position.y = 0.02;
+    const beaconPillar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.18, 0.72, 6.2, 16, 1, true).translate(0, 3.1, 0),
+      additive(0x62f4ff, 0.34),
+    );
+    beaconPillar.name = 'beacon';
+    this.landingMarker.add(innerBullseye, beaconPillar);
     this.landingMarker.visible = false;
     this.scene.add(this.landingMarker);
+
+    const slamDomeGeo = new THREE.SphereGeometry(1, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.5);
+    const slamCrownGeo = new THREE.CylinderGeometry(1.18, 0.65, 1, 20, 1, true).translate(0, 0.5, 0);
+    const slamFissureGeo = new THREE.RingGeometry(0.35, 1.0, 24).rotateX(-Math.PI / 2);
+    for (let s = 0; s < 3; s++) {
+      const sGroup = new THREE.Group();
+      const domeMat = new THREE.MeshBasicMaterial({
+        color: 0x62f4ff,
+        wireframe: true,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const dome = new THREE.Mesh(slamDomeGeo, domeMat);
+      dome.userData.sharedGeo = true;
+      const crownMat = additive(0xffd84a, 0);
+      const crown = new THREE.Mesh(slamCrownGeo, crownMat);
+      crown.userData.sharedGeo = true;
+      const fissureMat = additive(0xfff0a8, 0);
+      const fissure = new THREE.Mesh(slamFissureGeo, fissureMat);
+      fissure.userData.sharedGeo = true;
+      fissure.position.y = 0.06;
+      sGroup.add(dome, crown, fissure);
+      sGroup.visible = false;
+      this.scene.add(sGroup);
+      this.jumpSlamPool.push({
+        group: sGroup,
+        dome,
+        domeMat,
+        crown,
+        crownMat,
+        fissure,
+        fissureMat,
+        timer: 0,
+        dur: 0.52,
+        crowd: false,
+      });
+    }
 
     const auraGeo = new THREE.RingGeometry(3.25, 3.85, 32).rotateX(-Math.PI / 2);
     this.auraInstMesh = new THREE.InstancedMesh(auraGeo, additive(0xff2a6d, 0.34), 24);
@@ -2495,8 +2613,26 @@ export class Renderer {
     this.glowTex.dispose();
     this.hexTex.dispose();
     this.riotShields.dispose();
-    for (const child of this.landingMarker.children) (child as THREE.Mesh).geometry.dispose();
-    ((this.landingMarker.children[0] as THREE.Mesh).material as THREE.Material).dispose();
+    const seenMats = new Set<THREE.Material>();
+    for (const child of this.landingMarker.children) {
+      const m = child as THREE.Mesh;
+      m.geometry.dispose();
+      const mat = m.material as THREE.Material;
+      if (mat && !seenMats.has(mat)) {
+        seenMats.add(mat);
+        mat.dispose();
+      }
+    }
+    if (this.jumpSlamPool[0]) {
+      this.jumpSlamPool[0].dome.geometry.dispose();
+      this.jumpSlamPool[0].crown.geometry.dispose();
+      this.jumpSlamPool[0].fissure.geometry.dispose();
+    }
+    for (const s of this.jumpSlamPool) {
+      s.domeMat.dispose();
+      s.crownMat.dispose();
+      s.fissureMat.dispose();
+    }
     this.stripeTex.dispose();
     this.lensTex.dispose();
     this.jumpTex.dispose();
@@ -2605,6 +2741,10 @@ export class Renderer {
     if (this.omegaBeamGroup) this.omegaBeamGroup.visible = false;
     this.riotShields.reset();
     this.landingMarker.visible = false;
+    for (const s of this.jumpSlamPool) {
+      s.timer = 0;
+      s.group.visible = false;
+    }
     if (this.auraInstMesh) { this.auraInstMesh.count = 0; this.auraInstMesh.visible = false; }
     if (this.jugHaloInstMesh) { this.jugHaloInstMesh.count = 0; this.jugHaloInstMesh.visible = false; }
     if (this.shardDropInstMesh) { this.shardDropInstMesh.count = 0; this.shardDropInstMesh.visible = false; }
@@ -2630,7 +2770,11 @@ export class Renderer {
     this.nukeQuakeStrength = 0;
     this.nukeWaveTimer = 0;
     this.nukeHeatAmt = 0;
+    this.nukeFlareAmt = 0;
     this.nukeDescentTremor = 0;
+    this.nukeBlastWasActive = false;
+    for (const s of this.nukeDropPool) s.group.visible = false;
+    for (const b of this.nukeBlastPool) b.group.visible = false;
     this.screenShakeOut.x = 0;
     this.screenShakeOut.y = 0;
     this.screenShakeOut.rotDeg = 0;
@@ -2749,7 +2893,7 @@ export class Renderer {
     this.updateLenses(snap, t);
     const deltaScroll = scroll >= this.lastScrollVal && scroll - this.lastScrollVal < 4.0 ? scroll - this.lastScrollVal : 0;
     this.lastScrollVal = scroll;
-    this.updateCompetitionProps(snap, t);
+    this.updateCompetitionProps(snap, t, dt, deltaScroll);
     this.updateV20PropsAndWeather(snap, t);
     this.updateV21World(snap, dt, t);
     if (this.decalShaderMat) this.decalShaderMat.uniforms.uTime!.value = t;
@@ -2783,11 +2927,13 @@ export class Renderer {
       this.impactPass.uniforms.uPhotoTime!.value = t;
       this.impactPass.uniforms.uNukeWave!.value = snap.inBlitzDrill ? 0 : nukeWaveProg;
       this.impactPass.uniforms.uNukeHeat!.value = snap.inBlitzDrill ? 0 : this.nukeHeatAmt;
+      this.impactPass.uniforms.uNukeFlare!.value = snap.inBlitzDrill ? 0 : this.nukeFlareAmt;
+      (this.impactPass.uniforms.uNukeTint!.value as THREE.Vector3).copy(this.nukeTintVec);
       (this.impactPass.uniforms.uCenter!.value as THREE.Vector2).copy(this.impactCenter);
     }
     if (this.composer) {
       if (this.bloomPass) {
-        this.bloomPass.strength = snap.inBlitzDrill ? 0.16 : 0.32 + this.nukeHeatAmt * 0.68;
+        this.bloomPass.strength = snap.inBlitzDrill ? 0.16 : 0.32 + this.nukeHeatAmt * 0.76;
       }
       this.composer.render();
     } else {
@@ -4389,7 +4535,50 @@ export class Renderer {
     return { id: -1, group, coreMat, cage, cageMat, haloMat, ctx, tex, key: '', seen: false };
   }
 
-  private updateCompetitionProps(snap: SimSnapshot, t: number): void {
+  /** Triggers a 3D Meteor Sky-Slam shock-dome, plasma crown, crater decal, seismic quake, and radial shockwaves on jump landing! */
+  triggerJumpSlamVfx(x: number, z: number, hits = 0): void {
+    const crowd = hits >= 3;
+    const slot = this.jumpSlamPool[this.jumpSlamCursor]!;
+    this.jumpSlamCursor = (this.jumpSlamCursor + 1) % this.jumpSlamPool.length;
+    slot.dur = crowd ? 0.62 : 0.48;
+    slot.timer = slot.dur;
+    slot.crowd = crowd;
+    slot.group.position.set(x, 0, z);
+    slot.group.visible = true;
+    slot.domeMat.color.setHex(crowd ? 0xffd84a : 0x3ef3ff);
+    slot.crownMat.color.setHex(crowd ? 0xff9a1f : 0x62f4ff);
+    slot.fissureMat.color.setHex(crowd ? 0xfff3a8 : 0xb8ffff);
+
+    const fx = this.effects;
+    const colCore = 0xffffff;
+    const colMid = crowd ? 0xffd84a : 0x62f4ff;
+    const colOuter = crowd ? 0xff5a2a : 0x2b88ff;
+
+    // Multi-wave ground shockwave rings + delayed secondary seismic ripple!
+    fx.ring(x, z, colCore, crowd ? 9.8 : 6.8, 0.34);
+    fx.ring(x, z, colMid, crowd ? 8.2 : 5.4, 0.52);
+    fx.ring(x, z, colOuter, crowd ? 11.4 : 7.6, 0.68);
+    fx.after(0.11, () => fx.ring(x, z, colMid, crowd ? 13.2 : 8.8, 0.48));
+
+    // Upward crystal/rock shatter + radial ground sparks + dense 2-layer particle eruption!
+    fx.groundFlash(x, z, colMid, crowd ? 6.4 : 4.4, 0.32);
+    fx.shatter(x, 0.65, z, colMid, crowd ? 26 : 14, true);
+    fx.streaks(x, 0.55, z, colCore, crowd ? 24 : 14, { speed: crowd ? 22 : 16, len: 1.75, life: 0.32, coneBiasZ: 0 });
+    fx.burst(x, 0.35, z, colCore, crowd ? 85 : 46, { speed: crowd ? 16 : 11.5, size: crowd ? 0.56 : 0.42, life: 0.58, up: 1.45, gravity: 4.2 });
+    fx.burst(x, 0.9, z, colMid, crowd ? 65 : 34, { speed: crowd ? 12.5 : 9.0, size: crowd ? 0.48 : 0.36, life: 0.72, up: 1.85, gravity: 2.8 });
+
+    // Persistent glowing ground crater / plasma fissure decal!
+    this.spawnDecal(x, z, crowd ? 5.2 : 3.6, crowd ? 0xff9a24 : 0x3ef3ff, crowd ? 4 : 5, 16);
+
+    // Camera downward thud + seismic screen quake + post-process shockwave ring + anamorphic lens streak!
+    this.shake(crowd ? 0.52 : 0.32);
+    this.triggerScreenQuake(crowd ? 0.52 : 0.36, crowd ? 0.46 : 0.28);
+    this.kickCamera((crowd ? 0.52 : 0.32) * this.shakeScale, (Math.random() - 0.5) * 0.55);
+    this.triggerShockwave(crowd ? 0.85 : 0.54);
+    this.triggerAnamorphicFlare(x, z, crowd ? 0.58 : 0.36, crowd ? 1 : 2);
+  }
+
+  private updateCompetitionProps(snap: SimSnapshot, t: number, dt = 0.016, deltaScroll = 0): void {
     // 1. 3D Cryo-Nova Singularity Vortices
     for (const v of this.singularityViews.values()) v.seen = false;
     for (const s of snap.singularities ?? []) {
@@ -4422,13 +4611,68 @@ export class Renderer {
       }
     }
 
-    // 2. Mag-Lev Jump Pads
+    // 2. Mag-Lev Jump Pads, Airborne Meteor Dive Trail & 3D Sky-Slam Shock-Domes
     const flight = snap.jumpTimeLeft ?? 0;
     this.landingMarker.visible = flight > 0;
     if (flight > 0) {
-      this.landingMarker.position.set(snap.squadX, 0.10, PLAYER_Z - flight * snap.runwaySpeed);
-      this.landingMarker.scale.setScalar(0.85 + 0.55 * flight / JUMP_DURATION_SEC);
+      const fracLeft = THREE.MathUtils.clamp(flight / JUMP_DURATION_SEC, 0, 1);
+      const landZ = PLAYER_Z - flight * snap.runwaySpeed;
+      this.landingMarker.position.set(snap.squadX, 0.10, landZ);
+      this.landingMarker.rotation.y = t * 4.2;
+      this.landingMarker.scale.setScalar(0.82 + 0.58 * fracLeft);
+      const bull = this.landingMarker.getObjectByName('bullseye') as THREE.Mesh | undefined;
+      if (bull) {
+        bull.scale.setScalar(0.85 + (1 - fracLeft) * 0.65 + 0.12 * Math.sin(t * 22));
+      }
+      const beacon = this.landingMarker.getObjectByName('beacon') as THREE.Mesh | undefined;
+      if (beacon) {
+        beacon.scale.set(0.75 + (1 - fracLeft) * 0.5, 0.6 + (1 - fracLeft) * 0.85, 0.75 + (1 - fracLeft) * 0.5);
+        (beacon.material as THREE.MeshBasicMaterial).opacity = 0.18 + (1 - fracLeft) * 0.42;
+      }
+      // Emit fiery cyan-gold meteor dive trail off the airborne squad during the downward slam half!
+      if (fracLeft < 0.52 && dt > 0 && Math.random() < 0.78) {
+        const airY = snap.squadAirY ?? 1.5;
+        this.effects.burst(
+          snap.squadX + (Math.random() - 0.5) * 1.4,
+          airY + 0.45,
+          PLAYER_Z + (Math.random() - 0.5) * 0.8,
+          fracLeft < 0.25 ? 0xffd84a : 0x62f4ff,
+          2,
+          { speed: 4.8, size: 0.36, life: 0.22, up: 0.8, gravity: 0 },
+        );
+      }
     }
+
+    // Animate active 3D Meteor Sky-Slam shock-domes & upward plasma crowns
+    for (let i = 0; i < this.jumpSlamPool.length; i++) {
+      const s = this.jumpSlamPool[i]!;
+      if (s.timer <= 0) continue;
+      s.timer = Math.max(0, s.timer - dt);
+      if (s.timer <= 0) {
+        s.group.visible = false;
+        continue;
+      }
+      s.group.position.z += deltaScroll;
+      const p = 1 - s.timer / Math.max(0.01, s.dur);
+      const easeOut = 1 - Math.pow(1 - p, 3);
+      const fade = Math.pow(1 - p, 1.55);
+      const maxR = s.crowd ? 7.6 : 5.2;
+      const rNow = 1.1 + easeOut * maxR;
+      s.dome.scale.set(rNow, 1.0 + easeOut * (s.crowd ? 3.8 : 2.6), rNow);
+      s.dome.rotation.y = t * 5.0;
+      s.domeMat.opacity = 0.78 * fade;
+
+      const crownR = 0.85 + easeOut * (s.crowd ? 4.4 : 3.0);
+      const crownH = (s.crowd ? 6.8 : 4.6) * Math.sin(Math.min(1, p * 1.4) * Math.PI * 0.5);
+      s.crown.scale.set(crownR, Math.max(0.2, crownH), crownR);
+      s.crown.rotation.y = -t * 7.5;
+      s.crownMat.opacity = 0.68 * fade;
+
+      const fisR = 1.2 + easeOut * (s.crowd ? 8.2 : 5.6);
+      s.fissure.scale.set(fisR, fisR, 1);
+      s.fissureMat.opacity = 0.85 * fade;
+    }
+
     for (const v of this.jumpPadViews.values()) v.seen = false;
     for (const jp of snap.jumpPads ?? []) {
       if (jp.triggered) continue;
@@ -4441,12 +4685,12 @@ export class Renderer {
       v.seen = true;
       v.group.position.set(jp.x, 0, jp.z);
       const alignedJp = jp.z < PLAYER_Z && Math.abs(snap.squadX - jp.x) <= 1.85;
-      v.stripMat.opacity = (alignedJp ? 0.72 : 0.38) + 0.18 * Math.sin(t * (alignedJp ? 16 : 9) + jp.id);
+      v.stripMat.opacity = (alignedJp ? 0.78 : 0.44) + 0.18 * Math.sin(t * (alignedJp ? 16 : 9) + jp.id);
       const landRing = v.group.getObjectByName('landRing');
       if (landRing) landRing.position.z = -snap.runwaySpeed * JUMP_DURATION_SEC;
       const landCore = v.group.getObjectByName('landCore');
       if (landCore) landCore.position.z = -snap.runwaySpeed * JUMP_DURATION_SEC;
-      if (landRing) landRing.scale.setScalar(alignedJp ? 1.14 + 0.06 * Math.sin(t * 14) : 1.0);
+      if (landRing) landRing.scale.setScalar(alignedJp ? 1.18 + 0.08 * Math.sin(t * 14) : 1.04);
     }
     for (const [id, v] of this.jumpPadViews) {
       if (!v.seen) {
@@ -5254,7 +5498,7 @@ export class Renderer {
     }
   }
 
-  // ---------------------------------------------------------------- 3D Volumetric GLSL Tactical Nuke & Mushroom Cloud
+  // ---------------------------------------------------------------- 3D Volumetric GLSL Tactical Nuke & Multi-Salvo Supernova Cloud
   private createNukeCloudShader(scrollSpeedY: number, heatBias: number): THREE.ShaderMaterial {
     return new THREE.ShaderMaterial({
       uniforms: {
@@ -5263,6 +5507,7 @@ export class Renderer {
         uOpacity: { value: 1 },
         uScrollY: { value: scrollSpeedY },
         uHeatBias: { value: heatBias },
+        uPalette: { value: 0 },
       },
       vertexShader: /* glsl */ `
         uniform float uTime;
@@ -5284,7 +5529,7 @@ export class Renderer {
           float n2 = gyroid(np * 2.35 + vec3(1.7, -uTime * uScrollY * 1.4, -1.2));
           float billow = (n1 * 0.58 + n2 * 0.32) * 0.5 + 0.5;
           vDisplace = clamp(billow, 0.0, 1.0);
-          vec3 displaced = position + normal * ((billow - 0.35) * (0.24 + uProgress * 0.16));
+          vec3 displaced = position + normal * ((billow - 0.35) * (0.26 + uProgress * 0.18));
           vec4 mv = modelViewMatrix * vec4(displaced, 1.0);
           vViewN = normalize(normalMatrix * normal);
           vViewDir = normalize(-mv.xyz);
@@ -5297,6 +5542,7 @@ export class Renderer {
         uniform float uOpacity;
         uniform float uScrollY;
         uniform float uHeatBias;
+        uniform float uPalette;
         varying vec3 vLocalPos;
         varying vec3 vViewN;
         varying vec3 vViewDir;
@@ -5315,17 +5561,34 @@ export class Renderer {
 
           float fresnel = 1.0 - clamp(dot(normalize(vViewN), normalize(vViewDir)), 0.0, 1.0);
           float coolFactor = clamp(uProgress * 0.58 + fresnel * 0.42 - uHeatBias, 0.0, 0.95);
-          float heat = clamp(turb * 0.72 + (1.0 - vDisplace) * 0.42 - coolFactor * 0.52 + 0.22, 0.0, 1.0);
+          float heat = clamp(turb * 0.74 + (1.0 - vDisplace) * 0.44 - coolFactor * 0.50 + 0.24, 0.0, 1.0);
 
           vec3 darkAsh = vec3(0.14, 0.05, 0.11);
-          vec3 crimsonMagma = vec3(0.92, 0.16, 0.08);
-          vec3 solarOrange = vec3(1.15, 0.52, 0.09);
-          vec3 whitePlasma = vec3(1.45, 1.32, 0.86);
+          vec3 midGlow = vec3(0.95, 0.18, 0.08);
+          vec3 hiGlow = vec3(1.22, 0.58, 0.10);
+          vec3 coreWhite = vec3(1.55, 1.40, 0.92);
+          vec3 rimTint = vec3(1.10, 0.46, 0.14);
 
-          vec3 col = mix(darkAsh, crimsonMagma, smoothstep(0.10, 0.42, heat));
-          col = mix(col, solarOrange, smoothstep(0.38, 0.70, heat));
-          col = mix(col, whitePlasma, smoothstep(0.68, 0.95, heat));
-          col += vec3(1.0, 0.42, 0.12) * pow(fresnel, 2.2) * (0.55 - uProgress * 0.25);
+          if (uPalette > 0.5 && uPalette < 1.5) {
+            // Salvo #2: Hyper-Ion Electric Cyan & Cobalt Super-Star
+            darkAsh = vec3(0.04, 0.08, 0.22);
+            midGlow = vec3(0.10, 0.38, 1.05);
+            hiGlow = vec3(0.22, 1.12, 1.38);
+            coreWhite = vec3(1.25, 1.55, 1.62);
+            rimTint = vec3(0.24, 0.95, 1.35);
+          } else if (uPalette >= 1.5) {
+            // Salvo #3+: Antimatter Neon Magenta-Violet & Prismatic Gold Supernova
+            darkAsh = vec3(0.16, 0.03, 0.24);
+            midGlow = vec3(0.88, 0.12, 0.96);
+            hiGlow = vec3(1.32, 0.36, 1.18);
+            coreWhite = vec3(1.60, 1.42, 1.15);
+            rimTint = vec3(1.25, 0.32, 1.15);
+          }
+
+          vec3 col = mix(darkAsh, midGlow, smoothstep(0.10, 0.42, heat));
+          col = mix(col, hiGlow, smoothstep(0.38, 0.70, heat));
+          col = mix(col, coreWhite, smoothstep(0.68, 0.95, heat));
+          col += rimTint * pow(fresnel, 2.1) * (0.62 - uProgress * 0.25);
 
           gl_FragColor = vec4(col, uOpacity);
         }
@@ -5337,48 +5600,19 @@ export class Renderer {
   }
 
   private buildNukeVisuals(): void {
-    this.nukeDropGroup = new THREE.Group();
-    this.nukeDropGroup.visible = false;
-
-    this.nukeReticleOuter = new THREE.Mesh(
-      new THREE.RingGeometry(8.2, 9.1, 56).rotateX(-Math.PI / 2),
-      additive(0xff2a55, 0.82),
-    );
-    this.nukeReticleOuter.position.y = 0.06;
-
-    this.nukeReticleInner = new THREE.Mesh(
-      new THREE.RingGeometry(3.1, 3.85, 6).rotateX(-Math.PI / 2),
-      additive(0xffd84a, 0.9),
-    );
-    this.nukeReticleInner.position.y = 0.08;
-
+    const reticleOuterGeo = new THREE.RingGeometry(8.2, 9.1, 56).rotateX(-Math.PI / 2);
+    const reticleInnerGeo = new THREE.RingGeometry(3.1, 3.85, 6).rotateX(-Math.PI / 2);
     const crossGeo = new GeoBuilder()
-      .add(box(17.5, 0.04, 0.22), 0xff4b3a, 1.8)
-      .add(box(0.22, 0.04, 17.5), 0xffd84a, 1.8)
+      .add(box(17.5, 0.04, 0.22), 0xffffff, 1.8)
+      .add(box(0.22, 0.04, 17.5), 0xffffff, 1.8)
       .build();
-    this.nukeCrosshair = new THREE.Mesh(crossGeo, additive(0xffaa38, 0.65));
-    this.nukeCrosshair.position.y = 0.07;
-
-    const fillDisc = new THREE.Mesh(
-      new THREE.CircleGeometry(8.2, 40).rotateX(-Math.PI / 2),
-      additive(0xff3020, 0.18),
-    );
-    fillDisc.position.y = 0.04;
-
-    this.nukeLockBeam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.24, 1.45, 32, 18, 1, true),
-      additive(0xff7828, 0.34),
-    );
-    this.nukeLockBeam.position.y = 16;
-
-    const pillarGeo = new THREE.CylinderGeometry(0.11, 0.22, 28, 8, 1, true);
-    this.nukeSweepPillars = [];
-    for (let i = 0; i < 4; i++) {
-      const pil = new THREE.Mesh(pillarGeo, additive(i % 2 === 0 ? 0xff2a55 : 0xffd84a, 0.52));
-      pil.position.y = 14;
-      this.nukeSweepPillars.push(pil);
-      this.nukeDropGroup.add(pil);
-    }
+    const fillDiscGeo = new THREE.CircleGeometry(8.2, 40).rotateX(-Math.PI / 2);
+    const lockBeamGeo = new THREE.CylinderGeometry(0.26, 1.55, 34, 18, 1, true);
+    const pillarGeo = new THREE.CylinderGeometry(0.12, 0.24, 30, 8, 1, true);
+    const helixGeo = new THREE.TorusGeometry(2.15, 0.13, 8, 28);
+    const plumeGeo = new THREE.ConeGeometry(1.08, 5.4, 16);
+    const plumeCoreGeo = new THREE.ConeGeometry(0.58, 3.5, 14);
+    const machConeGeo = new THREE.ConeGeometry(2.15, 2.8, 20, 1, true);
 
     const warheadGeo = new GeoBuilder()
       .add(cyl(0.92, 1.02, 3.6, 16), 0x222938, 0.22, { p: [0, 0.45, 0] })
@@ -5392,353 +5626,520 @@ export class Renderer {
       .add(box(0.18, 1.58, 3.55), 0xffb830, 0.55, { p: [0, 2.52, 0] })
       .build();
 
-    const warheadMesh = new THREE.Mesh(warheadGeo, this.propMat);
-    const warheadOutline = new THREE.Mesh(warheadGeo, getOutlineMaterial(0.045));
-    this.nukePlume = new THREE.Mesh(
-      new THREE.ConeGeometry(1.08, 5.4, 16),
-      additive(0xffa828, 0.88),
-    );
-    this.nukePlume.position.y = 5.4;
+    const scorchGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    const craterRingGeo = new THREE.RingGeometry(0.72, 1.0, 48).rotateX(-Math.PI / 2);
+    const shockWallGeo = new THREE.CylinderGeometry(1, 1, 2.8, 48, 1, true);
+    const blastRing2Geo = new THREE.CylinderGeometry(1, 1.06, 3.8, 48, 1, true);
+    const sunPillarGeo = new THREE.CylinderGeometry(1.2, 2.55, 44, 20, 1, true);
+    const equatorHaloGeo = new THREE.RingGeometry(0.78, 1.0, 56).rotateX(-Math.PI / 2);
+    const fireballGeo = new THREE.SphereGeometry(1, 28, 20, 0, Math.PI * 2, 0, Math.PI * 0.72);
+    const coreDomeGeo = new THREE.SphereGeometry(0.72, 20, 14);
+    const stemGeo = new THREE.CylinderGeometry(1.18, 2.65, 1, 26, 14, false);
+    const capGeo = new THREE.TorusGeometry(2.75, 1.42, 22, 36).rotateX(Math.PI / 2);
+    const crownGeo = new THREE.SphereGeometry(2.35, 28, 20);
+    const vortexLowerGeo = new THREE.TorusGeometry(1.65, 0.24, 10, 32).rotateX(Math.PI / 2);
+    const vortexUpperGeo = new THREE.TorusGeometry(3.55, 0.28, 12, 40).rotateX(Math.PI / 2);
+    const machRingGeo = new THREE.RingGeometry(0.86, 1.0, 56).rotateX(-Math.PI / 2);
+    const wilsonDomeGeo = new THREE.SphereGeometry(1, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.52);
 
-    const plumeCore = new THREE.Mesh(
-      new THREE.ConeGeometry(0.58, 3.5, 14),
-      additive(0xffffff, 0.95),
-    );
-    plumeCore.position.y = 4.4;
+    this.nukeDropPool = [];
+    this.nukeBlastPool = [];
+    const POOL_SLOTS = 4;
 
-    const machCone = new THREE.Mesh(
-      new THREE.ConeGeometry(2.15, 2.8, 20, 1, true),
-      additive(0xfff0b8, 0.28),
-    );
-    machCone.position.y = -0.9;
+    for (let slot = 0; slot < POOL_SLOTS; slot++) {
+      const dropGroup = new THREE.Group();
+      dropGroup.visible = false;
 
-    this.nukeWarhead = new THREE.Group();
-    this.nukeWarhead.add(warheadMesh, warheadOutline, this.nukePlume, plumeCore, machCone);
-    this.nukeDropGroup.add(
-      fillDisc,
-      this.nukeReticleOuter,
-      this.nukeReticleInner,
-      this.nukeCrosshair,
-      this.nukeLockBeam,
-      this.nukeWarhead,
-    );
-    this.scene.add(this.nukeDropGroup);
+      const reticleOuterMat = additive(0xff2a55, 0.85);
+      const reticleOuter = new THREE.Mesh(reticleOuterGeo, reticleOuterMat);
+      reticleOuter.position.y = 0.06;
 
-    this.nukeBlastGroup = new THREE.Group();
-    this.nukeBlastGroup.visible = false;
+      const reticleInnerMat = additive(0xffd84a, 0.92);
+      const reticleInner = new THREE.Mesh(reticleInnerGeo, reticleInnerMat);
+      reticleInner.position.y = 0.08;
 
-    this.nukeGroundScorchMat = additive(0xff7a1a, 0.85, this.glowTex);
-    this.nukeGroundScorch = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      this.nukeGroundScorchMat,
-    );
-    this.nukeGroundScorch.position.y = 0.065;
+      const crosshairMat = additive(0xffaa38, 0.68);
+      const crosshair = new THREE.Mesh(crossGeo, crosshairMat);
+      crosshair.position.y = 0.07;
 
-    this.nukeCraterRingMat = additive(0xffd84a, 0.78);
-    this.nukeCraterRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.72, 1.0, 48).rotateX(-Math.PI / 2),
-      this.nukeCraterRingMat,
-    );
-    this.nukeCraterRing.position.y = 0.08;
+      const fillMat = additive(0xff3020, 0.18);
+      const fillDisc = new THREE.Mesh(fillDiscGeo, fillMat);
+      fillDisc.position.y = 0.04;
 
-    this.nukeShockWallMat = additive(0xffcf58, 0.85);
-    this.nukeShockWall = new THREE.Mesh(
-      new THREE.CylinderGeometry(1, 1, 2.6, 48, 1, true),
-      this.nukeShockWallMat,
-    );
-    this.nukeShockWall.position.y = 1.3;
+      const lockBeamMat = additive(0xff7828, 0.36);
+      const lockBeam = new THREE.Mesh(lockBeamGeo, lockBeamMat);
+      lockBeam.position.y = 17;
 
-    this.nukeFireballMat = additive(0xffb838, 0.85);
-    this.nukeFireball = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 28, 20, 0, Math.PI * 2, 0, Math.PI * 0.72),
-      this.nukeFireballMat,
-    );
+      const helixRingAMat = additive(0x62f4ff, 0.76);
+      const helixRingA = new THREE.Mesh(helixGeo, helixRingAMat);
+      const helixRingBMat = additive(0xffd84a, 0.76);
+      const helixRingB = new THREE.Mesh(helixGeo, helixRingBMat);
 
-    this.nukeCoreDomeMat = additive(0xffffff, 0.95);
-    this.nukeCoreDome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.72, 20, 14),
-      this.nukeCoreDomeMat,
-    );
+      const sweepPillars: THREE.Mesh[] = [];
+      for (let i = 0; i < 4; i++) {
+        const pil = new THREE.Mesh(pillarGeo, additive(i % 2 === 0 ? 0xff2a55 : 0xffd84a, 0.56));
+        pil.position.y = 15;
+        sweepPillars.push(pil);
+        dropGroup.add(pil);
+      }
 
-    this.nukeStemMat = this.createNukeCloudShader(3.2, 0.18);
-    this.nukeStem = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.18, 2.65, 1, 26, 14, false),
-      this.nukeStemMat,
-    );
+      const warheadMesh = new THREE.Mesh(warheadGeo, this.propMat);
+      const warheadOutline = new THREE.Mesh(warheadGeo, getOutlineMaterial(0.045));
+      const plumeMat = additive(0xffa828, 0.9);
+      const plume = new THREE.Mesh(plumeGeo, plumeMat);
+      plume.position.y = 5.4;
+      const plumeCore = new THREE.Mesh(plumeCoreGeo, additive(0xffffff, 0.96));
+      plumeCore.position.y = 4.4;
+      const machCone = new THREE.Mesh(machConeGeo, additive(0xfff0b8, 0.3));
+      machCone.position.y = -0.9;
 
-    this.nukeCapMat = this.createNukeCloudShader(1.85, 0.22);
-    this.nukeCap = new THREE.Mesh(
-      new THREE.TorusGeometry(2.75, 1.42, 22, 36).rotateX(Math.PI / 2),
-      this.nukeCapMat,
-    );
+      const warhead = new THREE.Group();
+      warhead.add(warheadMesh, warheadOutline, plume, plumeCore, machCone);
+      dropGroup.add(fillDisc, reticleOuter, reticleInner, crosshair, lockBeam, helixRingA, helixRingB, warhead);
+      this.scene.add(dropGroup);
 
-    this.nukeCrownMat = this.createNukeCloudShader(1.45, 0.30);
-    this.nukeCrown = new THREE.Mesh(
-      new THREE.SphereGeometry(2.35, 28, 20),
-      this.nukeCrownMat,
-    );
+      this.nukeDropPool.push({
+        group: dropGroup,
+        warhead,
+        plumeMat,
+        plume,
+        reticleOuter,
+        reticleOuterMat,
+        reticleInner,
+        reticleInnerMat,
+        crosshair,
+        crosshairMat,
+        fillMat,
+        lockBeam,
+        lockBeamMat,
+        helixRingA,
+        helixRingAMat,
+        helixRingB,
+        helixRingBMat,
+        sweepPillars,
+      });
 
-    this.nukeVortexLowerMat = additive(0xff8c24, 0.78);
-    this.nukeVortexLower = new THREE.Mesh(
-      new THREE.TorusGeometry(1.65, 0.24, 10, 32).rotateX(Math.PI / 2),
-      this.nukeVortexLowerMat,
-    );
+      const blastGroup = new THREE.Group();
+      blastGroup.visible = false;
 
-    this.nukeVortexUpperMat = additive(0xffe066, 0.82);
-    this.nukeVortexUpper = new THREE.Mesh(
-      new THREE.TorusGeometry(3.55, 0.28, 12, 40).rotateX(Math.PI / 2),
-      this.nukeVortexUpperMat,
-    );
+      const groundScorchMat = additive(0xff7a1a, 0.85, this.glowTex);
+      const groundScorch = new THREE.Mesh(scorchGeo, groundScorchMat);
+      groundScorch.position.y = 0.065;
 
-    this.nukeMachRingMat = additive(0xffffff, 0.82);
-    this.nukeMachRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.86, 1.0, 56).rotateX(-Math.PI / 2),
-      this.nukeMachRingMat,
-    );
+      const craterRingMat = additive(0xffd84a, 0.8);
+      const craterRing = new THREE.Mesh(craterRingGeo, craterRingMat);
+      craterRing.position.y = 0.08;
 
-    this.nukeWilsonDomeMat = additive(0xd8f4ff, 0.36);
-    this.nukeWilsonDome = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.52),
-      this.nukeWilsonDomeMat,
-    );
+      const shockWallMat = additive(0xffcf58, 0.88);
+      const shockWall = new THREE.Mesh(shockWallGeo, shockWallMat);
+      shockWall.position.y = 1.4;
 
-    this.nukeSunPillarMat = additive(0xfff6d2, 0.92);
-    this.nukeSunPillar = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.15, 2.35, 38, 20, 1, true),
-      this.nukeSunPillarMat,
-    );
-    this.nukeSunPillar.position.y = 19;
+      const blastRing2Mat = additive(0xff922b, 0.88);
+      const blastRing2 = new THREE.Mesh(blastRing2Geo, blastRing2Mat);
+      blastRing2.position.y = 1.9;
 
-    this.nukeBlastRing2Mat = additive(0xff922b, 0.88);
-    this.nukeBlastRing2 = new THREE.Mesh(
-      new THREE.CylinderGeometry(1, 1.06, 3.8, 48, 1, true),
-      this.nukeBlastRing2Mat,
-    );
-    this.nukeBlastRing2.position.y = 1.9;
+      const sunPillarMat = additive(0xfff6d2, 0.94);
+      const sunPillar = new THREE.Mesh(sunPillarGeo, sunPillarMat);
+      sunPillar.position.y = 22;
 
-    this.nukeBlastGroup.add(
-      this.nukeGroundScorch,
-      this.nukeCraterRing,
-      this.nukeShockWall,
-      this.nukeBlastRing2,
-      this.nukeSunPillar,
-      this.nukeFireball,
-      this.nukeCoreDome,
-      this.nukeStem,
-      this.nukeCap,
-      this.nukeCrown,
-      this.nukeVortexLower,
-      this.nukeVortexUpper,
-      this.nukeMachRing,
-      this.nukeWilsonDome,
-    );
-    this.scene.add(this.nukeBlastGroup);
+      const equatorHaloMat = additive(0xffe680, 0.9);
+      const equatorHalo = new THREE.Mesh(equatorHaloGeo, equatorHaloMat);
+      equatorHalo.position.y = 4.2;
+
+      const fireballMat = additive(0xffb838, 0.85);
+      const fireball = new THREE.Mesh(fireballGeo, fireballMat);
+
+      const coreDomeMat = additive(0xffffff, 0.95);
+      const coreDome = new THREE.Mesh(coreDomeGeo, coreDomeMat);
+
+      const stemMat = this.createNukeCloudShader(3.2, 0.18);
+      const stem = new THREE.Mesh(stemGeo, stemMat);
+
+      const capMat = this.createNukeCloudShader(1.85, 0.22);
+      const cap = new THREE.Mesh(capGeo, capMat);
+
+      const crownMat = this.createNukeCloudShader(1.45, 0.30);
+      const crown = new THREE.Mesh(crownGeo, crownMat);
+
+      const vortexLowerMat = additive(0xff8c24, 0.8);
+      const vortexLower = new THREE.Mesh(vortexLowerGeo, vortexLowerMat);
+
+      const vortexUpperMat = additive(0xffe066, 0.84);
+      const vortexUpper = new THREE.Mesh(vortexUpperGeo, vortexUpperMat);
+
+      const machRingMat = additive(0xffffff, 0.84);
+      const machRing = new THREE.Mesh(machRingGeo, machRingMat);
+
+      const wilsonDomeMat = additive(0xd8f4ff, 0.38);
+      const wilsonDome = new THREE.Mesh(wilsonDomeGeo, wilsonDomeMat);
+
+      blastGroup.add(
+        groundScorch,
+        craterRing,
+        shockWall,
+        blastRing2,
+        sunPillar,
+        equatorHalo,
+        fireball,
+        coreDome,
+        stem,
+        cap,
+        crown,
+        vortexLower,
+        vortexUpper,
+        machRing,
+        wilsonDome,
+      );
+      this.scene.add(blastGroup);
+
+      this.nukeBlastPool.push({
+        group: blastGroup,
+        groundScorch,
+        groundScorchMat,
+        craterRing,
+        craterRingMat,
+        shockWall,
+        shockWallMat,
+        blastRing2,
+        blastRing2Mat,
+        sunPillar,
+        sunPillarMat,
+        equatorHalo,
+        equatorHaloMat,
+        fireball,
+        fireballMat,
+        coreDome,
+        coreDomeMat,
+        stem,
+        stemMat,
+        cap,
+        capMat,
+        crown,
+        crownMat,
+        vortexLower,
+        vortexLowerMat,
+        vortexUpper,
+        vortexUpperMat,
+        machRing,
+        machRingMat,
+        wilsonDome,
+        wilsonDomeMat,
+      });
+    }
   }
 
-  triggerNukeDetonationVfx(x: number, z: number): void {
+  /** Triggers a cinema horizontal anamorphic lens flare streak around a 3D world event */
+  triggerAnamorphicFlare(worldX: number, worldZ: number, strength = 0.85, salvoIdx = 1): void {
+    const sc = this.shakeScale;
+    this.nukeFlareAmt = Math.max(this.nukeFlareAmt, strength * Math.max(0.35, sc));
+    const pIdx = (Math.max(1, salvoIdx) - 1) % 3;
+    if (pIdx === 1) this.nukeTintVec.set(0.35, 1.08, 1.35);
+    else if (pIdx === 2) this.nukeTintVec.set(1.28, 0.42, 1.32);
+    else this.nukeTintVec.set(1.22, 0.82, 0.36);
+    this.tmpV.set(worldX, 2.2, worldZ).project(this.camera);
+    this.impactCenter.set(
+      THREE.MathUtils.clamp(this.tmpV.x * 0.5 + 0.5, 0.16, 0.84),
+      THREE.MathUtils.clamp(this.tmpV.y * 0.5 + 0.5, 0.20, 0.80),
+    );
+  }
+
+  triggerNukeDetonationVfx(x: number, z: number, salvoIndex = 1): void {
     this.nukeJustDetonated = true;
+    const chainEscalate = Math.min(1.32, 1.0 + (Math.max(1, salvoIndex) - 1) * 0.14);
     this.shake(1.0);
-    this.triggerScreenQuake(2.65, 1.0);
+    this.triggerScreenQuake(2.65, chainEscalate);
     this.nukeWaveDur = 1.15;
     this.nukeWaveTimer = 1.15;
-    this.nukeHeatAmt = 1.0;
-    this.kickCamera(1.15 * this.shakeScale, (Math.random() - 0.5) * 1.4);
-    this.tmpV.set(x, 1.8, z).project(this.camera);
-    this.impactCenter.set(
-      THREE.MathUtils.clamp(this.tmpV.x * 0.5 + 0.5, 0.18, 0.82),
-      THREE.MathUtils.clamp(this.tmpV.y * 0.5 + 0.5, 0.22, 0.78),
-    );
+    this.nukeHeatAmt = Math.min(1.25, 1.0 + (salvoIndex - 1) * 0.12);
+    this.triggerAnamorphicFlare(x, z, Math.min(1.35, 1.0 + (salvoIndex - 1) * 0.16), salvoIndex);
+    this.kickCamera(1.18 * chainEscalate * this.shakeScale, (Math.random() - 0.5) * 1.6);
+
+    const pIdx = (Math.max(1, salvoIndex) - 1) % 3;
+    const colCore = pIdx === 1 ? 0xe0ffff : pIdx === 2 ? 0xffe6ff : 0xfff8d6;
+    const colMid = pIdx === 1 ? 0x3ef3ff : pIdx === 2 ? 0xff42f5 : 0xffd84a;
+    const colDeep = pIdx === 1 ? 0x2b68ff : pIdx === 2 ? 0x9b38ff : 0xff4820;
+
     const fx = this.effects;
-    fx.ring(x, z, 0xffffff, 42, 0.76);
-    fx.ring(x, z, 0xffd84a, 30, 1.08);
-    fx.ring(x, z, 0xff4820, 22, 1.45);
+    fx.ring(x, z, 0xffffff, 45, 0.78);
+    fx.ring(x, z, colMid, 33, 1.12);
+    fx.ring(x, z, colDeep, 24, 1.48);
     // Forward shockwaves sweeping directly past the squad & camera lens + horizon shockwaves!
-    fx.after(0.10, () => fx.ring(x, z + 11, 0xfff0b2, 26, 0.58));
-    fx.after(0.22, () => fx.ring(x, z + 22, 0xffa630, 32, 0.65));
-    fx.after(0.12, () => fx.ring(x, z - 28, 0xffe07d, 30, 0.72));
-    fx.after(0.24, () => fx.ring(x, z - 58, 0xff8c24, 34, 0.78));
-    fx.after(0.36, () => fx.ring(x, z - 88, 0xff4420, 36, 0.82));
-    fx.burst(x, 1.6, z, 0xfff8d6, 150, { speed: 30, size: 1.18, life: 1.35, up: 1.55, gravity: 3.2 });
-    fx.burst(x, 3.2, z, 0xff7a1a, 145, { speed: 23, size: 1.04, life: 1.75, up: 1.9, gravity: 2.0 });
-    fx.burst(x, 4.8, z, 0xff2a55, 95, { speed: 17, size: 0.92, life: 2.05, up: 2.15, gravity: 1.1 });
-    fx.shatter(x, 2.2, z, 0xffae34, 34, true);
+    fx.after(0.09, () => fx.ring(x, z + 12, colCore, 28, 0.60));
+    fx.after(0.20, () => fx.ring(x, z + 23, colMid, 34, 0.68));
+    fx.after(0.11, () => fx.ring(x, z - 28, colMid, 32, 0.74));
+    fx.after(0.22, () => fx.ring(x, z - 58, colDeep, 36, 0.80));
+    fx.after(0.34, () => fx.ring(x, z - 88, colMid, 38, 0.84));
+    fx.burst(x, 1.6, z, colCore, 155, { speed: 32, size: 1.22, life: 1.38, up: 1.65, gravity: 3.1 });
+    fx.burst(x, 3.4, z, colMid, 150, { speed: 25, size: 1.08, life: 1.78, up: 1.98, gravity: 1.9 });
+    fx.burst(x, 5.2, z, colDeep, 105, { speed: 19, size: 0.96, life: 2.1, up: 2.25, gravity: 1.05 });
+    fx.shatter(x, 2.4, z, colMid, 38, true);
     // Secondary shockwave arrival ember cascade synced with Wave 2 camera slam!
     fx.after(0.26, () => {
-      fx.burst(x, 5.2, z, 0xffe066, 75, { speed: 22, size: 0.95, life: 1.35, up: 1.6, gravity: 1.8 });
-      fx.shatter(x, 1.6, z + 10, 0xff6820, 20, true);
+      fx.burst(x, 5.6, z, colCore, 80, { speed: 24, size: 1.0, life: 1.4, up: 1.7, gravity: 1.7 });
+      fx.shatter(x, 1.8, z + 10, colDeep, 24, true);
     });
   }
 
   private updateNukeVisuals(snap: SimSnapshot, dt: number, t: number): void {
-    const dropRem = snap.nukeDropTimer ?? 0;
-    const dropDur = Math.max(0.1, snap.nukeDropDuration ?? 1.80);
-    const tx = snap.nukeTargetX ?? 0;
-    const tz = snap.nukeTargetZ ?? -19.5;
+    // Support full multi-salvo array (`snap.nukeStrikes`) with fallback to scalar fields
+    const strikes =
+      snap.nukeStrikes && snap.nukeStrikes.length > 0
+        ? snap.nukeStrikes
+        : (snap.nukeDropTimer ?? 0) > 0 || (snap.nukeBlastTimer ?? 0) > 0
+          ? [
+              {
+                id: 1,
+                x: snap.nukeTargetX ?? 0,
+                z: snap.nukeTargetZ ?? -19.5,
+                dropTimer: snap.nukeDropTimer ?? 0,
+                dropDuration: Math.max(0.1, snap.nukeDropDuration ?? 1.15),
+                blastTimer: snap.nukeBlastTimer ?? 0,
+                blastDuration: 3.25,
+                salvoIndex: 1,
+              },
+            ]
+          : [];
 
-    if (dropRem > 0) {
-      const p = THREE.MathUtils.clamp(1 - dropRem / dropDur, 0, 1);
-      const eased = 0.52 * p + 0.48 * p * p * p;
-      const warheadY = 15.2 * (1 - eased) + 1.75;
-      this.nukeDescentTremor = p > 0.35 ? Math.pow((p - 0.35) / 0.65, 2) * 0.28 : 0;
+    let dropSlotIdx = 0;
+    let blastSlotIdx = 0;
+    let maxTremor = 0;
+    let peakThermalFlash = 0;
+    let dominantPalette = 0;
 
-      this.nukeDropGroup.visible = true;
-      this.nukeDropGroup.position.set(tx, 0, tz);
-      this.nukeReticleOuter.rotation.z = t * 2.8;
-      const pulse = 1 + Math.sin(t * 24) * 0.07;
-      this.nukeReticleOuter.scale.setScalar(pulse * (1.12 - p * 0.18));
-      this.nukeReticleInner.rotation.z = -t * 4.8;
-      this.nukeReticleInner.scale.setScalar(1.45 - p * 0.55);
-      this.nukeCrosshair.rotation.y = t * 1.6;
-      this.nukeCrosshair.scale.setScalar(1.15 - p * 0.28);
-      (this.nukeLockBeam.material as THREE.MeshBasicMaterial).opacity = 0.25 + p * 0.42 + Math.sin(t * 36) * 0.09;
+    for (let sIdx = 0; sIdx < strikes.length; sIdx++) {
+      const st = strikes[sIdx]!;
+      const pIdx = (Math.max(1, st.salvoIndex) - 1) % 3;
+      const cPrimary = pIdx === 1 ? 0x3ef3ff : pIdx === 2 ? 0xff3bf0 : 0xffd84a;
+      const cSecondary = pIdx === 1 ? 0x2b68ff : pIdx === 2 ? 0x9b38ff : 0xff2a55;
+      const cBeam = pIdx === 1 ? 0x62f4ff : pIdx === 2 ? 0xe05cff : 0xff7828;
 
-      const lockRadius = Math.max(0.35, (1 - p) * 7.6);
-      for (let i = 0; i < this.nukeSweepPillars.length; i++) {
-        const pil = this.nukeSweepPillars[i]!;
-        const ang = t * 3.4 + (i * Math.PI) / 2;
-        pil.position.set(Math.cos(ang) * lockRadius, 14, Math.sin(ang) * lockRadius);
-        (pil.material as THREE.MeshBasicMaterial).opacity = 0.22 + p * 0.52;
+      if (st.dropTimer > 0 && dropSlotIdx < this.nukeDropPool.length) {
+        const slot = this.nukeDropPool[dropSlotIdx++]!;
+        const dropDur = Math.max(0.1, st.dropDuration || 1.15);
+        const p = THREE.MathUtils.clamp(1 - st.dropTimer / dropDur, 0, 1);
+        const eased = 0.46 * p + 0.54 * p * p * p;
+        const warheadY = 17.5 * (1 - eased) + 1.75;
+        const tremor = p > 0.25 ? Math.pow((p - 0.25) / 0.75, 2) * 0.34 : 0;
+        if (tremor > maxTremor) maxTremor = tremor;
+
+        slot.group.visible = true;
+        slot.group.position.set(st.x, 0, st.z);
+
+        slot.reticleOuterMat.color.setHex(cSecondary);
+        slot.reticleInnerMat.color.setHex(cPrimary);
+        slot.crosshairMat.color.setHex(cPrimary);
+        slot.fillMat.color.setHex(cSecondary);
+        slot.lockBeamMat.color.setHex(cBeam);
+        slot.plumeMat.color.setHex(cPrimary);
+
+        slot.reticleOuter.rotation.z = t * 3.4 + sIdx;
+        const pulse = 1 + Math.sin(t * 28 + sIdx * 1.7) * 0.08;
+        slot.reticleOuter.scale.setScalar(pulse * (1.14 - p * 0.22));
+        slot.reticleInner.rotation.z = -t * 5.6 - sIdx;
+        slot.reticleInner.scale.setScalar(1.5 - p * 0.58);
+        slot.crosshair.rotation.y = t * 2.2 + sIdx;
+        slot.crosshair.scale.setScalar(1.18 - p * 0.3);
+        slot.lockBeamMat.opacity = 0.30 + p * 0.48 + Math.sin(t * 42) * 0.1;
+
+        // Twin helical plasma spirals corkscrewing down the orbital lock-on laser!
+        const hProgA = (t * 2.6 + sIdx * 0.33) % 1.0;
+        const hProgB = (t * 2.6 + 0.5 + sIdx * 0.33) % 1.0;
+        slot.helixRingAMat.color.setHex(cPrimary);
+        slot.helixRingAMat.opacity = Math.sin(hProgA * Math.PI) * (0.55 + p * 0.35);
+        slot.helixRingA.position.y = 24 * (1 - hProgA) + 0.6;
+        slot.helixRingA.rotation.set(Math.PI * 0.36, t * 7.5, 0.35);
+        slot.helixRingA.scale.setScalar(0.55 + (1 - p) * 0.85);
+
+        slot.helixRingBMat.color.setHex(cSecondary);
+        slot.helixRingBMat.opacity = Math.sin(hProgB * Math.PI) * (0.55 + p * 0.35);
+        slot.helixRingB.position.y = 24 * (1 - hProgB) + 0.6;
+        slot.helixRingB.rotation.set(-Math.PI * 0.36, -t * 7.5, -0.35);
+        slot.helixRingB.scale.setScalar(0.55 + (1 - p) * 0.85);
+
+        const lockRadius = Math.max(0.32, (1 - p) * 8.2);
+        for (let i = 0; i < slot.sweepPillars.length; i++) {
+          const pil = slot.sweepPillars[i]!;
+          const ang = t * 4.2 + (i * Math.PI) / 2 + sIdx * 0.8;
+          pil.position.set(Math.cos(ang) * lockRadius, 15, Math.sin(ang) * lockRadius);
+          const pilMat = pil.material as THREE.MeshBasicMaterial;
+          pilMat.color.setHex(i % 2 === 0 ? cSecondary : cPrimary);
+          pilMat.opacity = 0.28 + p * 0.56;
+        }
+
+        slot.warhead.position.set(0, warheadY, 0);
+        slot.warhead.rotation.set(0.05 * Math.sin(t * 12), t * 5.2 + sIdx, 0.05 * Math.cos(t * 12));
+        slot.warhead.scale.setScalar(1.82);
+        slot.plume.scale.set(1 + Math.sin(t * 52) * 0.22, 1.05 + Math.sin(t * 62) * 0.32, 1 + Math.cos(t * 52) * 0.22);
+
+        if (Math.random() < dt * 48) {
+          this.effects.burst(st.x + (Math.random() - 0.5) * 0.5, warheadY + 4.0, st.z + (Math.random() - 0.5) * 0.5, cPrimary, 2, {
+            speed: 4.5,
+            size: 0.6,
+            life: 0.44,
+            up: 1.6,
+            gravity: -2.4,
+          });
+        }
       }
 
-      this.nukeWarhead.position.set(0, warheadY, 0);
-      this.nukeWarhead.rotation.set(0.05 * Math.sin(t * 10), t * 4.4, 0.05 * Math.cos(t * 10));
-      this.nukeWarhead.scale.setScalar(1.76);
-      this.nukePlume.scale.set(1 + Math.sin(t * 48) * 0.18, 0.95 + Math.sin(t * 58) * 0.28, 1 + Math.cos(t * 48) * 0.18);
+      if (st.dropTimer <= 0 && st.blastTimer > 0 && blastSlotIdx < this.nukeBlastPool.length) {
+        const bSlot = this.nukeBlastPool[blastSlotIdx++]!;
+        const blastDur = Math.max(0.5, st.blastDuration || 3.25);
+        const p = THREE.MathUtils.clamp(1 - st.blastTimer / blastDur, 0, 1);
+        const fade = p < 0.62 ? 1 : Math.max(0, 1 - (p - 0.62) / 0.38);
 
-      if (Math.random() < dt * 42) {
-        this.effects.burst(tx + (Math.random() - 0.5) * 0.45, warheadY + 4.0, tz + (Math.random() - 0.5) * 0.45, 0xffb833, 2, {
-          speed: 3.8,
-          size: 0.55,
-          life: 0.42,
-          up: 1.5,
-          gravity: -2.2,
-        });
+        bSlot.group.visible = true;
+        bSlot.group.position.set(st.x, 0, st.z);
+
+        const thermalFlash = Math.max(0, 1 - p * 2.1);
+        if (thermalFlash >= peakThermalFlash) {
+          peakThermalFlash = thermalFlash;
+          dominantPalette = pIdx;
+        }
+
+        const scorchScale = 15 + p * 25;
+        bSlot.groundScorch.scale.set(scorchScale, scorchScale, 1);
+        bSlot.groundScorchMat.color.setHex(cSecondary);
+        bSlot.groundScorchMat.opacity = 0.88 * fade;
+
+        const craterR = 5.2 + Math.pow(p, 0.4) * 13.5;
+        bSlot.craterRing.scale.set(craterR, craterR, 1);
+        bSlot.craterRingMat.color.setHex(cPrimary);
+        bSlot.craterRingMat.opacity = Math.max(0, (1 - p * 1.15) * 0.86);
+
+        const shockP = Math.min(1, p / 0.42);
+        const shockR = 1.6 + Math.pow(shockP, 0.66) * 132.0;
+        bSlot.shockWall.scale.set(shockR, Math.max(0.35, 2.1 - shockP * 1.45), shockR);
+        bSlot.shockWallMat.opacity = p < 0.42 ? (1 - shockP) * 0.94 : 0;
+        bSlot.shockWallMat.color.setHex(p < 0.11 ? 0xffffff : cPrimary);
+
+        const shock2P = THREE.MathUtils.clamp((p - 0.06) / 0.42, 0, 1);
+        const shock2R = 1.8 + Math.pow(shock2P, 0.68) * 102.0;
+        bSlot.blastRing2.visible = p >= 0.06 && p < 0.48;
+        bSlot.blastRing2.scale.set(shock2R, Math.max(0.28, 1.55 - shock2P * 1.05), shock2R);
+        bSlot.blastRing2Mat.color.setHex(cSecondary);
+        bSlot.blastRing2Mat.opacity = p >= 0.06 && p < 0.48 ? (1 - shock2P) * 0.88 : 0;
+
+        // Heaven-Piercing Orbital Judgment Beam
+        const pillarP = Math.min(1, p / 0.40);
+        bSlot.sunPillar.visible = p < 0.40;
+        const pillarRad = 0.85 + Math.sin(pillarP * Math.PI) * 2.75;
+        bSlot.sunPillar.scale.set(pillarRad, 1.0 + pillarP * 0.35, pillarRad);
+        bSlot.sunPillarMat.opacity = p < 0.40 ? Math.pow(1 - pillarP, 1.35) * 0.94 : 0;
+        bSlot.sunPillarMat.color.setHex(p < 0.12 ? 0xffffff : cPrimary);
+
+        // Tilted Planetary Equatorial Plasma Halo (anime planet-buster ring!)
+        const eqP = Math.min(1, p / 0.55);
+        const eqR = 3.2 + Math.pow(eqP, 0.52) * 32.0;
+        bSlot.equatorHalo.visible = p < 0.55;
+        const tiltDir = st.salvoIndex % 2 === 0 ? -1 : 1;
+        bSlot.equatorHalo.position.y = 3.6 + p * 3.8;
+        bSlot.equatorHalo.rotation.set(0.38 * tiltDir, t * 2.4 * tiltDir, -0.26 * tiltDir);
+        bSlot.equatorHalo.scale.set(eqR, eqR, 1);
+        bSlot.equatorHaloMat.color.setHex(p < 0.14 ? 0xffffff : cPrimary);
+        bSlot.equatorHaloMat.opacity = p < 0.55 ? Math.pow(1 - eqP, 1.15) * 0.9 : 0;
+
+        const fbRadius = p < 0.16 ? 2.6 + (p / 0.16) * 11.2 : 13.8 + (p - 0.16) * 4.8;
+        const fbFade = Math.max(0, 1 - p * 1.82);
+        bSlot.fireball.scale.set(fbRadius, fbRadius * 0.78, fbRadius);
+        bSlot.fireballMat.opacity = 0.86 * fbFade;
+        bSlot.fireballMat.color.setHex(p < 0.10 ? 0xffffff : cBeam);
+
+        const capY = 3.4 + Math.pow(p, 0.48) * 10.8;
+        const stemH = Math.max(1.4, capY - 0.35);
+        bSlot.stem.scale.set(1.18 + p * 0.62, stemH, 1.18 + p * 0.62);
+        bSlot.stem.position.y = stemH * 0.48;
+        bSlot.stem.rotation.set(0, t * 2.1 + sIdx, 0);
+        bSlot.stemMat.uniforms.uTime!.value = t + sIdx * 1.7;
+        bSlot.stemMat.uniforms.uProgress!.value = p;
+        bSlot.stemMat.uniforms.uOpacity!.value = 0.98 * fade;
+        bSlot.stemMat.uniforms.uPalette!.value = pIdx;
+
+        const capScale = 1.0 + Math.pow(p, 0.42) * 2.48;
+        bSlot.cap.position.y = capY;
+        bSlot.cap.scale.set(capScale * 1.30, capScale * 0.94, capScale * 1.30);
+        bSlot.cap.rotation.set(0, -t * 1.3 - sIdx, 0);
+        bSlot.capMat.uniforms.uTime!.value = t + sIdx * 1.7;
+        bSlot.capMat.uniforms.uProgress!.value = p;
+        bSlot.capMat.uniforms.uOpacity!.value = 0.99 * fade;
+        bSlot.capMat.uniforms.uPalette!.value = pIdx;
+
+        bSlot.crown.position.y = capY + 0.58 * capScale;
+        bSlot.crown.scale.set(capScale * 1.44, capScale * 0.80, capScale * 1.44);
+        bSlot.crown.rotation.set(0, t * 1.0 + sIdx, 0);
+        bSlot.crownMat.uniforms.uTime!.value = t + sIdx * 1.7;
+        bSlot.crownMat.uniforms.uProgress!.value = p * 0.82;
+        bSlot.crownMat.uniforms.uOpacity!.value = 0.98 * fade;
+        bSlot.crownMat.uniforms.uPalette!.value = pIdx;
+
+        bSlot.coreDome.position.y = capY * 0.92;
+        bSlot.coreDome.scale.setScalar(capScale * 2.12);
+        bSlot.coreDomeMat.opacity = Math.max(0, (1 - p * 1.32) * 0.82) * fade;
+        bSlot.coreDomeMat.color.setHex(p < 0.22 ? 0xffffff : cPrimary);
+
+        const lowCycle = (p * 2.4 + sIdx * 0.25) % 1.0;
+        bSlot.vortexLower.position.y = stemH * (0.20 + lowCycle * 0.65);
+        bSlot.vortexLower.scale.setScalar(1.15 + lowCycle * 1.12 + p * 0.4);
+        bSlot.vortexLower.rotation.set(0, t * 4.0, 0);
+        bSlot.vortexLowerMat.color.setHex(cSecondary);
+        bSlot.vortexLowerMat.opacity = Math.sin(lowCycle * Math.PI) * 0.86 * fade;
+
+        bSlot.vortexUpper.position.y = capY - 0.36 * capScale;
+        bSlot.vortexUpper.scale.setScalar(capScale * 1.28);
+        bSlot.vortexUpper.rotation.set(0, -t * 3.0, 0);
+        bSlot.vortexUpperMat.color.setHex(cPrimary);
+        bSlot.vortexUpperMat.opacity = 0.84 * fade;
+
+        const wilsonP = Math.min(1, p / 0.38);
+        const wilsonR = 4.4 + wilsonP * 25.5;
+        bSlot.wilsonDome.position.y = 0.2;
+        bSlot.wilsonDome.scale.set(wilsonR, wilsonR * 0.76, wilsonR);
+        bSlot.wilsonDomeMat.opacity = p < 0.38 ? Math.sin(wilsonP * Math.PI) * 0.56 : 0;
+
+        const machR = 3.8 + p * 38.0;
+        bSlot.machRing.position.y = capY * 0.82;
+        bSlot.machRing.scale.set(machR, machR, 1);
+        bSlot.machRingMat.color.setHex(cPrimary);
+        bSlot.machRingMat.opacity = Math.max(0, (1 - p * 1.15) * 0.88);
+
+        if (p < 0.82 && Math.random() < dt * 42) {
+          const ang = Math.random() * Math.PI * 2;
+          const rad = capScale * 3.0;
+          this.effects.burst(st.x + Math.cos(ang) * rad, capY, st.z + Math.sin(ang) * rad, p < 0.35 ? cPrimary : cSecondary, 3, {
+            speed: 6.8,
+            size: 0.86,
+            life: 0.74,
+            up: 1.55,
+            gravity: -1.6,
+          });
+        }
       }
-    } else {
-      this.nukeDescentTremor = 0;
-      this.nukeDropGroup.visible = false;
     }
 
-    const blastRem = snap.nukeBlastTimer ?? 0;
-    const blastDur = 3.25;
-    if (blastRem > 0) {
-      const p = THREE.MathUtils.clamp(1 - blastRem / blastDur, 0, 1);
-      const fade = p < 0.62 ? 1 : Math.max(0, 1 - (p - 0.62) / 0.38);
-      this.nukeBlastGroup.visible = true;
-      this.nukeBlastGroup.position.set(tx, 0, tz);
+    // Hide unused pool slots
+    for (let i = dropSlotIdx; i < this.nukeDropPool.length; i++) {
+      this.nukeDropPool[i]!.group.visible = false;
+    }
+    for (let i = blastSlotIdx; i < this.nukeBlastPool.length; i++) {
+      this.nukeBlastPool[i]!.group.visible = false;
+    }
 
-      const thermalFlash = Math.max(0, 1 - p * 2.2);
-      this.hemi.intensity = 1.02 + thermalFlash * 1.95;
+    this.nukeDescentTremor = maxTremor;
+    if (blastSlotIdx > 0) {
+      this.nukeBlastWasActive = true;
+      this.hemi.intensity = 1.02 + peakThermalFlash * 2.05;
       if (this.dirLight) {
-        this.dirLight.intensity = 1.45 + thermalFlash * 2.2;
+        this.dirLight.intensity = 1.45 + peakThermalFlash * 2.35;
       }
       if (this.scene.fog instanceof THREE.Fog) {
-        this.scene.fog.color.copy(this.baseFogColor).lerp(this.nukeFogColor, thermalFlash * 0.62);
+        this.nukeFogColor.setHex(dominantPalette === 1 ? 0x2ec8ff : dominantPalette === 2 ? 0xd946ff : 0xff9c42);
+        this.scene.fog.color.copy(this.baseFogColor).lerp(this.nukeFogColor, peakThermalFlash * 0.65);
       }
-
-      const scorchScale = 14 + p * 24;
-      this.nukeGroundScorch.scale.set(scorchScale, scorchScale, 1);
-      this.nukeGroundScorchMat.opacity = 0.86 * fade;
-
-      const craterR = 5.0 + Math.pow(p, 0.4) * 12.5;
-      this.nukeCraterRing.scale.set(craterR, craterR, 1);
-      this.nukeCraterRingMat.opacity = Math.max(0, (1 - p * 1.18) * 0.82);
-
-      const shockP = Math.min(1, p / 0.42);
-      const shockR = 1.5 + Math.pow(shockP, 0.66) * 128.0;
-      this.nukeShockWall.scale.set(shockR, Math.max(0.32, 1.95 - shockP * 1.35), shockR);
-      this.nukeShockWallMat.opacity = p < 0.42 ? (1 - shockP) * 0.92 : 0;
-      this.nukeShockWallMat.color.setHex(p < 0.11 ? 0xffffff : 0xffbe42);
-
-      const shock2P = THREE.MathUtils.clamp((p - 0.065) / 0.40, 0, 1);
-      const shock2R = 1.8 + Math.pow(shock2P, 0.68) * 96.0;
-      this.nukeBlastRing2.visible = p >= 0.065 && p < 0.47;
-      this.nukeBlastRing2.scale.set(shock2R, Math.max(0.25, 1.45 - shock2P * 1.0), shock2R);
-      this.nukeBlastRing2Mat.opacity = p >= 0.065 && p < 0.47 ? (1 - shock2P) * 0.86 : 0;
-
-      const pillarP = Math.min(1, p / 0.34);
-      this.nukeSunPillar.visible = p < 0.34;
-      const pillarRad = 0.75 + Math.sin(pillarP * Math.PI) * 2.4;
-      this.nukeSunPillar.scale.set(pillarRad, 1.0 + pillarP * 0.35, pillarRad);
-      this.nukeSunPillarMat.opacity = p < 0.34 ? Math.pow(1 - pillarP, 1.45) * 0.9 : 0;
-      this.nukeSunPillarMat.color.setHex(p < 0.1 ? 0xffffff : 0xffcf54);
-
-      const fbRadius = p < 0.16 ? 2.4 + (p / 0.16) * 10.6 : 13.0 + (p - 0.16) * 4.6;
-      const fbFade = Math.max(0, 1 - p * 1.88);
-      this.nukeFireball.scale.set(fbRadius, fbRadius * 0.76, fbRadius);
-      this.nukeFireballMat.opacity = 0.84 * fbFade;
-      this.nukeFireballMat.color.setHex(p < 0.10 ? 0xfff8d8 : 0xff6820);
-
-      const capY = 3.2 + Math.pow(p, 0.48) * 10.2;
-      const stemH = Math.max(1.4, capY - 0.35);
-      this.nukeStem.scale.set(1.15 + p * 0.58, stemH, 1.15 + p * 0.58);
-      this.nukeStem.position.y = stemH * 0.48;
-      this.nukeStem.rotation.set(0, t * 2.0, 0);
-      this.nukeStemMat.uniforms.uTime!.value = t;
-      this.nukeStemMat.uniforms.uProgress!.value = p;
-      this.nukeStemMat.uniforms.uOpacity!.value = 0.98 * fade;
-
-      const capScale = 0.96 + Math.pow(p, 0.42) * 2.38;
-      this.nukeCap.position.y = capY;
-      this.nukeCap.scale.set(capScale * 1.28, capScale * 0.92, capScale * 1.28);
-      this.nukeCap.rotation.set(0, -t * 1.25, 0);
-      this.nukeCapMat.uniforms.uTime!.value = t;
-      this.nukeCapMat.uniforms.uProgress!.value = p;
-      this.nukeCapMat.uniforms.uOpacity!.value = 0.99 * fade;
-
-      this.nukeCrown.position.y = capY + 0.58 * capScale;
-      this.nukeCrown.scale.set(capScale * 1.42, capScale * 0.78, capScale * 1.42);
-      this.nukeCrown.rotation.set(0, t * 0.95, 0);
-      this.nukeCrownMat.uniforms.uTime!.value = t;
-      this.nukeCrownMat.uniforms.uProgress!.value = p * 0.82;
-      this.nukeCrownMat.uniforms.uOpacity!.value = 0.98 * fade;
-
-      this.nukeCoreDome.position.y = capY * 0.92;
-      this.nukeCoreDome.scale.setScalar(capScale * 2.05);
-      this.nukeCoreDomeMat.opacity = Math.max(0, (1 - p * 1.35) * 0.78) * fade;
-      this.nukeCoreDomeMat.color.setHex(p < 0.22 ? 0xffffff : 0xffaa28);
-
-      // Horizontal spin around Y axis so plasma vortex rings hug the vertical stem & mushroom skirt cleanly!
-      const lowCycle = (p * 2.2) % 1.0;
-      this.nukeVortexLower.position.y = stemH * (0.20 + lowCycle * 0.65);
-      this.nukeVortexLower.scale.setScalar(1.12 + lowCycle * 1.08 + p * 0.38);
-      this.nukeVortexLower.rotation.set(0, t * 3.8, 0);
-      this.nukeVortexLowerMat.opacity = Math.sin(lowCycle * Math.PI) * 0.84 * fade;
-
-      this.nukeVortexUpper.position.y = capY - 0.36 * capScale;
-      this.nukeVortexUpper.scale.setScalar(capScale * 1.24);
-      this.nukeVortexUpper.rotation.set(0, -t * 2.8, 0);
-      this.nukeVortexUpperMat.opacity = 0.82 * fade;
-
-      const wilsonP = Math.min(1, p / 0.38);
-      const wilsonR = 4.2 + wilsonP * 24.0;
-      this.nukeWilsonDome.position.y = 0.2;
-      this.nukeWilsonDome.scale.set(wilsonR, wilsonR * 0.75, wilsonR);
-      this.nukeWilsonDomeMat.opacity = p < 0.38 ? Math.sin(wilsonP * Math.PI) * 0.54 : 0;
-
-      const machR = 3.5 + p * 36.0;
-      this.nukeMachRing.position.y = capY * 0.82;
-      this.nukeMachRing.scale.set(machR, machR, 1);
-      this.nukeMachRingMat.opacity = Math.max(0, (1 - p * 1.18) * 0.86);
-
-      if (p < 0.82 && Math.random() < dt * 40) {
-        const ang = Math.random() * Math.PI * 2;
-        const rad = capScale * 2.9;
-        this.effects.burst(tx + Math.cos(ang) * rad, capY, tz + Math.sin(ang) * rad, p < 0.35 ? 0xffe478 : 0xff7824, 3, {
-          speed: 6.2,
-          size: 0.82,
-          life: 0.72,
-          up: 1.5,
-          gravity: -1.6,
-        });
-      }
-    } else {
-      if (this.nukeBlastGroup.visible) {
-        this.hemi.intensity = 1.02;
-        if (this.dirLight) this.dirLight.intensity = 1.45;
-        if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.copy(this.baseFogColor);
-      }
-      this.nukeBlastGroup.visible = false;
+    } else if (this.nukeBlastWasActive) {
+      this.nukeBlastWasActive = false;
+      this.hemi.intensity = 1.02;
+      if (this.dirLight) this.dirLight.intensity = 1.45;
+      if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.copy(this.baseFogColor);
     }
   }
 
@@ -6127,6 +6528,10 @@ export class Renderer {
     if (this.nukeHeatAmt > 0) {
       this.nukeHeatAmt *= Math.exp(-safeDt * 1.45);
       if (this.nukeHeatAmt < 0.003) this.nukeHeatAmt = 0;
+    }
+    if (this.nukeFlareAmt > 0) {
+      this.nukeFlareAmt *= Math.exp(-safeDt * 3.8);
+      if (this.nukeFlareAmt < 0.003) this.nukeFlareAmt = 0;
     }
 
     let nukeQuakeAmp = 0;

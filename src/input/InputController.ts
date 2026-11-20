@@ -32,7 +32,8 @@ export class InputController {
   private keys = new Set<string>();
   private overdriveRequested = false;
   private aegisRequested = false;
-  private nukeRequested = false;
+  private nukeQueueCount = 0;
+  private lastNukeRepeatMs = 0;
   private swapWeaponRequested = false;
   private wingmanCycleRequested = false;
   private nirvanaRequested = false;
@@ -169,9 +170,13 @@ export class InputController {
           this.fireFirst();
         }
       } else if (matchesBind(e, this.keybinds.nuke) || matchesChar(e, 'r')) {
-        if (this.enabled && !e.repeat) {
-          this.nukeRequested = true;
-          this.fireFirst();
+        if (this.enabled) {
+          const now = performance.now();
+          if (!e.repeat || now - this.lastNukeRepeatMs >= 145) {
+            this.lastNukeRepeatMs = now;
+            this.nukeQueueCount = Math.min(6, this.nukeQueueCount + 1);
+            this.fireFirst();
+          }
         }
       } else if ((matchesBind(e, this.keybinds.swapWeapon) || matchesChar(e, 'c')) && !e.repeat) {
         if (this.enabled) {
@@ -345,7 +350,7 @@ export class InputController {
       }
       // Y (3) or LT (6) -> Tactical Nuke
       if (justPressed(3) || justPressed(6)) {
-        this.nukeRequested = true;
+        this.nukeQueueCount = Math.min(6, this.nukeQueueCount + 1);
         this.fireFirst();
       }
       // X (2) or RB (5) -> Swap Lead Dual-Weapon
@@ -438,15 +443,17 @@ export class InputController {
 
   requestNuke(): void {
     if (this.enabled) {
-      this.nukeRequested = true;
+      this.nukeQueueCount = Math.min(6, this.nukeQueueCount + 1);
       this.fireFirst();
     }
   }
 
   consumeNuke(): boolean {
-    const requested = this.nukeRequested;
-    this.nukeRequested = false;
-    return requested;
+    if (this.nukeQueueCount > 0) {
+      this.nukeQueueCount -= 1;
+      return true;
+    }
+    return false;
   }
 
   requestWeaponSwap(): void {
@@ -499,7 +506,8 @@ export class InputController {
     this.keys.clear();
     this.overdriveRequested = false;
     this.aegisRequested = false;
-    this.nukeRequested = false;
+    this.nukeQueueCount = 0;
+    this.lastNukeRepeatMs = 0;
     this.swapWeaponRequested = false;
     this.wingmanCycleRequested = false;
     this.nirvanaRequested = false;

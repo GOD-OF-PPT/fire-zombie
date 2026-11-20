@@ -14,6 +14,7 @@ import { applyBarrelBlastToBoss, checkBossPhaseTransitions } from './bosses';
 import { damageBarrel } from './barrels';
 import { mitigateLossWithAegis } from './aegis';
 import { damageEnemy, spawnEnemy } from './enemies';
+import { grantNukeCharge } from './nuke';
 import {
   allocEntityId,
   type SimBossPart,
@@ -35,7 +36,7 @@ import { addResonance } from './resonance';
 import { chargeCapacitorTower, hasChip, spawnCoreShard } from './v20Mechanics';
 import { damageVault, spawnPrismLens } from './weapons';
 
-const JUMP_PEAK_Y = 2.85;
+const JUMP_PEAK_Y = 3.25;
 const SINGULARITY_RADIUS = 4.1;
 const SINGULARITY_DURATION = 2.2;
 
@@ -793,21 +794,41 @@ export function stepJumpArc(world: SimWorld, events: SimEvent[]): void {
   if (nextT <= 1e-9) {
     world.jumpTimer = 0;
     world.squadAirY = 0;
-    // Touchdown Sky-Slam Shockwave!
-    const slamRadius = 7.2;
-    const slamDmg = 95 * world.mods.damageMult * (hasMutator(world, 'glass_cannon') ? 2.0 : 1.0);
+    // Touchdown Meteor Sky-Slam Shockwave!
+    world.aegisTimer = Math.max(world.aegisTimer, 0.45);
+    const slamRadius = 8.4;
+    const slamDmg = 130 * world.mods.damageMult * (hasMutator(world, 'glass_cannon') ? 2.0 : 1.0);
     let slammed = 0;
     const snapLen = world.enemies.length;
     for (let i = 0; i < snapLen; i++) {
       const e = world.enemies[i];
       if (!e || !e.active || e.consumed || e.bypassed || e.hp <= 0) continue;
       if (Math.hypot(e.x - world.squadX, e.z - PLAYER_Z) <= slamRadius + e.radius) {
-        e.z = normalizeZero(Math.min(e.z - 2.6, PLAYER_Z - 2.8));
+        e.z = normalizeZero(Math.min(e.z - 3.0, PLAYER_Z - 3.0));
         e.prevZ = e.z;
+        e.hitPulse = 1.0;
         slammed += 1;
         recordDamage(world, 'explosives', Math.min(e.hp, slamDmg));
-        damageEnemy(world, e, slamDmg, 1.4, events);
+        damageEnemy(world, e, slamDmg, 1.65, events);
       }
+    }
+    // Kinetic touchdown shockwave ignites nearby Surge Barrels & shatters close hostile projectiles!
+    for (let bIdx = 0; bIdx < world.barrels.length; bIdx++) {
+      const b = world.barrels[bIdx];
+      if (b && b.active && !b.detonated && Math.hypot(b.x - world.squadX, b.z - PLAYER_Z) <= 6.2) {
+        damageBarrel(world, b, 999, events, applyBarrelBlastToBoss, true);
+      }
+    }
+    for (let pIdx = world.projectiles.length - 1; pIdx >= 0; pIdx--) {
+      const p = world.projectiles[pIdx];
+      if (p && p.active && p.hostile && Math.hypot(p.x - world.squadX, p.z - PLAYER_Z) <= 5.6) {
+        world.projectilePool.release(p);
+        world.projectiles.splice(pIdx, 1);
+      }
+    }
+    if (world.mods.manualOverdrive && !world.mods.fairTrial) {
+      addResonance(world, 0.08 + Math.min(0.14, slammed * 0.02), events);
+      world.nirvanaCharge = Math.min(1, (world.nirvanaCharge ?? 0) + 0.045);
     }
     if ((world.endless?.upgrades.blades ?? 0) >= 1) {
       spawnOrRefreshSingularity(world, world.squadX, PLAYER_Z - 4.0, events, 4.2, 2.6);
@@ -1001,7 +1022,7 @@ export function damageBossPart(
     }
     addResonance(world, RESONANCE_GAIN_VAULT_BREAK + (hasChip(world, 'chip_exec_protocol') ? 0.25 : 0), events);
     if (hasChip(world, 'chip_exec_protocol')) {
-      world.nukeCharge = Math.min(1, world.nukeCharge + 0.25);
+      grantNukeCharge(world, 0.45);
     }
     spawnCoreShard(world, part.x, part.z + 1.5, 2);
     const effectDesc =

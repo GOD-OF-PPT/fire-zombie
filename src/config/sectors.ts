@@ -406,8 +406,33 @@ const SECTOR_1_ENCOUNTERS: readonly RunwayEncounter[] = [
   },
   {
     type: 'jump_pad',
+    crossDist: 171,
+    x: -2.6,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 298,
+    x: 2.35,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 496,
+    x: -2.35,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 666,
+    x: 2.6,
+  },
+  {
+    type: 'jump_pad',
     crossDist: 668,
     x: -3.2,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 758,
+    x: -2.2,
   },
   {
     type: 'enemies',
@@ -797,8 +822,33 @@ const SECTOR_2_ENCOUNTERS: readonly RunwayEncounter[] = [
   },
   {
     type: 'jump_pad',
+    crossDist: 201,
+    x: -2.6,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 342,
+    x: -2.3,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 522,
+    x: 2.3,
+  },
+  {
+    type: 'jump_pad',
     crossDist: 816,
     x: -3.2,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 838,
+    x: 2.4,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 978,
+    x: 2.2,
   },
   {
     type: 'enemies',
@@ -1211,8 +1261,38 @@ const SECTOR_3_ENCOUNTERS: readonly RunwayEncounter[] = [
   },
   {
     type: 'jump_pad',
+    crossDist: 228,
+    x: -2.6,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 306,
+    x: -2.3,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 486,
+    x: -2.3,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 706,
+    x: 2.6,
+  },
+  {
+    type: 'jump_pad',
     crossDist: 966,
     x: 3.2,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 968,
+    x: -2.6,
+  },
+  {
+    type: 'jump_pad',
+    crossDist: 1098,
+    x: 2.2,
   },
   {
     type: 'lens',

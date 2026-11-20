@@ -21,7 +21,7 @@ export function tryTriggerAegisPulse(
   autoTriggered = false,
 ): boolean {
   if (world.squadCount <= 0) return false;
-  if (!autoTriggered && (world.aegisCooldown > 1e-9 || world.aegisTimer > 1e-9)) {
+  if (!autoTriggered && world.aegisCooldown > 1e-9) {
     return false;
   }
 
@@ -128,8 +128,8 @@ export function tryTriggerAegisPulse(
   );
   if (!autoTriggered && (omegaBeamParried || orbsCleared >= 2 || hazardImminent || rushInterrupted)) {
     const chipNova = hasChip(world, 'chip_aegis_nova');
-    const shatterRefund = 3.2 + Math.max(0, world.mods.specShatter ?? 0) * 0.6 + (chipNova ? 2.0 : 0);
-    world.aegisCooldown = Math.max(2.0, world.aegisCooldown - shatterRefund);
+    const shatterRefund = 2.6 + Math.max(0, world.mods.specShatter ?? 0) * 0.6 + (chipNova ? 1.8 : 0);
+    world.aegisCooldown = Math.max(0.8, world.aegisCooldown - shatterRefund);
     addResonance(world, 0.32, events);
     if (chipNova) {
       const novaDmg = 145 * world.mods.damageMult;

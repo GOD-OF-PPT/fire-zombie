@@ -441,8 +441,9 @@ export const NIRVANA_META: Record<NirvanaArchetype, { name: string; short: strin
 
 export function addNirvanaCharge(world: SimWorld, amount: number): void {
   if (world.mods.fairTrial || amount <= 0) return;
-  if (world.nirvanaActiveTimer > 0) return;
-  const relicMult = world.mods.expeditionRelics?.includes('relic_prism_capacitor') ? 1.25 : 1.0;
+  // Lock self-refund only on the initial 0.75s detonation window (`nirvanaActiveTimer > 1.85`)
+  if (world.nirvanaActiveTimer > 1.85) return;
+  const relicMult = world.mods.expeditionRelics?.includes('relic_prism_capacitor') ? 1.35 : 1.0;
   world.nirvanaCharge = clamp(world.nirvanaCharge + amount * relicMult, 0, 1);
 }
 
@@ -459,10 +460,10 @@ export function registerTriPrismRefraction(world: SimWorld, hitWingmanMirror: bo
     world.lastWingmanMirrorTick > 0 &&
     world.lastFixedMirrorTick > 0;
 
-  // Charge Nirvana gauge on every refracted hit, and 3.5x faster when chaining Wingman + Fixed 45° Mirror!
+  // Charge Nirvana gauge rapidly on every refracted hit, and 3.5x faster when chaining Wingman + Fixed 45° Mirror!
   const hasCapRelic = world.mods.expeditionRelics?.includes('relic_prism_capacitor') ?? false;
-  const gain = (chainedBoth ? 0.095 : 0.022) * (hasCapRelic ? 1.35 : 1.0);
-  if (world.nirvanaActiveTimer <= 0) {
+  const gain = (chainedBoth ? 0.14 : 0.042) * (hasCapRelic ? 1.35 : 1.0);
+  if (world.nirvanaActiveTimer <= 1.85) {
     world.nirvanaCharge = clamp(world.nirvanaCharge + gain, 0, 1);
   }
   world.v23RefractedDmg = (world.v23RefractedDmg ?? 0) + Math.max(12, world.trueSquadDps * (chainedBoth ? 0.16 : 0.06));
@@ -484,7 +485,6 @@ export function registerTriPrismRefraction(world: SimWorld, hitWingmanMirror: bo
 export function tryTriggerNirvanaBurst(world: SimWorld, events: SimEvent[]): boolean {
   if (world.mods.fairTrial) return false;
   if (world.squadCount <= 0) return false;
-  if (world.nirvanaActiveTimer > 0.15 && !world.isFiringRange) return false;
   if (world.nirvanaCharge < 0.999 && !world.isFiringRange) return false;
 
   const arch = resolveNirvanaArchetype(world);
@@ -573,7 +573,7 @@ export function tryTriggerNirvanaBurst(world: SimWorld, events: SimEvent[]): boo
   if (world.mods.expeditionRelics?.includes('relic_nirvana_core')) {
     world.squadCount = Math.min(999, world.squadCount + 12);
   }
-  addResonance(world, 0.35, events);
+  addResonance(world, 0.45, events);
 
   events.push({
     type: 'OVERLIMIT_NIRVANA_BURST',
@@ -589,20 +589,20 @@ export function tryTriggerNirvanaBurst(world: SimWorld, events: SimEvent[]): boo
 export function stepV23Systems(world: SimWorld, events: SimEvent[]): void {
   if (world.mods.fairTrial) return;
 
-  // 1. Passive Nirvana trickle across all non-FairTrial modes, accelerated by Reactor, Overdrive, Overlimit & Tri-Prism Lattice
+  // 1. Fast Nirvana passive recharge across all non-FairTrial modes, further supercharged by Reactor, Overdrive & Lattice
   if (world.nirvanaActiveTimer > 0) {
     world.nirvanaActiveTimer = Math.max(0, world.nirvanaActiveTimer - FIXED_DT);
   }
-  if (world.nirvanaActiveTimer <= 0 && world.nirvanaCharge < 1 && world.squadCount > 0) {
-    let rate = 0.014;
+  if (world.nirvanaActiveTimer <= 1.85 && world.nirvanaCharge < 1 && world.squadCount > 0) {
+    let rate = 0.052;
     if (world.isFiringRange) {
-      rate = 0.32;
+      rate = 0.75;
     } else if (world.triPrismLatticeTimer > 0) {
-      rate = 0.105;
+      rate = 0.22;
     } else if (Boolean(world.overlimitResonance) || world.coreReactorTier >= 2) {
-      rate = 0.036;
+      rate = 0.135;
     } else if (world.overdriveTimer > 0 || world.coreReactorTier >= 1) {
-      rate = 0.024;
+      rate = 0.092;
     }
     world.nirvanaCharge = clamp(world.nirvanaCharge + rate * FIXED_DT, 0, 1);
   }

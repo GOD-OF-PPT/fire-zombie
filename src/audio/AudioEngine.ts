@@ -2065,10 +2065,12 @@ export class AudioEngine {
   }
 
   jumpLaunch(): void {
-    if (!this.ctx) return;
+    if (!this.ctx || !this.sfx) return;
     const t = this.ctx.currentTime;
-    this.subPunch(95, 44, 0.16, 0.22, t);
-    this.fmBell(330, 0.28, { ratio: 2.0, modIndex: 1.1, vol: 0.12, slideTo: 990, when: t, priority: true });
+    this.subPunch(102, 46, 0.18, 0.25, t);
+    this.tone(240, 0.28, { type: 'sawtooth', vol: 0.085, slideTo: 1240, attack: 0.015, lpFreq: 2800, when: t });
+    this.fmBell(330, 0.30, { ratio: 2.0, modIndex: 1.15, vol: 0.125, slideTo: 1046.5, when: t, priority: true });
+    this.fmBell(523.25, 0.22, { ratio: 2.0, modIndex: 0.9, vol: 0.09, slideTo: 1318.5, when: t + 0.045, priority: true });
   }
 
   cutbackChime(): void {
@@ -2079,15 +2081,26 @@ export class AudioEngine {
   }
 
   jumpSlam(hits = 3): void {
-    if (!this.ctx) return;
+    if (!this.ctx || !this.sfx) return;
     const t = this.ctx.currentTime;
-    if (hits < 3) {
-      this.playFoley('heavyBoom', { vol: hits ? 0.18 : 0.065, rate: hits ? 1.2 : 1.7, when: t });
-      return;
+    const crowd = hits >= 3;
+    this.duckMusic(crowd ? 0.56 : 0.32, 0.08, 0.22);
+    // Crisp meteor down-whistle snapping into seismic ground-zero thud!
+    this.tone(920, 0.065, { type: 'sawtooth', vol: 0.09, slideTo: 82, attack: 0.004, lpFreq: 2400, when: t });
+    const imp = t + 0.018;
+    this.playFoley('heavyBoom', {
+      vol: crowd ? 0.66 : hits > 0 ? 0.48 : 0.38,
+      rate: crowd ? 0.78 : 0.94,
+      when: imp,
+      priority: true,
+    });
+    this.playFoley('crystalTick', { vol: crowd ? 0.28 : 0.18, rate: 0.85, when: imp + 0.02 });
+    this.subPunch(crowd ? 148 : 122, 24, crowd ? 0.52 : 0.36, crowd ? 0.46 : 0.32, imp);
+    this.noise(crowd ? 0.48 : 0.28, { warm: true, vol: crowd ? 0.26 : 0.16, freq: 560, slideTo: 48, when: imp + 0.01 });
+    if (crowd) {
+      this.fmBell(523.25, 0.24, { ratio: 2.0, modIndex: 1.25, vol: 0.085, when: imp + 0.02, priority: true });
+      this.fmBell(783.99, 0.26, { ratio: 2.0, modIndex: 1.15, vol: 0.075, when: imp + 0.045, priority: true });
     }
-    this.duckMusic(0.48, 0.06, 0.2);
-    this.playFoley('heavyBoom', { vol: 0.54, rate: 0.92, when: t, priority: true });
-    this.subPunch(125, 28, 0.4, 0.38, t);
   }
 
   reflectorBounce(panX = 0): void {
@@ -2130,43 +2143,61 @@ export class AudioEngine {
     }
   }
 
-  nukeSiren(duration = 1.8): void {
+  nukeSiren(duration = 1.15, salvoIndex = 1): void {
     const ctx = this.ctx;
     if (!ctx || !this.sfx) return;
     const t = ctx.currentTime;
-    this.duckMusic(0.46, 0.8, 0.4);
+    const pitchMult = Math.min(1.65, 1 + (Math.max(1, salvoIndex) - 1) * 0.14);
+    this.duckMusic(0.46, 0.72, 0.36);
     for (let i = 0; i < 2; i++) {
-      const s0 = t + i * 0.74;
-      this.tone(330, 0.62, { type: 'sawtooth', vol: 0.11, slideTo: 620, attack: 0.06, lpFreq: 1350, when: s0 });
-      this.tone(415.3, 0.62, { type: 'sawtooth', vol: 0.085, slideTo: 784, attack: 0.06, lpFreq: 1350, when: s0 });
+      const s0 = t + i * 0.48;
+      if (s0 >= t + duration) break;
+      this.tone(340 * pitchMult, 0.44, { type: 'sawtooth', vol: 0.11, slideTo: 680 * pitchMult, attack: 0.04, lpFreq: 1650, when: s0 });
+      this.tone(428 * pitchMult, 0.44, { type: 'sawtooth', vol: 0.085, slideTo: 860 * pitchMult, attack: 0.04, lpFreq: 1650, when: s0 });
     }
-    const lockTimes = [0.15, 0.55, 0.88, 1.15, 1.36, 1.54, 1.68];
+    const lockTimes = [0.06, 0.28, 0.48, 0.66, 0.80, 0.92, 1.02];
     for (let k = 0; k < lockTimes.length; k++) {
       const wt = lockTimes[k]!;
       if (wt < duration) {
-        this.fmBell(1046.5 + k * 110, 0.065, { ratio: 2.0, modIndex: 1.0, vol: 0.075, when: t + wt, priority: true });
+        this.fmBell((1046.5 + k * 125) * pitchMult, 0.065, { ratio: 2.0, modIndex: 1.15, vol: 0.08, when: t + wt, priority: true });
       }
     }
   }
 
-  nukeDetonate(): void {
+  nukeDetonate(salvoIndex = 1): void {
     const ctx = this.ctx;
     if (!ctx || !this.sfx) return;
     const t = ctx.currentTime;
-    this.duckMusic(0.86, 1.85, 0.9);
-    // Instant vacuum breath-in implosion right before the thermonuclear crack
-    this.subPunch(56, 175, 0.042, 0.28, t);
+    const chainIdx = Math.max(1, salvoIndex);
+    const pitchMult = Math.min(1.5, 1 + (chainIdx - 1) * 0.11);
+    this.duckMusic(0.88, 1.85, 0.9);
+    // Instant vacuum breath-in implosion + heaven-piercing orbital ion-cannon laser down-sweep!
+    this.subPunch(58, 190, 0.042, 0.30, t);
+    this.tone(1880 * pitchMult, 0.32, { type: 'sawtooth', vol: 0.14, slideTo: 92, attack: 0.006, lpFreq: 3600, when: t + 0.015 });
     const b = t + 0.036;
     // Wave 1: Ground-zero blinding thermonuclear detonation
-    this.playFoley('heavyBoom', { vol: 0.92, rate: 0.56, when: b, priority: true });
+    this.playFoley('heavyBoom', { vol: 0.94, rate: 0.56 * Math.min(1.18, pitchMult), when: b, priority: true });
     this.playFoley('heavyBoom', { vol: 0.72, rate: 0.84, when: b + 0.04, panX: -2.4, worldZ: -28, priority: true });
     this.playFoley('heavyBoom', { vol: 0.72, rate: 0.78, when: b + 0.06, panX: 2.4, worldZ: -46, priority: true });
-    this.subPunch(165, 20, 2.25, 0.68, b);
-    this.noise(2.15, { warm: true, vol: 0.48, freq: 720, slideTo: 42, when: b + 0.03 });
+    this.subPunch(172, 20, 2.25, 0.70, b);
+    this.noise(2.15, { warm: true, vol: 0.48, freq: 760, slideTo: 42, when: b + 0.03 });
+    if (chainIdx >= 2) {
+      // Triumphant sci-fi harmonic judgment chord on rapid-tap chain salvos!
+      const chord = [523.25, 659.25, 783.99, 1046.5];
+      for (let i = 0; i < chord.length; i++) {
+        this.fmBell(chord[i]! * pitchMult, 0.42, {
+          ratio: 2.0,
+          modIndex: 1.35,
+          vol: 0.085,
+          when: b + 0.03 + i * 0.028,
+          priority: true,
+        });
+      }
+    }
     // Wave 2: Hypersonic shockwave arrival slam synced with screen quake Wave 2 (+0.26s)
     const w2 = b + 0.26;
     this.playFoley('heavyBoom', { vol: 0.85, rate: 0.48, when: w2, priority: true });
-    this.subPunch(110, 18, 1.45, 0.54, w2);
+    this.subPunch(112, 18, 1.45, 0.54, w2);
     this.noise(1.1, { warm: true, vol: 0.36, freq: 980, slideTo: 65, when: w2 });
     // Wave 3: Rolling tectonic earthquake aftershock rumble (+0.78s)
     const w3 = b + 0.78;

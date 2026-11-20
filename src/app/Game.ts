@@ -1450,32 +1450,43 @@ export class Game {
           break;
         }
         case 'JUMP_LAUNCH': {
-          fx.ring(ev.x, ev.z, 0x3ef3ff, 4.6, 0.48);
-          fx.burst(ev.x, 0.4, ev.z, 0x62f4ff, 55, { speed: 9.5, size: 0.45, life: 0.55, up: 1.5 });
-          this.renderer.shake(0.18);
+          fx.ring(ev.x, ev.z, 0x3ef3ff, 5.8, 0.50);
+          fx.ring(ev.x, ev.z, 0xffd84a, 3.6, 0.36);
+          fx.burst(ev.x, 0.4, ev.z, 0x62f4ff, 72, { speed: 11.5, size: 0.48, life: 0.58, up: 1.8 });
+          fx.streaks(ev.x, 0.6, ev.z, 0xb8ffff, 16, { speed: 16, len: 1.6, life: 0.30, coneBiasZ: -0.35 });
+          this.renderer.triggerShockwave(0.34);
+          this.renderer.shake(0.22);
           if (live) {
             a.jumpLaunch();
+            this.input.rumble(0.45, 0.35, 140);
             this.addScore(140);
             const p = this.worldToScreen(snap.squadX, 2.5, PLAYER_Z - 0.8);
-            this.ui.floatText(p.x, p.y - 12, '跃空突袭！', 'aegis', 1.0);
+            this.ui.floatText(p.x, p.y - 12, '🚀 跃空突袭！', 'aegis', 1.0);
           }
           break;
         }
         case 'JUMP_SLAM': {
           const crowd = ev.hits >= 3;
-          fx.ring(ev.x, ev.z, crowd ? 0xffcc69 : 0x93a5ab, crowd ? 6.6 : ev.hits ? 2.8 : 1.45, crowd ? 0.50 : 0.24);
-          fx.burst(ev.x, 0.15, ev.z, crowd ? 0xffce81 : 0xb9b4a3, crowd ? 42 : ev.hits ? 12 : 5,
-            { speed: crowd ? 8 : 2.6, size: crowd ? 0.34 : 0.14, life: 0.26, up: 0.35 });
+          this.renderer.triggerJumpSlamVfx(ev.x, ev.z, ev.hits);
           if (live) {
             a.jumpSlam(ev.hits);
-            this.addScore(180 + ev.hits * 35);
+            this.addScore(180 + ev.hits * 40);
+            this.input.rumble(crowd ? 0.88 : 0.58, crowd ? 0.78 : 0.45, crowd ? 320 : 190);
+            this.ui.doFlash(
+              crowd ? 'rgba(255, 224, 120, 0.36)' : 'rgba(98, 244, 255, 0.26)',
+              crowd ? 0.24 : 0.16,
+            );
+            this.triggerHitStop(crowd ? 0.048 : 0.022);
             if (crowd) {
-              this.renderer.shake(0.30);
-              this.triggerHitStop(0.044);
               a.hordeDeathChorus(ev.hits, ev.x, ev.z);
-              const p = this.worldToScreen(ev.x, 2.2, ev.z);
-              this.ui.floatText(p.x, p.y, `震地 ×${ev.hits}`, 'drill-impact', 0.92);
             }
+            const p = this.worldToScreen(ev.x, 2.2, ev.z);
+            const slamTxt = crowd
+              ? `💥 陨星震地 ×${ev.hits}!`
+              : ev.hits > 0
+                ? `⚡ 重锤轰击 ×${ev.hits}!`
+                : '⚡ 重装震地！';
+            this.ui.floatText(p.x, p.y, slamTxt, crowd ? 'drill-impact' : 'aegis', 0.95);
           }
           break;
         }
@@ -1627,37 +1638,62 @@ export class Game {
           break;
         }
         case 'NUKE_LAUNCH': {
-          fx.ring(ev.x, ev.z, 0xff2a55, 9.5, 0.85);
-          fx.ring(ev.x, ev.z, 0xffd84a, 5.2, 0.65);
-          this.renderer.shake(0.22);
+          const salvoIdx = ev.salvoIndex ?? 1;
+          const pIdx = (salvoIdx - 1) % 3;
+          const ringOuter = pIdx === 1 ? 0x3ef3ff : pIdx === 2 ? 0xff42f5 : 0xff2a55;
+          const ringInner = pIdx === 1 ? 0xb8ffff : pIdx === 2 ? 0xffb8ff : 0xffd84a;
+          fx.ring(ev.x, ev.z, ringOuter, 11.2, 0.85);
+          fx.ring(ev.x, ev.z, ringInner, 6.4, 0.62);
+          fx.streaks(ev.x, 1.2, ev.z, ringInner, 18, { speed: 19, len: 1.8, life: 0.34, coneBiasZ: 0 });
+          this.renderer.triggerAnamorphicFlare(ev.x, ev.z, 0.48, salvoIdx);
+          this.renderer.shake(0.24 + Math.min(0.18, (salvoIdx - 1) * 0.06));
           if (live) {
-            a.nukeSiren(ev.duration);
-            this.ui.doFlash('rgba(255,60,40,0.28)', 0.25);
+            a.nukeSiren(ev.duration, salvoIdx);
+            const flashCol =
+              pIdx === 1
+                ? 'rgba(62,243,255,0.28)'
+                : pIdx === 2
+                  ? 'rgba(255,66,245,0.28)'
+                  : 'rgba(255,60,40,0.28)';
+            this.ui.doFlash(flashCol, 0.24);
+            const titleColor = pIdx === 1 ? '#7ef9ff' : pIdx === 2 ? '#ff8cff' : '#ffd84a';
+            const titleTxt =
+              salvoIdx >= 3
+                ? `☢ 终焉地毯式核葬 ×${salvoIdx}！`
+                : salvoIdx === 2
+                  ? '☢ 双星连环核打击 ×2！'
+                  : '☢ 战术核弹 · 极速锁定！';
+            const remTxt = (ev.remainingStocks ?? 0) > 0 ? ` · 剩余战备 ×${ev.remainingStocks} 可继续连点 [Q]！` : ' · 推进器全功率俯冲中！';
             this.ui.showBanner(
-              html`<div class="b-kicker">☢ TACTICAL THERMONUCLEAR STRIKE</div><div class="b-title" style="color:#ffd84a">☢ 战术核弹 · 缓降锁定！</div><div class="b-sub">高空聚变弹头下坠中 · 准备迎接全屏清场冲击波！</div>`,
+              html`<div class="b-kicker">☢ ORBITAL THERMONUCLEAR SALVO ×${salvoIdx}</div><div class="b-title" style="color:${titleColor}">${titleTxt}</div><div class="b-sub">天基螺旋信标锁定跑道${remTxt}</div>`,
               'boss',
-              1550,
+              1350,
             );
           }
           break;
         }
         case 'NUKE_DETONATE': {
-          this.renderer.triggerNukeDetonationVfx(ev.x, ev.z);
-          this.renderer.triggerShockwave(1.2);
-          this.renderer.spawnDecal(ev.x, ev.z, 9.6, 0xff7a1f, 4, 24);
-          this.renderer.triggerCinematicImpact(0.022, 0.42, ev.x, ev.z);
+          const salvoIdx = ev.salvoIndex ?? 1;
+          const pIdx = (salvoIdx - 1) % 3;
+          const decalCol = pIdx === 1 ? 0x29d8ff : pIdx === 2 ? 0xe040fb : 0xff7a1f;
+          this.renderer.triggerNukeDetonationVfx(ev.x, ev.z, salvoIdx);
+          this.renderer.triggerShockwave(Math.min(1.45, 1.2 + (salvoIdx - 1) * 0.1));
+          this.renderer.spawnDecal(ev.x, ev.z, 10.4, decalCol, 4, 24);
+          this.renderer.triggerCinematicImpact(0.025, 0.46, ev.x, ev.z);
           if (live) {
-            this.nukeHitStopTimer = 0.105;
+            this.nukeHitStopTimer = salvoIdx >= 2 ? 0.055 : 0.085;
             this.input.rumble(1.0, 1.0, 950);
             fx.after(0.30, () => this.input.rumble(0.95, 0.85, 520));
             a.triggerUltimateDuck(0.95);
-            a.nukeDetonate();
+            a.nukeDetonate(salvoIdx);
             a.nukeChainShatter(ev.kills);
-            this.ui.doNukeFlash(1.0);
-            this.addScore(450 + ev.kills * 30 + Math.round(ev.bossDamage * 0.45));
+            this.ui.doNukeFlash(1.0, salvoIdx);
+            this.addScore(450 + ev.kills * 30 + Math.round(ev.bossDamage * 0.45) + (salvoIdx - 1) * 220);
             const bossSub = ev.bossDamage > 0 ? ` · 首领重创 -${ev.bossDamage}` : '';
+            const titleColor = pIdx === 1 ? '#b8ffff' : pIdx === 2 ? '#ffb8ff' : '#fff3a8';
+            const salvoTag = salvoIdx >= 2 ? `【${salvoIdx}连核葬】` : '';
             this.ui.showBanner(
-              html`<div class="b-kicker">☢ THERMONUCLEAR ANNIHILATION</div><div class="b-title" style="color:#fff3a8">☢ 聚变核爆 · 贯通清屏 ×${ev.kills}！</div><div class="b-sub">全跑道冲击波贯通远方${bossSub}</div>`,
+              html`<div class="b-kicker">☢ THERMONUCLEAR ANNIHILATION · SALVO ×${salvoIdx}</div><div class="b-title" style="color:${titleColor}">☢ ${salvoTag}聚变核爆 · 贯通清屏 ×${ev.kills}！</div><div class="b-sub">天基裁决光柱与星环冲击波横扫地平线${bossSub}</div>`,
               'od',
               2150,
             );
@@ -1665,13 +1701,16 @@ export class Game {
           break;
         }
         case 'AEGIS_PULSE': {
-          fx.ring(ev.x, ev.z, 0x62f4ff, 6.2, 0.55);
-          fx.ring(ev.x, ev.z, 0xb98cff, 4.4, 0.42);
-          fx.burst(ev.x, 0.85, ev.z, 0x62f4ff, 65, { speed: 11, size: 0.48, life: 0.65, up: 0.85 });
-          this.renderer.shake(0.24);
+          fx.ring(ev.x, ev.z, 0x62f4ff, 7.6, 0.58);
+          fx.ring(ev.x, ev.z, 0xb98cff, 5.2, 0.45);
+          fx.burst(ev.x, 0.85, ev.z, 0x62f4ff, 80, { speed: 13, size: 0.52, life: 0.68, up: 0.95 });
+          fx.shatter(ev.x, 1.0, ev.z, 0x62f4ff, 18, true);
+          this.renderer.triggerShockwave(0.58);
+          this.renderer.triggerAnamorphicFlare(ev.x, ev.z, 0.36, 2);
+          this.renderer.shake(0.28);
           if (live) {
             a.aegisPulse();
-            this.ui.doFlash('rgba(98,244,255,0.45)', 0.25);
+            this.ui.doFlash('rgba(98,244,255,0.48)', 0.26);
             if (ev.orbsCleared > 0) this.addScore(ev.orbsCleared * 50);
             const p = this.worldToScreen(ev.x, 2.2, ev.z - 0.8);
             this.ui.floatText(
@@ -2457,15 +2496,21 @@ export class Game {
         case 'OVERLIMIT_NIRVANA_BURST': {
           const meta = NIRVANA_META[ev.archetype];
           const colNum = ev.archetype === 'singularity_supernova' ? 0xd982ff : ev.archetype === 'absolute_zero_storm' ? 0x7ef6ff : 0xffe46b;
+          const flareSalvo = ev.archetype === 'singularity_supernova' ? 3 : ev.archetype === 'absolute_zero_storm' ? 2 : 1;
           const decalKind = ev.archetype === 'absolute_zero_storm' ? 2 : 4;
-          fx.burst(ev.x, 1.5, ev.z, colNum, 150, { speed: 17, size: 0.66, life: 0.88, up: 1.3 });
-          fx.shatter(ev.x, 1.4, ev.z, colNum, 28, true);
-          this.renderer.spawnDecal(ev.x, ev.z, 4.4, colNum, decalKind, 20);
-          this.renderer.shake(0.88);
-          this.renderer.triggerScreenQuake(0.75, 0.48);
-          this.renderer.triggerShockwave(1.05);
+          fx.burst(ev.x, 1.5, ev.z, colNum, 165, { speed: 19, size: 0.72, life: 0.92, up: 1.38 });
+          fx.shatter(ev.x, 1.4, ev.z, colNum, 34, true);
+          fx.ring(ev.x, ev.z, 0xffffff, 18, 0.52);
+          fx.ring(ev.x, ev.z, colNum, 13, 0.72);
+          fx.after(0.10, () => fx.ring(ev.x, ev.z - 22, colNum, 24, 0.65));
+          fx.after(0.20, () => fx.ring(ev.x, ev.z - 46, colNum, 28, 0.72));
+          this.renderer.spawnDecal(ev.x, ev.z, 5.2, colNum, decalKind, 20);
+          this.renderer.shake(0.92);
+          this.renderer.triggerScreenQuake(0.85, 0.56);
+          this.renderer.triggerShockwave(1.18);
+          this.renderer.triggerAnamorphicFlare(ev.x, ev.z, 0.92, flareSalvo);
           this.renderer.triggerExecutionCam(1.1);
-          this.renderer.triggerCinematicImpact(0.019, 0.36, ev.x, ev.z);
+          this.renderer.triggerCinematicImpact(0.021, 0.38, ev.x, ev.z);
           if (live) {
             this.bulletTimeDur = 0.34;
             this.bulletTimeTimer = 0.34;
@@ -2473,7 +2518,7 @@ export class Game {
             a.triggerUltimateDuck(0.65);
             a.playVocoderChoir('nirvana');
             this.ui.showLetterbox(1050);
-            this.ui.doFlash('rgba(255, 245, 190, 0.72)', 0.42);
+            this.ui.doFlash('rgba(255, 245, 190, 0.72)', 0.44);
             this.addScore(680 + ev.kills * 35 + Math.round(ev.bossDamage * 0.4));
             this.ui.showBanner(
               html`<div class="b-kicker">☀️ OVERLIMIT NIRVANA · 二阶终焉奥义</div><div class="b-title">${meta.glyph} ${meta.name}</div><div class="b-sub">清场歼敌 ×${ev.kills}${ev.bossDamage > 0 ? ` · 首领重创 -${ev.bossDamage}` : ''}</div>`,

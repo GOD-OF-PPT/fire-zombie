@@ -532,6 +532,16 @@ export function generateBlitzScript(seed: number): SectorScriptConfig {
       reward: r2,
     },
     {
+      type: 'jump_pad',
+      crossDist: 408,
+      x: 2.35 * flip,
+    },
+    {
+      type: 'jump_pad',
+      crossDist: 628,
+      x: -2.35 * flip,
+    },
+    {
       type: 'barrels',
       crossDist: 642,
       placements: [
