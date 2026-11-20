@@ -2393,3 +2393,21 @@ button {
 .title-row > button { width: auto; min-width: 0; padding: 5px; font-size: 12px; }
 .title-row > .core-count { justify-content: center; }
 .title-screen .mutator-bar { flex-wrap: wrap; }
+
+.drill-cue {
+  position: absolute; left: 50%; bottom: 98px; transform: translateX(-50%);
+  padding: 5px 15px; border: 1px solid #78999a; border-radius: 5px;
+  background: #10242aee; color: #c4eee3; white-space: nowrap;
+  font: 750 13px/1.4 system-ui, sans-serif; letter-spacing: 0.06em;
+  box-shadow: 0 2px 7px #0005; pointer-events: none;
+}
+.drill-cue[data-action="switch"], .drill-cue[data-action="reward"] { color: #ffdc94; border-color: #caa260; background: #302519ed; }
+.drill-cue[data-action="reward"] { font-size: 16px; }
+.ui:has(.hud.show .drill-cue:not([hidden])) .toast { visibility: hidden; }
+
+/* Keep the sightline and lane surfaces clear while the three linked actions are in play. */
+.ui:has(.hud.show.drill-active) :is(.banner, .toast, .combo, .tactical-vox),
+.ui:has(.hud.show.drill-active) .float:not(.drill-impact):not(.drill-break):not(.loss) { visibility: hidden; }
+.ui:has(.hud.show.drill-active) .flash { visibility: hidden; }
+.float.drill-impact { font-size: 27px; color: #ffd38a; text-shadow: 0 2px 2px #3b2417; }
+.float.drill-break { font-size: 19px; color: #ffe6ae; text-shadow: 0 2px 2px #2d2216; }

@@ -89,6 +89,9 @@ export interface SimVault {
 }
 
 export interface SimEnemy {
+  shieldImpactX?: number;
+  flankTargetX?: number;
+  anchoredGuard?: boolean;
   id: number;
   kind: EnemyKind;
   prevX: number;
@@ -279,6 +282,7 @@ export interface SimSingularity {
 }
 
 export interface SimJumpPad {
+  flankAmbush?: boolean;
   id: number;
   prevZ: number;
   x: number;
@@ -631,6 +635,9 @@ export interface SimWorld {
 
   squadAirY: number;
   jumpTimer: number;
+  /** Set only by the marked pad. Side runners converge on the takeoff lane. */
+  landingAmbushX?: number;
+  cutback?: { vaultId: number; vaultX: number; supplyGateId: number; primed: boolean };
   ricochetsThisTick: number;
   activeFusions: FusionId[];
   seekerBlades: SimSeekerBlade[];

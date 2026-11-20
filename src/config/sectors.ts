@@ -109,6 +109,8 @@ export interface SectorScriptConfig {
   readonly scrollSpeed: number;
   readonly runwayLength: number;
   readonly startSquad: number;
+  /** Distances of the linked mirror, vault, supply gate and landing drill on this track. */
+  readonly blitzDrill?: { mirrorX: number; mirror: number; guard: number; vault: number; gate: number; pad: number };
   readonly boss: BossConfig;
   readonly encounters: readonly RunwayEncounter[];
 }

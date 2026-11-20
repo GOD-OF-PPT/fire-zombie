@@ -1,3 +1,4 @@
+import { JUMP_DURATION_SEC } from '../config/constants';
 import type { AccessibilityConfig } from '../app/save';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -73,6 +74,7 @@ import {
   createToonCharMaterial,
   getOutlineMaterial,
 } from './models/toon';
+import { RiotShields } from './RiotShields';
 import { loadTrialVault } from './models/trialVault';
 
 export const WEAPON_COLOR: Record<WeaponId, number> = {
@@ -520,7 +522,8 @@ export class Renderer {
   private hpFg!: THREE.InstancedMesh;
   private telegraphs!: THREE.InstancedMesh;
   private tethers: THREE.Mesh[] = [];
-  public shieldInstMesh!: THREE.InstancedMesh;
+  private readonly riotShields = new RiotShields();
+  private landingMarker!: THREE.Group;
   public auraInstMesh!: THREE.InstancedMesh;
   public jugHaloInstMesh!: THREE.InstancedMesh;
   public shardDropInstMesh!: THREE.InstancedMesh;
@@ -1805,13 +1808,16 @@ export class Renderer {
     }
 
     // V20 Stage 5: Single-Draw-Call InstancedMesh batching for Phalanx shields, Howler war-auras, Juggernaut halos, Core Shards & Dynamic Weather!
-    const pShieldGeo = new THREE.CircleGeometry(0.76, 6);
-    this.shieldInstMesh = new THREE.InstancedMesh(pShieldGeo, additive(0x3ef3ff, 0.48, this.hexTex), 32);
-    this.shieldInstMesh.count = 0;
-    this.shieldInstMesh.visible = false;
-    this.shieldInstMesh.frustumCulled = false;
-    this.shieldInstMesh.renderOrder = 4;
-    this.scene.add(this.shieldInstMesh);
+    this.scene.add(this.riotShields.mesh);
+    this.landingMarker = new THREE.Group();
+    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xffce6b, transparent: true, opacity: 0.83, depthWrite: false });
+    for (let i = 0; i < 4; i++) {
+      const arc = new THREE.Mesh(new THREE.RingGeometry(2.4, 2.57, 12, 1, i * Math.PI / 2 + 0.16, 1.23), markerMaterial);
+      arc.rotation.x = -Math.PI / 2;
+      this.landingMarker.add(arc);
+    }
+    this.landingMarker.visible = false;
+    this.scene.add(this.landingMarker);
 
     const auraGeo = new THREE.RingGeometry(3.25, 3.85, 32).rotateX(-Math.PI / 2);
     this.auraInstMesh = new THREE.InstancedMesh(auraGeo, additive(0xff2a6d, 0.34), 24);
@@ -2413,7 +2419,7 @@ export class Renderer {
     const inst =
       (this.projMesh?.count ?? 0) +
       (this.orbMesh?.count ?? 0) +
-      (this.shieldInstMesh?.count ?? 0) +
+      this.riotShields.mesh.count +
       (this.auraInstMesh?.count ?? 0) +
       (this.jugHaloInstMesh?.count ?? 0) +
       (this.shardDropInstMesh?.count ?? 0) +
@@ -2433,6 +2439,9 @@ export class Renderer {
     this.effects.dispose();
     this.glowTex.dispose();
     this.hexTex.dispose();
+    this.riotShields.dispose();
+    for (const child of this.landingMarker.children) (child as THREE.Mesh).geometry.dispose();
+    ((this.landingMarker.children[0] as THREE.Mesh).material as THREE.Material).dispose();
     this.stripeTex.dispose();
     this.lensTex.dispose();
     this.jumpTex.dispose();
@@ -2539,7 +2548,8 @@ export class Renderer {
     for (const v of this.phaseGateViews.values()) { v.group.visible = false; this.phaseGatePool.push(v); }
     this.phaseGateViews.clear();
     if (this.omegaBeamGroup) this.omegaBeamGroup.visible = false;
-    if (this.shieldInstMesh) { this.shieldInstMesh.count = 0; this.shieldInstMesh.visible = false; }
+    this.riotShields.reset();
+    this.landingMarker.visible = false;
     if (this.auraInstMesh) { this.auraInstMesh.count = 0; this.auraInstMesh.visible = false; }
     if (this.jugHaloInstMesh) { this.jugHaloInstMesh.count = 0; this.jugHaloInstMesh.visible = false; }
     if (this.shardDropInstMesh) { this.shardDropInstMesh.count = 0; this.shardDropInstMesh.visible = false; }
@@ -2682,6 +2692,7 @@ export class Renderer {
     this.updateBoss(snap, dt, t);
     this.updateNukeVisuals(snap, dt, t);
     this.updateDecalsAndWetLights(snap, dt, deltaScroll);
+    if (snap.inBlitzDrill) this.decals.visible = false;
     this.shadows.count = this.shadowCount;
     this.shadows.instanceMatrix.needsUpdate = true;
 
@@ -2697,14 +2708,15 @@ export class Renderer {
             ? 2.0
             : 0.0
         : 0.0;
-      this.impactPass.uniforms.uChroma!.value = this.chromaAmt;
-      this.impactPass.uniforms.uRadialBlur!.value = this.radialBlurAmt;
+      this.impactPass.uniforms.uChroma!.value = snap.inBlitzDrill ? 0 : this.chromaAmt;
+      this.impactPass.uniforms.uRadialBlur!.value = snap.inBlitzDrill ? 0 : this.radialBlurAmt;
       this.impactPass.uniforms.uSplitTone!.value = this.splitToneAmt;
       this.impactPass.uniforms.uPhotoFilter!.value = pf;
       this.impactPass.uniforms.uPhotoTime!.value = t;
       (this.impactPass.uniforms.uCenter!.value as THREE.Vector2).copy(this.impactCenter);
     }
     if (this.composer) {
+      if (this.bloomPass) this.bloomPass.strength = snap.inBlitzDrill ? 0.16 : 0.32;
       this.composer.render();
     } else {
       this.renderer.render(this.scene, this.camera);
@@ -3143,6 +3155,12 @@ export class Renderer {
     batch.fxArray[i4 + 3] = subVariant;
   }
 
+  breakRiotShield(id: number, x: number, z: number): void {
+    const actor = this.activeEnemies.get(id);
+    this.riotShields.shatter(x, z, actor?.scale ?? ENEMY_VISUAL_SCALE.phalanx);
+    if (actor) { actor.recoilZ = 0.48; actor.recoilTilt = -0.32; actor.recoilRoll = 0.14; }
+  }
+
   private updateEnemies(snap: SimSnapshot, dt: number, t: number): void {
     this.frameTick = (this.frameTick + 1) & 0xffff;
     const lib = this.gltfLib;
@@ -3429,13 +3447,8 @@ export class Renderer {
           }
         }
 
-        if (e.kind === 'phalanx' && !e.armorBroken && (e.shieldRatio ?? 0) > 0 && shieldIdx < 32) {
-          d.position.set(e.x, 0.96 * sc, e.z + 0.64 * sc);
-          d.rotation.set(-0.08, yaw, t * 1.4 + e.id);
-          const pulse = 1 + hit * 0.16 + Math.sin(t * 12 + e.id) * 0.04;
-          d.scale.set(sc * pulse * 1.15, sc * pulse, 1);
-          d.updateMatrix();
-          this.shieldInstMesh.setMatrixAt(shieldIdx++, d.matrix);
+        if (e.kind === 'phalanx' && (e.shieldRatio ?? 0) > 0 && shieldIdx < 32) {
+          this.riotShields.guard(shieldIdx++, e.x, e.z - entry.recoilZ, sc, yaw, e.shieldRatio!, hit, e.shieldImpactX ?? 0);
         }
 
         if (e.kind === 'howler' && auraIdx < 24) {
@@ -3562,9 +3575,7 @@ export class Renderer {
     }
     for (let i = tetherIdx; i < this.tethers.length; i++) this.tethers[i]!.visible = false;
 
-    this.shieldInstMesh.count = shieldIdx;
-    this.shieldInstMesh.visible = shieldIdx > 0;
-    if (shieldIdx > 0) this.shieldInstMesh.instanceMatrix.needsUpdate = true;
+    this.riotShields.finish(shieldIdx, dt);
 
     this.auraInstMesh.count = auraIdx;
     this.auraInstMesh.visible = auraIdx > 0;
@@ -4158,6 +4169,7 @@ export class Renderer {
       new THREE.RingGeometry(0.55, 0.95, 20).rotateX(-Math.PI / 2),
       additive(0x3ef3ff, 0.46),
     );
+    landCore.name = 'landCore';
     landCore.position.set(0, 0.07, -16.2);
     const arcGuide = new THREE.Mesh(
       new THREE.PlaneGeometry(0.28, 15.2).rotateX(-Math.PI / 2),
@@ -4178,7 +4190,8 @@ export class Renderer {
     const group = new THREE.Group();
     const mirrorPivot = new THREE.Group();
     mirrorPivot.name = 'pivot';
-    const frameMat = std(0x7dff6b, 0.8, { metalness: 0.75 });
+    const frameMat = std(0x465b68, 0.12, { metalness: 0.65 });
+    const brass = std(0xdb9c52, 0.22, { metalness: 0.56 });
     const postGeo = new THREE.BoxGeometry(0.22, 2.35, 0.22).translate(0, 1.18, 0);
     const l = new THREE.Mesh(postGeo, frameMat);
     const r = new THREE.Mesh(postGeo, frameMat);
@@ -4186,7 +4199,20 @@ export class Renderer {
     r.position.x = 1.75;
     const paneMat = additive(0x7dff6b, 0.38);
     const pane = new THREE.Mesh(new THREE.PlaneGeometry(3.5, 2.15).translate(0, 1.15, 0), paneMat);
-    mirrorPivot.add(l, r, pane);
+    const capGeo = new THREE.BoxGeometry(3.65, 0.13, 0.24);
+    const brow = new THREE.Mesh(capGeo, frameMat);
+    brow.position.y = 2.28;
+    const foot = new THREE.Mesh(capGeo, frameMat);
+    foot.position.y = 0.13;
+    const brackets = new GeoBuilder();
+    for (const x of [-1.7, 1.7]) {
+      brackets.add(box(0.38, 0.36, 0.32), 0xb5854d, 0, { p: [x, 0.38, 0] })
+        .add(box(0.30, 0.19, 0.28), 0x9eb1b2, 0, { p: [x, 2.09, 0] });
+    }
+    const hinges = new THREE.Mesh(brackets.build(), this.propMat);
+    const bearing = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.56, 0.16, 12), brass);
+    bearing.position.y = 0.12;
+    mirrorPivot.add(l, r, brow, foot, pane, hinges, bearing);
     const sign = new THREE.Mesh(
       new THREE.PlaneGeometry(2.8, 0.8),
       new THREE.MeshBasicMaterial({ color: 0xf4f8ff, map: this.reflectorTex, transparent: true, depthWrite: false }),
@@ -4205,6 +4231,13 @@ export class Renderer {
       new THREE.PlaneGeometry(0.18, 6.5).rotateX(-Math.PI / 2).translate(0, 0.1, 3.25),
       additive(0x3ef3ff, 0.28),
     );
+    const arrowGeo = new THREE.BufferGeometry();
+    arrowGeo.setAttribute('position', new THREE.Float32BufferAttribute([-0.42, 0, 0.42, 0.42, 0, 0.42, 0, 0, -0.58], 3));
+    for (const z of [-2.3, -5.25, -8.2]) {
+      const arrow = new THREE.Mesh(arrowGeo, additive(0xa4ead0, 0.82));
+      arrow.position.set(0, 0.15, z);
+      aimPivot.add(arrow);
+    }
     aimPivot.add(aimBeam);
     group.add(mirrorPivot, sign, inBeam, aimPivot);
     this.scene.add(group);
@@ -4318,6 +4351,12 @@ export class Renderer {
     }
 
     // 2. Mag-Lev Jump Pads
+    const flight = snap.jumpTimeLeft ?? 0;
+    this.landingMarker.visible = flight > 0;
+    if (flight > 0) {
+      this.landingMarker.position.set(snap.squadX, 0.10, PLAYER_Z - flight * snap.runwaySpeed);
+      this.landingMarker.scale.setScalar(0.85 + 0.55 * flight / JUMP_DURATION_SEC);
+    }
     for (const v of this.jumpPadViews.values()) v.seen = false;
     for (const jp of snap.jumpPads ?? []) {
       if (jp.triggered) continue;
@@ -4332,6 +4371,9 @@ export class Renderer {
       const alignedJp = jp.z < PLAYER_Z && Math.abs(snap.squadX - jp.x) <= 1.85;
       v.stripMat.opacity = (alignedJp ? 0.72 : 0.38) + 0.18 * Math.sin(t * (alignedJp ? 16 : 9) + jp.id);
       const landRing = v.group.getObjectByName('landRing');
+      if (landRing) landRing.position.z = -snap.runwaySpeed * JUMP_DURATION_SEC;
+      const landCore = v.group.getObjectByName('landCore');
+      if (landCore) landCore.position.z = -snap.runwaySpeed * JUMP_DURATION_SEC;
       if (landRing) landRing.scale.setScalar(alignedJp ? 1.14 + 0.06 * Math.sin(t * 14) : 1.0);
     }
     for (const [id, v] of this.jumpPadViews) {

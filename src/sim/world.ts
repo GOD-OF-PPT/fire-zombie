@@ -64,7 +64,7 @@ import {
   computeTrueSquadDps,
   normalizeZero,
 } from './math';
-import { computeDynamicSwarmProfile, computeMirrorFlags, spawnReadyRunwayEncounters, stepTrackAndSpawner } from './spawner';
+import { computeDynamicSwarmProfile, computeMirrorFlags, getBlitzDrillCue, spawnReadyRunwayEncounters, stepTrackAndSpawner } from './spawner';
 import { getEffectiveOverdriveDuration, tryStartManualOverdrive } from './resonance';
 import { tryTriggerAegisPulse } from './aegis';
 import { NUKE_DROP_DURATION, NUKE_TARGET_Z, stepNukeStrike, tryTriggerNukeStrike } from './nuke';
@@ -159,6 +159,8 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
   world.squadX = 0;
   world.squadAirY = 0;
   world.jumpTimer = 0;
+  world.landingAmbushX = undefined;
+  world.cutback = undefined;
   world.ricochetsThisTick = 0;
   world.spectacleIdSeq = 0;
   world.lastCargoStage = 0;
@@ -1052,7 +1054,7 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       linkedGateId: e.linkedGateId,
       hitPulse: e.hitPulse,
       ...(e.isBountyElite ? { isBountyElite: true } : {}),
-      ...(e.maxShieldHp > 0 && e.shieldHp > 0 ? { shieldRatio: e.shieldHp / e.maxShieldHp } : {}),
+      ...(e.maxShieldHp > 0 && e.shieldHp > 0 ? { shieldRatio: e.shieldHp / e.maxShieldHp, shieldImpactX: e.shieldImpactX } : {}),
       ...(e.frenzyBuffed ? { frenzyBuffed: true } : {}),
       ...(e.armorBroken ? { armorBroken: true } : {}),
       ...(e.formationId ? { formationId: e.formationId, formationKind: e.formationKind, isFormationLeader: Boolean(e.isFormationLeader) } : {}),
@@ -1262,6 +1264,11 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
       peakSquad: world.stats.peakSquad,
     },
     squadAirY: world.squadAirY,
+    jumpTimeLeft: world.jumpTimer,
+    inBlitzDrill: !!world.script.blitzDrill && world.scrollDistance >= world.script.blitzDrill.mirror - 64 &&
+      world.scrollDistance < world.script.blitzDrill.pad + 26,
+    runwaySpeed: world.currentScrollSpeed,
+    drillCue: getBlitzDrillCue(world),
     mirrorTwinActive: hasMutator(world, 'mirror_twin'),
     blitzActive: world.mods.blitz === true && !world.endless,
     activeFusions: [...world.activeFusions],

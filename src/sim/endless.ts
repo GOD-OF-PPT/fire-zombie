@@ -43,6 +43,8 @@ export function advanceEndlessStage(world: SimWorld): EndlessStageTransition {
   world.contractWalls.length = 0;
   world.doomOrbs.length = 0;
   world.jumpTimer = 0;
+  world.landingAmbushX = undefined;
+  world.cutback = undefined;
   world.squadAirY = 0;
 
   world.script = generateEndlessStage(world.mods.layoutSeed ?? 1, state.wave);

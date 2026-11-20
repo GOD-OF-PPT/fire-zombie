@@ -265,6 +265,8 @@ export class UI {
   private lastSquad = -1;
   private lastWeaponKey = '';
   private lastDps = -1;
+  private drillCue!: HTMLElement;
+  private drillRewardTime = 0;
   private bannerTimer: number | null = null;
   private toastTimer: number | null = null;
   private comboTimer: number | null = null;
@@ -405,6 +407,7 @@ export class UI {
           <button class="live-tel-toggle" data-testid="live-telemetry-toggle" data-ui-block="1" title="展开/折叠实时伤害构成与折射效率">📊 战报</button>
         </div>
       </div>
+      <div class="drill-cue" data-testid="drill-cue" role="status" hidden></div>
       <div class="endless-hud" data-testid="endless-hud"><b>阶段 1</b><span>首领 0 · 0m</span></div>
       <div class="squad-badge" data-testid="squad-count"><span class="sq-icon">◆</span><span class="sq-num">1</span></div>
       <div class="live-telemetry-panel" data-testid="live-telemetry-panel" data-ui-block="1"></div>
@@ -469,6 +472,7 @@ export class UI {
     this.nirvanaText = this.hud.querySelector('.nirvana-txt')!;
     this.liveTelToggleBtn = this.hud.querySelector('[data-testid=live-telemetry-toggle]')!;
     this.liveTelPanel = this.hud.querySelector('[data-testid=live-telemetry-panel]')!;
+    this.drillCue = this.hud.querySelector('.drill-cue')!;
     this.weaponChip = this.hud.querySelector('.weapon-chip')!;
     this.dpsChip = this.hud.querySelector('.dps-chip')!;
     this.wingmanChip = this.hud.querySelector('.wingman-chip')!;
@@ -1578,6 +1582,8 @@ export class UI {
   }
 
   showHud(sector: SectorId, endless = false, blitz = false): void {
+    this.drillRewardTime = 0;
+    this.drillCue.hidden = true;
     this.hud.classList.add('show');
     this.hud.classList.toggle('endless', endless);
     this.hud.classList.toggle('blitz', blitz);
@@ -1680,7 +1686,33 @@ export class UI {
   }
 
   // ------------------------------------------------------------------ HUD update
+  showDrillReward(simTime: number): void {
+    this.drillRewardTime = simTime + 0.95;
+    this.drillCue.dataset.action = 'reward';
+    this.drillCue.textContent = '双收  +300';
+    this.drillCue.hidden = false;
+  }
+
+  private updateDrillCue(snap: SimSnapshot): void {
+    if (snap.phase === 'PLAYING' && snap.simTime < this.drillRewardTime) return;
+    const cue = snap.drillCue;
+    if (!cue || snap.phase !== 'PLAYING') {
+      this.drillCue.hidden = true;
+      return;
+    }
+    const side = cue.x < 0 ? '左' : '右';
+    const opposite = cue.x < 0 ? '右' : '左';
+    const text = cue.action === 'vault' ? `${side}侧武器舱 · ${opposite}门 +16` :
+      cue.action === 'switch' ? `已破舱 · 切${side}接援军` :
+      cue.action === 'pad' ? `${side}侧跳台 · 越过减员门` : `瞄准${side}镜 · 折射破盾`;
+    if (this.drillCue.textContent !== text) this.drillCue.textContent = text;
+    this.drillCue.dataset.action = cue.action;
+    this.drillCue.hidden = false;
+  }
+
   updateHud(snap: SimSnapshot, score: number, badgePos: { x: number; y: number }): void {
+    this.hud.classList.toggle('drill-active', snap.inBlitzDrill);
+    this.updateDrillCue(snap);
     const rw = this.root.clientWidth || 390;
     const rh = this.root.clientHeight || 780;
     const rawX = Number.isFinite(badgePos.x) && badgePos.x > 1 ? badgePos.x : rw * 0.5;

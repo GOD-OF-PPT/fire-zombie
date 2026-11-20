@@ -213,6 +213,8 @@ export function damageVault(
       }
     }
 
+    const relay = world.cutback;
+    if (relay?.vaultId === vault.id && world.squadX * Math.sign(relay.vaultX) >= 0.8) relay.primed = true;
     if (!salvaged) {
       events.push({
         type: 'VAULT_BREAK',

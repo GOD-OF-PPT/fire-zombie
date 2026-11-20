@@ -817,7 +817,7 @@ export function resolveFriendlyProjectileCollisions(world: SimWorld, events: Sim
             const bypassShield = proj.weapon === 'rail' || proj.amplified || proj.remainingPierce >= 2;
             const wasChilledOrCracked = enemy.slowTimer > 0 || enemy.armorBroken;
             if (proj.amplified) { world.v23RefractedDmg = (world.v23RefractedDmg ?? 0) + Math.min(preHp, dmg); }
-            const killed = damageEnemy(world, enemy, dmg, proj.cryoSlowDuration, events, { bypassShield, weapon: proj.weapon });
+            const killed = damageEnemy(world, enemy, dmg, proj.cryoSlowDuration, events, { bypassShield, weapon: proj.weapon, reflected: proj.hitFixedMirror === true, impactX: cand.hitX });
             if (killed && ENEMY_CONFIGS[enemy.kind].tier >= 3) {
               spawnCoreShard(world, cand.hitX, cand.hitZ, ENEMY_CONFIGS[enemy.kind].tier === 4 ? 2 : 1);
             }

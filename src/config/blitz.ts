@@ -385,6 +385,7 @@ export function generateBlitzScript(seed: number): SectorScriptConfig {
   const [r1, r2, offSpec] = FUSION_STARTER_PAIRS[s % FUSION_STARTER_PAIRS.length]!;
   const flip = (s & 1) === 1 ? -1 : 1;
 
+  const drill = { mirrorX: -2.65 * flip, mirror: 232, guard: 238.8, vault: 296, gate: 302, pad: 334 };
   const encounters: RunwayEncounter[] = [
     // ACT 1: Rapid Squad Expansion (0..110m, t = 0..8s)
     {
@@ -430,53 +431,32 @@ export function generateBlitzScript(seed: number): SectorScriptConfig {
         ? { op: 'sub', value: 3, mutable: true, damagePerStep: 12, stepDelta: 3, maxValue: 20 }
         : { op: 'add', value: 4, mutable: false },
     },
+    // The mirror leads into the same braced sentry, vault and jump on either layout.
+    {
+      type: 'reflector',
+      crossDist: drill.mirror,
+      x: drill.mirrorX,
+      lean: (1 * flip) as 1 | -1,
+    },
     // Choice B: Pick Fusion Partner r2 (Lv.1+Lv.1 => sum=2, recognizing both weapons before Fusion!) OR +16 Squad Gate!
     {
       type: 'vault',
-      crossDist: 296,
+      crossDist: drill.vault,
       x: 2.45 * flip,
       hp: 82,
       reward: r2,
     },
     {
       type: 'gate_row',
-      crossDist: 302,
+      crossDist: drill.gate,
       layout: 'paired',
       left: flip > 0 ? { op: 'add', value: 16, mutable: false } : { op: 'add', value: 4, mutable: false },
       right: flip > 0 ? { op: 'add', value: 4, mutable: false } : { op: 'add', value: 16, mutable: false },
     },
 
-    // ACT 3: Tactical Pressure — 45° Reflector Bank-Shot + Shield Wall + Jump Pad over ÷2 (255..385m, t = 19..28s)
-    {
-      type: 'reflector',
-      crossDist: 258,
-      x: -3.35 * flip,
-      lean: (1 * flip) as 1 | -1,
-    },
-    {
-      type: 'enemies',
-      crossDist: 274,
-      units: [
-        { kind: 'phalanx', x: -1.7, dz: 0 },
-        { kind: 'glacier', x: 1.6, dz: 0.4 },
-        { kind: 'bomber', x: 0.0, dz: 1.5 },
-        { kind: 'burrower', x: -2.9, dz: 2.1 },
-        { kind: 'necromancer', x: 0.0, dz: 3.3 },
-        { kind: 'beholder', x: 2.9, dz: 2.4 },
-      ],
-    },
-    {
-      type: 'barrels',
-      crossDist: 284,
-      placements: [
-        { x: 2.35 * flip, dz: 0 },
-        { x: 0.0, dz: 3.1 },
-        { x: -2.35 * flip, dz: 6.2 },
-      ],
-    },
     {
       type: 'jump_pad',
-      crossDist: 334,
+      crossDist: drill.pad,
       x: -2.25 * flip,
     },
     {
@@ -598,6 +578,7 @@ export function generateBlitzScript(seed: number): SectorScriptConfig {
     scrollSpeed: 13.8,
     runwayLength: 745,
     startSquad: 14,
+    blitzDrill: drill,
     boss: { ...boss },
     encounters,
   };

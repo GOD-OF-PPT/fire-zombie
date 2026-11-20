@@ -1,4 +1,4 @@
-import type { EnemyKind, SimEvent } from '../types/game';
+import type { EnemyKind, SimEvent, SimSnapshot } from '../types/game';
 import { ENEMY_CONFIGS } from '../config/enemies';
 import { FIXED_DT, HORIZON_AHEAD, PLAYER_Z, TRACK_HALF_WIDTH } from '../config/constants';
 import type { RunwayEncounter } from '../config/sectors';
@@ -460,6 +460,9 @@ function stepDynamicSwarmDirector(
   remainingDist: number,
   scrollSpeed: number,
 ): void {
+  const drill = world.script.blitzDrill;
+  // Leave room for the authored mirror target, switch and jump. Resume waves after the landing.
+  if (drill && world.scrollDistance >= drill.mirror - HORIZON_AHEAD - 58 && world.scrollDistance < drill.pad + 24) return;
   const profile = computeDynamicSwarmProfile(world);
   const inBossArena = world.runwayProgress >= 1.0 && world.boss !== null && world.boss.active && world.boss.hp > 0;
   if (inBossArena) {
@@ -579,6 +582,9 @@ function spawnEncounter(world: SimWorld, enc: RunwayEncounter, scrollSpeed: numb
         single: enc.single,
       });
 
+      if (enc.crossDist === world.script.blitzDrill?.gate && world.cutback) {
+        world.cutback.supplyGateId = (world.cutback.vaultX < 0 ? row.rightGateId : row.leftGateId) ?? -1;
+      }
       if (enc.tetheredSiphon) {
         const targetGateId =
           enc.tetheredSiphon.side === 'left'
@@ -600,7 +606,10 @@ function spawnEncounter(world: SimWorld, enc: RunwayEncounter, scrollSpeed: numb
       break;
     }
     case 'vault': {
-      spawnVault(world, enc.x, baseZ, scrollSpeed, enc.hp, enc.reward);
+      const vault = spawnVault(world, enc.x, baseZ, scrollSpeed, enc.hp, enc.reward);
+      if (enc.crossDist === world.script.blitzDrill?.vault) {
+        world.cutback = { vaultId: vault.id, vaultX: enc.x, supplyGateId: -1, primed: false };
+      }
       break;
     }
     case 'enemies': {
@@ -686,7 +695,7 @@ function spawnEncounter(world: SimWorld, enc: RunwayEncounter, scrollSpeed: numb
       break;
     }
     case 'jump_pad': {
-      spawnJumpPad(world, enc.x, baseZ, scrollSpeed);
+      spawnJumpPad(world, enc.x, baseZ, scrollSpeed).flankAmbush = enc.crossDist === world.script.blitzDrill?.pad;
       break;
     }
     case 'reflector': {
@@ -792,7 +801,8 @@ export function stepTrackAndSpawner(world: SimWorld, events: SimEvent[]): void {
 
   const sectorCfg = world.script;
   if (world.scrollDistance < sectorCfg.runwayLength) {
-    const remaining = sectorCfg.runwayLength - world.scrollDistance;
+    const previousDistance = world.scrollDistance;
+    const remaining = sectorCfg.runwayLength - previousDistance;
     const decelFactor = remaining < 20.0 ? clamp(remaining / 20.0, 0.25, 1.0) : 1.0;
     world.currentScrollSpeed = sectorCfg.scrollSpeed * decelFactor;
     world.scrollDistance = Math.min(
@@ -800,6 +810,18 @@ export function stepTrackAndSpawner(world: SimWorld, events: SimEvent[]): void {
       world.scrollDistance + world.currentScrollSpeed * FIXED_DT,
     );
     world.runwayProgress = clamp(world.scrollDistance / sectorCfg.runwayLength, 0, 1);
+    const drill = sectorCfg.blitzDrill;
+    if (drill) {
+      const deployAt = drill.guard - 42;
+      // The sentry walks on from the verge, after the player can see the mirror.
+      if (previousDistance < deployAt && world.scrollDistance >= deployAt) {
+        const side = -Math.sign(drill.mirrorX);
+        const sentry = spawnEnemy(world, 'phalanx', side * 4.5,
+          PLAYER_Z - (drill.guard - world.scrollDistance), { hp: 330 });
+        sentry.anchoredGuard = true;
+        sentry.flankTargetX = drill.mirrorX + side * 4.9;
+      }
+    }
     spawnReadyRunwayEncounters(world);
     stepDynamicSwarmDirector(
       world,
@@ -820,5 +842,25 @@ export function stepTrackAndSpawner(world: SimWorld, events: SimEvent[]): void {
 
   if (world.runwayProgress >= 1.0 && !world.bossSpawned) {
     spawnSectorBoss(world, events);
+  }
+}
+
+export function getBlitzDrillCue(world: SimWorld): SimSnapshot['drillCue'] {
+  const drill = world.script.blitzDrill;
+  if (!drill) return;
+  const distance = world.scrollDistance;
+  if (distance >= drill.mirror - 51 && distance < drill.mirror - 3 &&
+      (distance < drill.guard - 42 || world.enemies.some(e => e.active && e.anchoredGuard && e.shieldHp > 0))) {
+    return { action: 'mirror', x: drill.mirrorX };
+  }
+  const relay = world.cutback;
+  if (relay && distance >= drill.vault - 54 && distance < drill.gate) {
+    if (relay.primed) return { action: 'switch', x: -relay.vaultX };
+    if (world.vaults.some(v => v.id === relay.vaultId && !v.broken && v.z < PLAYER_Z))
+      return { action: 'vault', x: relay.vaultX };
+  }
+  if (distance > drill.pad - 28 && distance < drill.pad) {
+    const pad = world.jumpPads.find(p => p.flankAmbush && !p.triggered);
+    if (pad) return { action: 'pad', x: pad.x };
   }
 }

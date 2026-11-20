@@ -73,3 +73,5 @@ export const BARREL_CHAIN_DELAY_SEC = 0.11;
 export const HIT_PULSE_DECAY_PER_SEC = 6.0;
 export const FLIP_PULSE_DECAY_PER_SEC = 2.2;
 export const LENS_PULSE_DECAY_PER_SEC = 4.5;
+
+export const JUMP_DURATION_SEC = 1.32;

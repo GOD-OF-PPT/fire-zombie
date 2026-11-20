@@ -73,6 +73,8 @@ export interface EnemySpawnOptions {
 export interface DamageEnemyOptions {
   /** True when hit by Rail pierce, Plasma splash, Amplified Lens/Reflector bolt, or Orbital Blades */
   bypassShield?: boolean;
+  reflected?: boolean;
+  impactX?: number;
   /** Prevents unbounded recursive chain explosions within the same tick */
   chainDepth?: number;
   /** Ballistic weapon caliber for material-accurate impact audio & VFX */
@@ -93,6 +95,9 @@ export function spawnEnemy(
   const enemy = world.enemyPool.acquire();
   enemy.id = options.customId ?? allocEntityId(world);
   enemy.kind = kind;
+  enemy.shieldImpactX = 0;
+  enemy.flankTargetX = undefined;
+  enemy.anchoredGuard = false;
   enemy.prevX = normalizeZero(clampedX);
   enemy.prevZ = z;
   enemy.x = normalizeZero(clampedX);
@@ -187,12 +192,19 @@ export function damageEnemy(
 
   // Aegis Phalanx directional energy shield mechanics
   if (enemy.kind === 'phalanx' && enemy.shieldHp > 0) {
+    if (opts.impactX !== undefined) enemy.shieldImpactX = clamp((opts.impactX - enemy.x) / enemy.radius, -1, 1);
+    if (enemy.anchoredGuard) {
+      // A braced sentry absorbs frontal fire. Shots through the marked mirror strike the hinges.
+      effectiveDamage = opts.reflected
+        ? Math.max(effectiveDamage, enemy.maxShieldHp * 0.12)
+        : effectiveDamage * 0.28;
+    }
     if (opts.bypassShield) {
       enemy.shieldHp = Math.max(0, enemy.shieldHp - effectiveDamage * 1.6);
       if (enemy.shieldHp <= 0) {
         enemy.shieldHp = 0;
         enemy.slowTimer = Math.max(enemy.slowTimer, 0.9);
-        events.push({ type: 'SHIELD_BREAK', x: enemy.x, z: enemy.z });
+        events.push({ type: 'SHIELD_BREAK', enemyId: enemy.id, x: enemy.x, z: enemy.z, reflected: opts.reflected });
       }
     } else {
       const absorbed = effectiveDamage * (1 - PHALANX_FRONT_LEAK_RATIO);
@@ -203,7 +215,7 @@ export function damageEnemy(
       if (prevShield > 0 && enemy.shieldHp <= 0) {
         enemy.shieldHp = 0;
         enemy.slowTimer = Math.max(enemy.slowTimer, 0.9);
-        events.push({ type: 'SHIELD_BREAK', x: enemy.x, z: enemy.z });
+        events.push({ type: 'SHIELD_BREAK', enemyId: enemy.id, x: enemy.x, z: enemy.z, reflected: opts.reflected });
       }
     }
   }
@@ -678,6 +690,12 @@ export function stepEnemiesAI(world: SimWorld, events: SimEvent[]): void {
       }
     }
 
+    if (enemy.flankTargetX !== undefined) {
+      const step = (enemy.anchoredGuard ? 2.0 : 4.4) * FIXED_DT;
+      const dx = clamp(enemy.flankTargetX - enemy.x, -step, step);
+      enemy.x = normalizeZero(enemy.x + dx * speedScale);
+    }
+    if (enemy.anchoredGuard && enemy.shieldHp > 0) vz = world.currentScrollSpeed;
     enemy.z += vz * FIXED_DT;
 
     // Phase Stalker lateral blink (disabled while Cryo-chilled!)

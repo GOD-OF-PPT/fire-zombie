@@ -361,7 +361,6 @@ function phalanx(): MonsterModel {
   const armor = 0x1b2940;
   const flesh = 0x4b627d;
   const cyan = 0x2ee6ff;
-  const core = 0xa8fbff;
 
   const body = new GeoBuilder();
   body
@@ -377,13 +376,11 @@ function phalanx(): MonsterModel {
     .add(box(0.08, 0.16, 0.32), cyan, 1.8, { p: [0, 0.72, 0.02] });
 
   const shieldArm = new GeoBuilder();
-  shieldArm
-    .add(cyl(0.62, 0.62, 0.08, 6).rotateX(Math.PI / 2), armor, 0, { p: [0, 0, 0.18] })
-    .add(cyl(0.5, 0.5, 0.05, 6).rotateX(Math.PI / 2), cyan, 2.3, { p: [0, 0, 0.22] })
-    .add(tor(0.6, 0.042, 5, 6).rotateZ(Math.PI / 6), core, 2.8, { p: [0, 0, 0.22] })
-    .add(oct(0.15), WHITE, 3.0, { p: [0, 0, 0.27], s: [1, 1.3, 0.5] })
-    .add(box(0.95, 0.05, 0.04), armor, 0, { p: [0, 0.16, 0.24] })
-    .add(box(0.95, 0.05, 0.04), armor, 0, { p: [0, -0.18, 0.24] });
+  // The detachable face is rendered with its live shield HP. Leave a gauntlet and
+  // a warm, recessed power cell on the soldier so breaking the plates exposes a target.
+  shieldArm.add(box(0.23, 0.32, 0.26), armor, 0, { p: [0, -0.05, 0.06] });
+  body.add(box(0.24, 0.25, 0.08), 0x111b24, 0, { p: [0, 0.15, 0.225] })
+    .add(oct(0.112), 0xffb35d, 1.35, { p: [0, 0.15, 0.29], s: [1, 1.26, 0.55] });
 
   const weaponArm = new GeoBuilder();
   addLimb(weaponArm, [0, 0, 0], [-0.08, -0.34, 0.2], 0.1, 0.085, flesh);

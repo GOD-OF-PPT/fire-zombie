@@ -1186,6 +1186,7 @@ export class Game {
         }
       }
     }
+    if (snap.inBlitzDrill) return; // This passage already gives a timed, lane-specific instruction.
     const near = (z: number): boolean => z > -55;
     for (const g of snap.gates) {
       if (near(g.z) && !g.triggered && !g.dimmed) {
@@ -1413,17 +1414,20 @@ export class Game {
           break;
         }
         case 'JUMP_SLAM': {
-          fx.ring(ev.x, ev.z, 0xffd84a, 6.4, 0.58);
-          fx.ring(ev.x, ev.z, 0x3ef3ff, 4.5, 0.42);
-          fx.burst(ev.x, 0.6, ev.z, 0xffd84a, 95, { speed: 13.5, size: 0.55, life: 0.68, up: 0.9 });
-          this.renderer.shake(0.42);
+          const crowd = ev.hits >= 3;
+          fx.ring(ev.x, ev.z, crowd ? 0xffcc69 : 0x93a5ab, crowd ? 6.6 : ev.hits ? 2.8 : 1.45, crowd ? 0.50 : 0.24);
+          fx.burst(ev.x, 0.15, ev.z, crowd ? 0xffce81 : 0xb9b4a3, crowd ? 42 : ev.hits ? 12 : 5,
+            { speed: crowd ? 8 : 2.6, size: crowd ? 0.34 : 0.14, life: 0.26, up: 0.35 });
           if (live) {
-            a.jumpSlam();
-            if (ev.hits >= 2) a.hordeDeathChorus(ev.hits, ev.x, ev.z);
-            this.ui.doFlash('rgba(255,216,74,0.42)', 0.28);
+            a.jumpSlam(ev.hits);
             this.addScore(180 + ev.hits * 35);
-            const p = this.worldToScreen(ev.x, 2.2, ev.z - 1.0);
-            this.ui.floatText(p.x, p.y, ev.hits > 0 ? `震地轰杀 ×${ev.hits}！` : '震地冲击！', 'gold', 1.12);
+            if (crowd) {
+              this.renderer.shake(0.30);
+              this.triggerHitStop(0.044);
+              a.hordeDeathChorus(ev.hits, ev.x, ev.z);
+              const p = this.worldToScreen(ev.x, 2.2, ev.z);
+              this.ui.floatText(p.x, p.y, `震地 ×${ev.hits}`, 'drill-impact', 0.92);
+            }
           }
           break;
         }
@@ -1726,20 +1730,14 @@ export class Game {
           break;
         }
         case 'SHIELD_BREAK': {
-          fx.burst(ev.x, 1.1, ev.z + 0.5, 0x3ef3ff, 42, { speed: 9.8, size: 0.46, life: 0.46, up: 0.85 });
-          fx.shatter(ev.x, 1.1, ev.z + 0.45, 0x62f4ff, 12, true);
-          fx.streaks(ev.x, 1.1, ev.z + 0.45, 0xffffff, 9, { speed: 15.5, len: 1.25, life: 0.25, coneBiasZ: -0.4 });
-          fx.groundFlash(ev.x, ev.z + 0.4, 0x3ef3ff, 2.5, 0.22);
-          fx.ring(ev.x, ev.z + 0.4, 0x3ef3ff, 2.6, 0.34);
-          this.renderer.shake(0.15);
-          this.renderer.kickCamera(0.1, ev.x * 0.2);
+          this.renderer.breakRiotShield(ev.enemyId, ev.x, ev.z);
+          fx.streaks(ev.x, 1.55, ev.z + 0.5, 0xffc077, 5, { speed: 6, len: 0.55, life: 0.18, coneBiasZ: 0.18 });
           if (live) {
-            this.triggerHitStop(0.022);
             a.shieldBreak(ev.x, ev.z);
-            if (this.specialFloatClock <= 0) {
-              this.specialFloatClock = 1.15;
-              const p = this.worldToScreen(ev.x, 1.75, ev.z);
-              this.ui.floatText(p.x, p.y, '破盾!', 'aegis', 0.66);
+            if (ev.reflected && this.specialFloatClock <= 0) {
+              this.specialFloatClock = 0.8;
+              const p = this.worldToScreen(ev.x, 2.1, ev.z);
+              this.ui.floatText(p.x, p.y, '折射破盾', 'drill-break', 0.58);
             }
           }
           break;
@@ -1933,6 +1931,14 @@ export class Game {
             a.gateTick(ev.newValue);
           }
           break;
+        case 'CUTBACK_COMPLETE': {
+          if (live) {
+            this.addScore(300);
+            a.cutbackChime();
+            this.ui.showDrillReward(snap.simTime);
+          }
+          break;
+        }
         case 'GATE_PASS': {
           const p = this.worldToScreen(snap.squadX, 1.6, PLAYER_Z - 1);
           if (ev.delta > 0) {
@@ -2311,7 +2317,7 @@ export class Game {
             this.input.rumble(0.72, 0.65, 180);
             this.addScore(520);
             const p = this.worldToScreen(snap.squadX, 2.4, PLAYER_Z - 1.0);
-            this.ui.floatText(p.x, p.y, `👑 夺取空投 · ${ev.rewardText}!`, 'gold', 1.15);
+            this.ui.floatText(p.x, p.y, ev.rewardText ? `夺取空投 · ${ev.rewardText}！` : '已夺取空投', 'gold', 1.15);
           }
           break;
         }

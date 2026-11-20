@@ -104,6 +104,9 @@ export function chooseHeuristicTargetX(snap: SimSnapshot): number {
     return bestX;
   }
 
+  // Follow the same marked lane a player sees in the Blitz lesson.
+  if (snap.drillCue) return snap.drillCue.x;
+
   // 2. Runway Tactical Controller
   // Check upcoming Dual-Lane Contract Corridor entry to pick the Bounty Elite side when strong!
   const upcomingWall = snap.contractWalls?.find(

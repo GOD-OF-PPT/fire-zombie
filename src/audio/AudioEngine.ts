@@ -2071,9 +2071,20 @@ export class AudioEngine {
     this.fmBell(330, 0.28, { ratio: 2.0, modIndex: 1.1, vol: 0.12, slideTo: 990, when: t, priority: true });
   }
 
-  jumpSlam(): void {
+  cutbackChime(): void {
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
+    this.fmBell(880, 0.08, { ratio: 2, modIndex: 0.7, vol: 0.11, when: t });
+    this.fmBell(1320, 0.16, { ratio: 2, modIndex: 0.6, vol: 0.10, when: t + 0.065 });
+  }
+
+  jumpSlam(hits = 3): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    if (hits < 3) {
+      this.playFoley('heavyBoom', { vol: hits ? 0.18 : 0.065, rate: hits ? 1.2 : 1.7, when: t });
+      return;
+    }
     this.duckMusic(0.48, 0.06, 0.2);
     this.playFoley('heavyBoom', { vol: 0.54, rate: 0.92, when: t, priority: true });
     this.subPunch(125, 28, 0.4, 0.38, t);

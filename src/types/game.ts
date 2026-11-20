@@ -297,6 +297,7 @@ export interface EnemySnapshot {
   linkedGateId: number | null; // For Corruptor Siphon tether beam
   hitPulse: number;
   isBountyElite?: boolean;
+  shieldImpactX?: number;
   shieldRatio?: number;   // >0 while Aegis Phalanx directional energy shield is active
   frenzyBuffed?: boolean; // true while inside a Frenzy Howler war-aura
   armorBroken?: boolean;  // true once Tier-3/4 elite drops <= 50% HP and sheds outer armor
@@ -554,7 +555,8 @@ export type SimEvent =
   | { type: 'SHOOT'; weapon: WeaponId; amplified: boolean; auxiliary?: boolean }
   | { type: 'ENEMY_HIT'; x: number; z: number; fatal: boolean; kind: EnemyKind; damage?: number; weapon?: WeaponId; hpRatio?: number }
   | { type: 'BOMBER_BLAST'; x: number; z: number; kills: number }
-  | { type: 'SHIELD_BREAK'; x: number; z: number }
+  | { type: 'SHIELD_BREAK'; enemyId: number; x: number; z: number; reflected?: boolean }
+  | { type: 'CUTBACK_COMPLETE'; x: number; z: number }
   | { type: 'ENEMY_ARMOR_BREAK'; kind: EnemyKind; x: number; z: number }
   | { type: 'SKY_CARGO_SPAWN'; x: number; z: number }
   | { type: 'SKY_CARGO_DROP'; x: number; z: number }
@@ -708,6 +710,10 @@ export interface SimSnapshot {
     peakSquad: number;
   };
   squadAirY: number;
+  jumpTimeLeft: number;
+  inBlitzDrill: boolean;
+  runwaySpeed: number;
+  drillCue?: { action: 'mirror' | 'vault' | 'switch' | 'pad'; x: number };
   mirrorTwinActive: boolean;
   blitzActive: boolean;
   activeFusions: readonly FusionId[];

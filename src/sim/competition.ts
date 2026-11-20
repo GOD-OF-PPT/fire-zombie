@@ -4,6 +4,7 @@ import {
   BLADES_ORBIT_RADIUS,
   DESPAWN_Z,
   FIXED_DT,
+  JUMP_DURATION_SEC,
   PLAYER_Z,
   RESONANCE_GAIN_VAULT_BREAK,
   TRACK_HALF_WIDTH,
@@ -34,7 +35,6 @@ import { addResonance } from './resonance';
 import { chargeCapacitorTower, hasChip, spawnCoreShard } from './v20Mechanics';
 import { damageVault, spawnPrismLens } from './weapons';
 
-const JUMP_DURATION_SEC = 1.32;
 const JUMP_PEAK_Y = 2.85;
 const SINGULARITY_RADIUS = 4.1;
 const SINGULARITY_DURATION = 2.2;
@@ -765,6 +765,7 @@ export function resolveJumpPadCrossings(world: SimWorld, events: SimEvent[]): vo
       if (Math.abs(world.squadX - pad.x) <= pad.halfWidth + world.formationRadius * 0.5) {
         pad.triggered = true;
         world.jumpTimer = JUMP_DURATION_SEC;
+        world.landingAmbushX = pad.flankAmbush ? pad.x : undefined;
         events.push({ type: 'JUMP_LAUNCH', x: world.squadX, z: PLAYER_Z });
         break;
       }
@@ -778,6 +779,17 @@ export function stepJumpArc(world: SimWorld, events: SimEvent[]): void {
     return;
   }
   const nextT = world.jumpTimer - FIXED_DT;
+  if (world.landingAmbushX !== undefined && world.jumpTimer > 0.43 && nextT <= 0.43) {
+    const lane = world.landingAmbushX;
+    const side = Math.sign(lane);
+    for (let i = 0; i < 7; i++) {
+      const startX = side * (i % 2 ? 4.45 : 3.85);
+      const startZ = PLAYER_Z - world.currentScrollSpeed * 0.43 - 1.7 - i * 0.5;
+      const runner = spawnEnemy(world, 'crawler', startX, startZ, { hp: 60 });
+      runner.flankTargetX = lane + (i % 3 - 1) * 0.7;
+    }
+    world.landingAmbushX = undefined;
+  }
   if (nextT <= 1e-9) {
     world.jumpTimer = 0;
     world.squadAirY = 0;

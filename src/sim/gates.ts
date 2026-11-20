@@ -419,6 +419,14 @@ export function resolveGateRowCrossings(world: SimWorld, events: SimEvent[]): bo
           polarity: chosenGate.polarity,
         });
 
+        const relay = world.cutback;
+        if (relay && (row.leftGateId === relay.supplyGateId || row.rightGateId === relay.supplyGateId)) {
+          if (relay.primed && chosenGate.id === relay.supplyGateId) {
+            events.push({ type: 'CUTBACK_COMPLETE', x: chosenGate.x, z: PLAYER_Z });
+          }
+          world.cutback = undefined;
+        }
+
         if (chosenGate.polarity === 'positive' && actualDelta > 0) {
           world.gateStreak += 1;
           if (actualDelta >= 6) {
