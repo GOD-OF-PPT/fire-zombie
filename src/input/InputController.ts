@@ -14,6 +14,7 @@ export function formatKeyLabel(key: string): string {
   if (key === 'Shift') return 'Shift';
   if (key === 'ArrowLeft') return '←';
   if (key === 'ArrowRight') return '→';
+  if (key === 'ArrowUp') return '↑';
   return key.length === 1 ? key.toUpperCase() : key;
 }
 
@@ -33,6 +34,7 @@ export class InputController {
   private overdriveRequested = false;
   private aegisRequested = false;
   private nukeQueueCount = 0;
+  private jumpQueueCount = 0;
   private lastNukeRepeatMs = 0;
   private swapWeaponRequested = false;
   private wingmanCycleRequested = false;
@@ -177,6 +179,12 @@ export class InputController {
             this.nukeQueueCount = Math.min(6, this.nukeQueueCount + 1);
             this.fireFirst();
           }
+        }
+      } else if ((matchesBind(e, this.keybinds.skyJump) || k === 'ArrowUp') && !e.repeat) {
+        if (this.enabled) {
+          e.preventDefault();
+          this.jumpQueueCount = Math.min(6, this.jumpQueueCount + 1);
+          this.fireFirst();
         }
       } else if ((matchesBind(e, this.keybinds.swapWeapon) || matchesChar(e, 'c')) && !e.repeat) {
         if (this.enabled) {
@@ -368,6 +376,11 @@ export class InputController {
         this.wingmanCycleRequested = true;
         this.fireFirst();
       }
+      // D-Pad Up (12) -> Stackable Sky-Vault Orbital Leap
+      if (justPressed(12)) {
+        this.jumpQueueCount = Math.min(6, this.jumpQueueCount + 1);
+        this.fireFirst();
+      }
     }
     // Back/Select (8) -> Speed toggle; Start (9) -> Pause/Resume
     if (justPressed(8)) this.onSpeedKey?.();
@@ -456,6 +469,21 @@ export class InputController {
     return false;
   }
 
+  requestSkyJump(): void {
+    if (this.enabled) {
+      this.jumpQueueCount = Math.min(6, this.jumpQueueCount + 1);
+      this.fireFirst();
+    }
+  }
+
+  consumeSkyJump(): boolean {
+    if (this.jumpQueueCount > 0) {
+      this.jumpQueueCount -= 1;
+      return true;
+    }
+    return false;
+  }
+
   requestWeaponSwap(): void {
     if (this.enabled) {
       this.swapWeaponRequested = true;
@@ -507,6 +535,7 @@ export class InputController {
     this.overdriveRequested = false;
     this.aegisRequested = false;
     this.nukeQueueCount = 0;
+    this.jumpQueueCount = 0;
     this.lastNukeRepeatMs = 0;
     this.swapWeaponRequested = false;
     this.wingmanCycleRequested = false;

@@ -7,6 +7,7 @@ import type {
   KeybindAction,
   KeybindMap,
   MutatorId,
+  NirvanaArchetype,
   NonNullDefeatReason,
   OverclockChipId,
   RangeControlCommand,
@@ -225,6 +226,7 @@ export class UI {
   private nukeScorch!: HTMLElement;
   private nukeScorchTimer: number | null = null;
   private nirvanaKeyLabel = 'G';
+  private jumpKeyLabel = 'W';
   private vignette!: HTMLElement;
   private squadBadge!: HTMLElement;
   private squadNum!: HTMLElement;
@@ -248,6 +250,9 @@ export class UI {
   private aegisBtn!: HTMLButtonElement;
   private aegisFill!: HTMLElement;
   private aegisText!: HTMLElement;
+  private jumpBtn!: HTMLButtonElement;
+  private jumpFill!: HTMLElement;
+  private jumpText!: HTMLElement;
   private nukeBtn!: HTMLButtonElement;
   private nukeFill!: HTMLElement;
   private nukeText!: HTMLElement;
@@ -255,6 +260,7 @@ export class UI {
   private resoReady = false;
   onOverdrive: (() => void) | null = null;
   onAegis: (() => void) | null = null;
+  onSkyJump: (() => void) | null = null;
   onNuke: (() => void) | null = null;
   onSwapWeapon: (() => void) | null = null;
   onWingmanCycle: (() => void) | null = null;
@@ -349,7 +355,7 @@ export class UI {
         <button class="icon-btn controls-btn" data-testid="controls-btn" title="键位与手柄设置" aria-label="操控设置">🎮</button>
       </div>
       <button class="big-btn start-btn" data-testid="start-btn"><span>出击</span></button>
-      <div class="title-foot" data-testid="input-prompt-bar">拖动/A D 移动 · 空格 超载 · E 脉冲 · Tab 切枪 · F 僚机 · G 奥义 · P 拍照</div>`);
+      <div class="title-foot" data-testid="input-prompt-bar">拖动/A D 移动 · W 跃迁 · 空格 超载 · E 脉冲 · Q 核弹 · G 奥义 · P 拍照</div>`);
     this.root.appendChild(this.title);
     this.title.querySelector('.start-btn')!.addEventListener('click', () => this.cb.onStart(this.selected));
     this.title.querySelector('[data-testid=blitz-btn]')!.addEventListener('click', () => this.cb.onBlitz());
@@ -418,6 +424,10 @@ export class UI {
         <button class="aegis-btn ready" data-testid="aegis-btn" aria-label="相位脉冲">
           <div class="aegis-fill"></div>
           <span class="aegis-txt">🛡 脉冲 [E]</span>
+        </button>
+        <button class="jump-btn ready" data-testid="jump-btn" aria-label="苍穹跃迁">
+          <div class="jump-fill"></div>
+          <span class="jump-txt">🚀 跃迁 ×3 [W]</span>
         </button>
         <div class="reso" data-testid="resonance"><div class="reso-fill"></div><span>共鸣</span></div>
         <button class="nirvana-btn" data-testid="nirvana-btn" aria-label="双武终焉奥义">
@@ -492,6 +502,9 @@ export class UI {
     this.aegisBtn = this.hud.querySelector('.aegis-btn')!;
     this.aegisFill = this.hud.querySelector('.aegis-fill')!;
     this.aegisText = this.hud.querySelector('.aegis-txt')!;
+    this.jumpBtn = this.hud.querySelector('[data-testid=jump-btn]')!;
+    this.jumpFill = this.hud.querySelector('.jump-fill')!;
+    this.jumpText = this.hud.querySelector('.jump-txt')!;
     this.nukeBtn = this.hud.querySelector('.nuke-btn')!;
     this.nukeFill = this.hud.querySelector('.nuke-fill')!;
     this.nukeText = this.hud.querySelector('.nuke-txt')!;
@@ -507,6 +520,14 @@ export class UI {
     this.aegisBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (e.detail === 0) this.onAegis?.();
+    });
+    this.jumpBtn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.onSkyJump?.();
+    });
+    this.jumpBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.detail === 0) this.onSkyJump?.();
     });
     this.nukeBtn.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
@@ -1003,6 +1024,7 @@ export class UI {
     const rows: Array<[KeybindAction, string]> = [
       ['moveLeft', '向左机动'],
       ['moveRight', '向右机动'],
+      ['skyJump', '苍穹跃迁 (可累积三段跳)'],
       ['overdrive', '共鸣超载齐射'],
       ['aegis', '相位力场脉冲'],
       ['nuke', '战术热核打击'],
@@ -1907,6 +1929,28 @@ export class UI {
         ? '🛡 脉冲 [E]'
         : `🛡 ${Math.ceil(aegisCd)}s`;
 
+    const jMax = Math.max(1, snap.jumpMaxStocks ?? 3);
+    const jStocks = snap.jumpStocks ?? jMax;
+    const jCharge = snap.jumpCharge ?? 1;
+    const jAirborne = (snap.jumpTimeLeft ?? 0) > 0.05;
+    const jStage = snap.jumpSkillStage ?? 0;
+    const jReady = jStocks >= 1 || Boolean(snap.isFiringRange);
+    const jChainAir = jReady && jAirborne && jStage < 3;
+    this.jumpBtn.classList.toggle('ready', jReady);
+    this.jumpBtn.classList.toggle('chain-air', jChainAir);
+    this.jumpBtn.classList.toggle('soaring', !jReady && jAirborne);
+    const jPct = jReady ? 100 : Math.max(0, Math.min(100, jCharge * 100));
+    this.jumpFill.style.width = `${jPct.toFixed(1)}%`;
+    const jStockTag = jMax > 1 ? ` ×${Math.max(1, jStocks)}` : '';
+    const jNextStageLabel = jStage >= 2 ? '三段!' : '二段!';
+    this.jumpText.textContent = jChainAir
+      ? `🚀 ${jNextStageLabel}${jStockTag} [${this.jumpKeyLabel}]`
+      : jReady
+        ? `🚀 跃迁${jStockTag} [${this.jumpKeyLabel}]`
+        : jAirborne
+          ? `🚀 凌空 ${(snap.squadAirY ?? 0).toFixed(1)}m`
+          : `🚀 充能 ${Math.round(jCharge * 100)}%`;
+
     const nukeDrop = snap.nukeDropTimer ?? 0;
     const nukeBlast = snap.nukeBlastTimer ?? 0;
     const nukeCharge = snap.nukeCharge ?? 1;
@@ -2265,12 +2309,52 @@ export class UI {
 
   setKeybindLabels(map: KeybindMap): void {
     this.nirvanaKeyLabel = formatKeyLabel(map.nirvanaBurst || 'g');
+    this.jumpKeyLabel = formatKeyLabel(map.skyJump || 'w');
   }
 
   pulseNirvanaNotReady(): void {
     this.nirvanaBtn.classList.remove('not-ready-shake');
     void this.nirvanaBtn.offsetWidth;
     this.nirvanaBtn.classList.add('not-ready-shake');
+  }
+
+  /** Blinding celestial core flash + divine archetype edge halo vignette for 2nd-Order Overlimit Nirvana! */
+  doNirvanaFlash(arch: NirvanaArchetype, strength = 1.0): void {
+    const scaled = Math.min(1, strength * this.flashScale);
+    if (scaled <= 0.01) return;
+    if (this.nukeScorchTimer !== null) {
+      clearTimeout(this.nukeScorchTimer);
+      this.nukeScorchTimer = null;
+    }
+    this.flash.style.background =
+      arch === 'singularity_supernova'
+        ? 'radial-gradient(circle at 50% 42%, rgba(255,252,255,0.98) 0%, rgba(226,142,255,0.92) 48%, rgba(255,168,54,0.85) 100%)'
+        : arch === 'absolute_zero_storm'
+          ? 'radial-gradient(circle at 50% 42%, rgba(252,255,255,0.98) 0%, rgba(132,248,255,0.92) 48%, rgba(42,136,255,0.85) 100%)'
+          : 'radial-gradient(circle at 50% 42%, rgba(255,255,248,0.98) 0%, rgba(255,232,118,0.92) 48%, rgba(62,243,255,0.85) 100%)';
+    this.flash.style.transition = 'none';
+    this.flash.style.opacity = String(Math.min(0.95, scaled * 0.94));
+    void this.flash.offsetWidth;
+    this.flash.style.transition = 'opacity 0.32s cubic-bezier(0.22, 1, 0.36, 1)';
+    this.flash.style.opacity = '0';
+
+    this.nukeScorch.style.background =
+      arch === 'singularity_supernova'
+        ? 'radial-gradient(circle at 50% 44%, rgba(255,245,255,0.0) 24%, rgba(214,104,255,0.44) 72%, rgba(255,152,38,0.86) 100%)'
+        : arch === 'absolute_zero_storm'
+          ? 'radial-gradient(circle at 50% 44%, rgba(240,255,255,0.0) 24%, rgba(84,242,255,0.44) 72%, rgba(24,108,255,0.86) 100%)'
+          : 'radial-gradient(circle at 50% 44%, rgba(255,252,225,0.0) 24%, rgba(255,216,74,0.46) 72%, rgba(62,243,255,0.86) 100%)';
+    this.nukeScorch.style.boxShadow =
+      arch === 'singularity_supernova'
+        ? 'inset 0 0 140px rgba(218, 108, 255, 0.92)'
+        : arch === 'absolute_zero_storm'
+          ? 'inset 0 0 140px rgba(84, 242, 255, 0.92)'
+          : 'inset 0 0 140px rgba(255, 224, 92, 0.92)';
+    this.nukeScorch.style.transition = 'none';
+    this.nukeScorch.style.opacity = String(Math.min(0.9, scaled * 0.86));
+    void this.nukeScorch.offsetWidth;
+    this.nukeScorch.style.transition = 'opacity 2.2s ease-out';
+    this.nukeScorch.style.opacity = '0';
   }
 
   doFlash(color: string, strength = 0.6): void {

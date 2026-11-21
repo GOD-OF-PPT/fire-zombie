@@ -54,7 +54,7 @@ import { CRYO_BRITTLE_DAMAGE_MULT, CRYO_SLOW_MOVE_SCALE } from '../config/weapon
 import { getEndlessEnemyHpMult } from '../config/endless';
 import { hasSynergy } from '../config/protocols';
 import { mitigateLossWithAegis } from './aegis';
-import { deployReserveIfAvailable, grantBountyJackpot, hasMutator, recordDamage, stepSeekerBlades } from './competition';
+import { deployReserveIfAvailable, grantBountyJackpot, grantSkyJumpCharge, hasMutator, recordDamage, SKY_JUMP_KILL_CHARGE, stepSeekerBlades } from './competition';
 import { addNukeKillCharge } from './nuke';
 import { triggerFormationLeaderBacklash } from './v21Mechanics';
 import { addNirvanaCharge } from './v23Mechanics';
@@ -263,6 +263,7 @@ export function damageEnemy(
     enemy.active = false;
     world.stats.kills += 1;
     addNukeKillCharge(world);
+    grantSkyJumpCharge(world, SKY_JUMP_KILL_CHARGE);
     addNirvanaCharge(world, ENEMY_CONFIGS[enemy.kind].tier >= 3 ? 0.030 : 0.012);
     if (world.mods.manualOverdrive && !world.mods.fairTrial && world.overdriveTimer <= 0) {
       world.resonance = Math.min(1.0, world.resonance + 0.005 * world.mods.resonanceMult);

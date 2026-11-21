@@ -47,11 +47,23 @@ test('Nirvana ultimate fires reliably via HUD click, [G] hotkey, and Firing Rang
   await expect(page.locator('.banner')).toContainText('终焉奥义');
 
   const afterHudClick = await page.evaluate(() => {
-    const s = (window as any).__prism.sim.getSnapshot();
-    return { activeTimer: s.nirvanaActiveTimer ?? 0, charge: s.nirvanaCharge ?? 0 };
+    const g = (window as any).__prism;
+    g.frame(0.03);
+    const s = g.sim.getSnapshot();
+    const sh = g.renderer.getScreenShakeOffset();
+    return {
+      activeTimer: s.nirvanaActiveTimer ?? 0,
+      charge: s.nirvanaCharge ?? 0,
+      nirvanaVisible: Boolean(g.renderer.nirvanaBurstGroup?.visible),
+      pillarCount: g.renderer.nirvanaPillars?.length ?? 0,
+      shakeMag: Math.hypot(sh.x, sh.y),
+    };
   });
   expect(afterHudClick.activeTimer).toBeGreaterThan(0);
   expect(afterHudClick.charge).toBe(0);
+  expect(afterHudClick.nirvanaVisible).toBe(true);
+  expect(afterHudClick.pillarCount).toBe(7);
+  expect(afterHudClick.shakeMag).toBeGreaterThan(3.5);
 
   // Also test Firing Range [G] hotkey & Firing Range trigger button emit full banner & burst
   await page.goto('/?seed=0');
@@ -66,6 +78,72 @@ test('Nirvana ultimate fires reliably via HUD click, [G] hotkey, and Firing Rang
   await page.getByTestId('rg-nirvana-btn').click();
   await expect(page.locator('.banner')).toContainText('终焉奥义');
   await expect.poll(() => page.evaluate(() => (window as any).__prism.sim.getSnapshot().nirvanaActiveTimer ?? 0)).toBeGreaterThan(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('Stackable Sky-Vault Jump Skill ([W] / jump-btn) chains mid-air stages, leaps high & far, and fits mobile portrait cleanly', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (err) => errors.push(err.message));
+
+  await page.getByTestId('start-btn').click();
+  await expect(page.getByTestId('hud')).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => page.evaluate(() => (window as any).__prism.state)).toBe('playing');
+
+  // Verify bottom-dock fits cleanly inside viewport without horizontal clipping
+  const dockFit = await page.evaluate(() => {
+    const dock = document.querySelector<HTMLElement>('.bottom-dock')!;
+    const jumpBtn = document.querySelector<HTMLElement>('[data-testid="jump-btn"]')!;
+    const dr = dock.getBoundingClientRect();
+    const jr = jumpBtn.getBoundingClientRect();
+    return {
+      vw: window.innerWidth,
+      dockRight: dr.right,
+      dockLeft: dr.left,
+      jumpWidth: jr.width,
+      pointerEvents: getComputedStyle(jumpBtn).pointerEvents,
+    };
+  });
+  expect(dockFit.dockLeft).toBeGreaterThanOrEqual(0);
+  expect(dockFit.dockRight).toBeLessThanOrEqual(dockFit.vw + 1);
+  expect(dockFit.jumpWidth).toBeGreaterThan(50);
+  expect(dockFit.pointerEvents).toBe('auto');
+
+  await expect(page.getByTestId('jump-btn')).toContainText('×3');
+
+  // Click HUD jump-btn -> Stage 1 Sky-Vault launch!
+  await page.getByTestId('jump-btn').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__prism.sim.getSnapshot().jumpSkillStage ?? 0)).toBe(1);
+  await expect(page.getByTestId('jump-btn')).toHaveClass(/chain-air/);
+
+  // Click HUD jump-btn again in mid-air -> Stage 2 Stratospheric Boost!
+  await page.getByTestId('jump-btn').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__prism.sim.getSnapshot().jumpSkillStage ?? 0)).toBe(2);
+  await expect(page.locator('.banner')).toContainText('二段推进');
+
+  // Step through apex and cataclysmic touchdown, verifying peak altitude > 9.5m and seismic slam quake!
+  const flightStats = await page.evaluate(() => {
+    const g = (window as any).__prism;
+    let peakAirY = g.sim.getSnapshot().squadAirY ?? 0;
+    let slammed = false;
+    for (let i = 0; i < 150; i++) {
+      const evs = g.sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
+      const snap = g.sim.getSnapshot();
+      g.handleEvents(evs, snap, true);
+      peakAirY = Math.max(peakAirY, snap.squadAirY ?? 0);
+      if (evs.some((e: any) => e.type === 'JUMP_SLAM')) {
+        slammed = true;
+        break;
+      }
+    }
+    g.frame(0.03);
+    const sh = g.renderer.getScreenShakeOffset();
+    return { peakAirY, slammed, slamShakeMag: Math.hypot(sh.x, sh.y) };
+  });
+  expect(flightStats.peakAirY).toBeGreaterThan(9.5);
+  expect(flightStats.slammed).toBe(true);
+  expect(flightStats.slamShakeMag).toBeGreaterThan(3.0);
 
   expect(errors).toEqual([]);
 });
@@ -143,9 +221,9 @@ test('Tactical Nuke triggers multi-wave seismic screen shake, viewport oscillati
     const settledUiTransform = uiRoot.style.transform;
 
     // Verify Meteor Sky-Slam landing VFX (`triggerJumpSlamVfx`) produces crisp 3D dome + screen quake!
-    g.renderer.triggerJumpSlamVfx(0, 17, 5);
+    g.renderer.triggerJumpSlamVfx(0, 17, 5, 2);
     const jumpSlamWave = sampleFrames(0.03, 3);
-    for (let i = 0; i < 6; i++) g.frame(0.15);
+    for (let i = 0; i < 8; i++) g.frame(0.18);
 
     // Verify shakeScale = 0 completely disables BOTH 3D quake and viewport CSS transform
     g.renderer.setAccessibility({ shakeScale: 0, flashScale: 1, colorblind: 'off', aimAssist: false });
@@ -171,7 +249,7 @@ test('Tactical Nuke triggers multi-wave seismic screen shake, viewport oscillati
 
   expect(shakeSamples.detonated).toBe(true);
   expect(shakeSamples.scorchOpacity).toBeGreaterThan(0.3);
-  expect(shakeSamples.jumpSlamWave.peakMag).toBeGreaterThan(1.5);
+  expect(shakeSamples.jumpSlamWave.peakMag).toBeGreaterThan(3.0);
   // Wave 1 & Wave 2 deliver powerful multi-pixel screen oscillation + overscan zoom + tilt via real Game.frame()
   expect(shakeSamples.wave1.peakMag).toBeGreaterThan(5);
   expect(shakeSamples.wave1.peakScale).toBeGreaterThan(1.01);

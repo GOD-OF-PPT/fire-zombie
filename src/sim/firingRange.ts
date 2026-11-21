@@ -185,6 +185,8 @@ export function stepFiringRangeWorld(world: SimWorld, events: SimEvent[]): void 
   }
   world.nukeStocks = world.nukeMaxStocks;
   world.nukeCharge = 1.0;
+  world.jumpStocks = world.jumpMaxStocks;
+  world.jumpCharge = 1.0;
 
   // Keep stationary dummies anchored in the holographic target zone (`z <= -13.5`)
   for (let i = 0; i < world.enemies.length; i++) {

@@ -650,6 +650,13 @@ export interface SimWorld {
 
   squadAirY: number;
   jumpTimer: number;
+  jumpStocks: number;
+  jumpMaxStocks: number;
+  jumpCharge: number;
+  jumpDuration: number;
+  jumpPeakY: number;
+  jumpSpeedMult: number;
+  jumpSkillStage: number;
   /** Set only by the marked pad. Side runners converge on the takeoff lane. */
   landingAmbushX?: number;
   cutback?: { vaultId: number; vaultX: number; supplyGateId: number; primed: boolean };
@@ -705,6 +712,7 @@ export interface SimWorld {
   nirvanaCharge: number;
   nirvanaActiveTimer: number;
   nirvanaArchetype: NirvanaArchetype | null;
+  nirvanaPulseMask: number;
   triPrismLatticeTimer: number;
   triPrismTickTimer: number;
   triPrismLinks: TriPrismLinkSnapshot[];

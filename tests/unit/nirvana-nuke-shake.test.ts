@@ -86,7 +86,19 @@ describe('Nirvana Ultimate Release Fix & Combat Charge Flow', () => {
     // Nirvana kills must never immediately self-refund the gauge while nirvanaActiveTimer > 0
     expect(postBurstCharge).toBe(0);
     expect(killsOnBurst).toBeGreaterThanOrEqual(0);
-    expect((sim.getSnapshot().nirvanaActiveTimer ?? 0)).toBeGreaterThan(2.0);
+    expect((sim.getSnapshot().nirvanaActiveTimer ?? 0)).toBeGreaterThan(2.5);
+
+    // Step through the full 2.8s Nirvana cataclysm window and verify follow-up orbital judgment waves!
+    const pulseWaves: number[] = [];
+    for (let k = 0; k < 180; k++) {
+      if (sim.getSnapshot().phase !== 'PLAYING') break;
+      const wEvs = sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
+      for (const e of wEvs) {
+        if (e.type === 'NIRVANA_WAVE_PULSE') pulseWaves.push(e.wave);
+      }
+      if ((sim.getSnapshot().nirvanaActiveTimer ?? 0) <= 0) break;
+    }
+    expect(pulseWaves).toEqual([1, 2]);
 
     const verify = verifyDeterministicReplay(sim.exportReplayLog());
     expect(verify.matched).toBe(true);
@@ -223,5 +235,81 @@ describe('Nirvana Ultimate Release Fix & Combat Charge Flow', () => {
     expect(slamHits).toBeGreaterThanOrEqual(4);
     expect(barrelBoom).toBe(true);
     expect(world.aegisTimer).toBeGreaterThan(0.2);
+  });
+
+  it('supports stackable 3-stock Sky-Vault Jump Skill ([W]/↑) with mid-air double/triple boosts, 7.6m-12.8m altitude, >65m leap distance, and 0-drift replay', async () => {
+    const stage = document.createElement('div');
+    document.body.appendChild(stage);
+    const input = new InputController(stage);
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', code: 'KeyW' }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', code: 'ArrowUp' }));
+      expect(input.consumeSkyJump()).toBe(true);
+      expect(input.consumeSkyJump()).toBe(true);
+      expect(input.consumeSkyJump()).toBe(false);
+    } finally {
+      input.destroy();
+      stage.remove();
+    }
+
+    const { SECTORS } = await import('../../src/config/sectors');
+    const sim = createSimulation();
+    sim.startSector(4, { endless: true, layoutSeed: 202611, bonusSquad: 16, damageMult: 1.5, manualOverdrive: true });
+    expect(sim.getSnapshot().jumpStocks).toBe(3);
+    expect(sim.getSnapshot().jumpMaxStocks).toBe(3);
+
+    const startDist = sim.getSnapshot().endless?.distance ?? 0;
+
+    // Stage 1 Sky-Vault launch!
+    const ev1 = sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0, skyJump: true });
+    const launch1 = ev1.find((e) => e.type === 'JUMP_LAUNCH');
+    expect(launch1 && launch1.type === 'JUMP_LAUNCH' ? launch1.skillStage : 0).toBe(1);
+    expect(sim.getSnapshot().jumpStocks).toBe(2);
+
+    let peakStage1Y = 0;
+    for (let i = 0; i < 36; i++) {
+      sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
+      peakStage1Y = Math.max(peakStage1Y, sim.getSnapshot().squadAirY ?? 0);
+    }
+    expect(peakStage1Y).toBeGreaterThan(6.2);
+
+    // Mid-air Stage 2 booster chain!
+    const ev2 = sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0, skyJump: true });
+    const launch2 = ev2.find((e) => e.type === 'JUMP_LAUNCH');
+    expect(launch2 && launch2.type === 'JUMP_LAUNCH' ? launch2.skillStage : 0).toBe(2);
+    expect(sim.getSnapshot().jumpStocks).toBe(1);
+
+    // Mid-air Stage 3 apex stratospheric chain!
+    for (let i = 0; i < 18; i++) sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
+    const ev3 = sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0, skyJump: true });
+    const launch3 = ev3.find((e) => e.type === 'JUMP_LAUNCH');
+    expect(launch3 && launch3.type === 'JUMP_LAUNCH' ? launch3.skillStage : 0).toBe(3);
+    expect(sim.getSnapshot().jumpStocks).toBe(0);
+
+    let peakStage3Y = 0;
+    let slamSkillStage = 0;
+    let slamRadius = 0;
+    for (let i = 0; i < 160; i++) {
+      const evs = sim.stepFixed({ dragDeltaX: 0, keyAxisX: 0 });
+      peakStage3Y = Math.max(peakStage3Y, sim.getSnapshot().squadAirY ?? 0);
+      const sl = evs.find((e) => e.type === 'JUMP_SLAM');
+      if (sl && sl.type === 'JUMP_SLAM') {
+        slamSkillStage = sl.skillStage ?? 0;
+        slamRadius = sl.radius ?? 0;
+        break;
+      }
+    }
+
+    const endDist = sim.getSnapshot().endless?.distance ?? 0;
+    expect(peakStage3Y).toBeGreaterThan(12.2);
+    expect(endDist - startDist).toBeGreaterThan(75);
+    expect(slamSkillStage).toBe(3);
+    expect(slamRadius).toBeGreaterThanOrEqual(19);
+    // Passive recharge already refilled some stock/charge during the multi-stage flight!
+    expect((sim.getSnapshot().jumpStocks ?? 0) + (sim.getSnapshot().jumpCharge ?? 0)).toBeGreaterThan(0.4);
+    void SECTORS;
+
+    const verify = verifyDeterministicReplay(sim.exportReplayLog());
+    expect(verify.matched).toBe(true);
   });
 });

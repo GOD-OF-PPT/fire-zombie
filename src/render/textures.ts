@@ -82,35 +82,46 @@ export function paintGatePlate(ctx: CanvasRenderingContext2D, w: number, h: numb
   ctx.strokeStyle = main;
   ctx.stroke();
 
-  // Inner holographic bezel, diagonal specular reflection & telemetry header
+  // Inner holographic bezel, diagonal specular reflection, hex-mesh watermark & telemetry header
   ctx.save();
   roundRect(ctx, pad + 8, pad + 8, w - pad * 2 - 16, h - pad * 2 - 16, 24);
   ctx.clip();
   const glass = ctx.createLinearGradient(0, 0, w * 0.85, h);
-  glass.addColorStop(0, 'rgba(220,255,255,0.2)');
-  glass.addColorStop(0.38, 'rgba(220,255,255,0.03)');
-  glass.addColorStop(0.5, 'rgba(255,255,255,0.1)');
+  glass.addColorStop(0, 'rgba(225,255,255,0.24)');
+  glass.addColorStop(0.28, 'rgba(180,245,255,0.06)');
+  glass.addColorStop(0.48, 'rgba(255,255,255,0.13)');
   glass.addColorStop(0.62, 'rgba(0,0,0,0)');
-  glass.addColorStop(1, 'rgba(0,0,0,0.25)');
+  glass.addColorStop(1, 'rgba(0,0,0,0.32)');
   ctx.fillStyle = glass;
   ctx.fillRect(0, 0, w, h);
 
-  ctx.fillStyle = 'rgba(195,255,245,0.05)';
-  for (let y = 22; y < h - 18; y += 6) ctx.fillRect(pad, y, w - pad * 2, 1.5);
+  // Subtle precision holographic scanlines + micro-dot matrix
+  ctx.fillStyle = 'rgba(195,255,245,0.055)';
+  for (let y = 22; y < h - 18; y += 6) ctx.fillRect(pad, y, w - pad * 2, 1.4);
+  ctx.fillStyle = 'rgba(255,255,255,0.07)';
+  for (let y = 34; y < h - 28; y += 22) {
+    for (let x = pad + 26 + ((y / 22) % 2) * 11; x < w - pad - 26; x += 22) {
+      ctx.fillRect(x, y, 2, 2);
+    }
+  }
+
+  // Top header glass ribbon
+  ctx.fillStyle = 'rgba(8, 22, 42, 0.52)';
+  ctx.fillRect(pad + 10, pad + 10, w - pad * 2 - 20, 34);
 
   ctx.strokeStyle = main;
-  ctx.globalAlpha = g.dimmed ? 0.25 : 0.45;
+  ctx.globalAlpha = g.dimmed ? 0.25 : 0.52;
   ctx.lineWidth = 2;
   ctx.strokeRect(pad + 14, pad + 14, w - pad * 2 - 28, h - pad * 2 - 28);
 
-  ctx.globalAlpha = g.dimmed ? 0.35 : 0.92;
+  ctx.globalAlpha = g.dimmed ? 0.35 : 0.94;
   ctx.font = '800 15px monospace';
   ctx.textAlign = 'left';
   ctx.fillStyle = g.mutable ? COLORS.gold : main;
-  ctx.fillText(g.mutable ? '◈ TARGETABLE // SHOOT TO BOOST' : '◈ SWARM GATE // FIXED', 36, 44);
+  ctx.fillText(g.mutable ? '◈ TARGETABLE // SHOOT TO BOOST' : '◈ SWARM GATE // FIXED', 36, 42);
   ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(215,245,255,0.65)';
-  ctx.fillText('PRISM-V5', w - 36, 44);
+  ctx.fillStyle = 'rgba(225,248,255,0.75)';
+  ctx.fillText('PRISM-MK.VI', w - 36, 42);
   ctx.restore();
 
   if (g.mutable) {
@@ -420,22 +431,33 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
     seed = (seed * 16807) % 2147483647;
     return seed / 2147483647;
   };
-  for (let i = 0; i < 320; i++) {
+  for (let i = 0; i < 360; i++) {
     const sx = rnd() * 1024;
     const sy = rnd() * 680;
-    const sr = 0.6 + rnd() * (i % 19 === 0 ? 2.4 : 1.2);
-    ctx.fillStyle = i % 7 === 0 ? 'rgba(255,235,170,0.8)' : 'rgba(205,240,255,0.68)';
+    const isHeroStar = i % 19 === 0;
+    const sr = 0.55 + rnd() * (isHeroStar ? 2.5 : 1.15);
+    ctx.fillStyle = i % 7 === 0 ? 'rgba(255,238,180,0.88)' : 'rgba(210,245,255,0.74)';
     ctx.beginPath();
     ctx.arc(sx, sy, sr, 0, Math.PI * 2);
     ctx.fill();
+    if (isHeroStar) {
+      ctx.strokeStyle = i % 2 === 0 ? 'rgba(150,245,255,0.48)' : 'rgba(255,235,175,0.48)';
+      ctx.lineWidth = 1.0;
+      ctx.beginPath();
+      ctx.moveTo(sx - sr * 4.2, sy);
+      ctx.lineTo(sx + sr * 4.2, sy);
+      ctx.moveTo(sx, sy - sr * 4.2);
+      ctx.lineTo(sx, sy + sr * 4.2);
+      ctx.stroke();
+    }
   }
 
   const mx = 710;
   const my = 212;
   const radius = 108;
-  const halo = ctx.createRadialGradient(mx, my, radius * 0.65, mx, my, radius * 2.3);
-  halo.addColorStop(0, 'rgba(145,225,255,0.28)');
-  halo.addColorStop(0.5, 'rgba(120,185,255,0.09)');
+  const halo = ctx.createRadialGradient(mx, my, radius * 0.62, mx, my, radius * 2.45);
+  halo.addColorStop(0, 'rgba(155,235,255,0.34)');
+  halo.addColorStop(0.48, 'rgba(120,185,255,0.12)');
   halo.addColorStop(1, 'rgba(120,185,255,0)');
   ctx.fillStyle = halo;
   ctx.fillRect(mx - radius * 2.5, my - radius * 2.5, radius * 5, radius * 5);
@@ -443,7 +465,7 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
   ctx.save();
   ctx.translate(mx, my);
   ctx.rotate(-0.32);
-  ctx.strokeStyle = 'rgba(165,235,255,0.28)';
+  ctx.strokeStyle = 'rgba(165,235,255,0.32)';
   ctx.lineWidth = 10;
   ctx.beginPath();
   ctx.ellipse(0, 0, radius * 1.92, radius * 0.36, 0, Math.PI, Math.PI * 2);
@@ -455,10 +477,10 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
   ctx.arc(mx, my, radius, 0, Math.PI * 2);
   ctx.clip();
   const moon = ctx.createRadialGradient(mx - 42, my - 40, 10, mx + 16, my + 20, radius * 1.3);
-  moon.addColorStop(0, '#e0f4ff');
-  moon.addColorStop(0.42, '#8db4d2');
-  moon.addColorStop(0.76, '#334e78');
-  moon.addColorStop(1, '#0e1f3d');
+  moon.addColorStop(0, '#e8f8ff');
+  moon.addColorStop(0.40, '#8db8d8');
+  moon.addColorStop(0.75, '#2f4c78');
+  moon.addColorStop(1, '#0b1936');
   ctx.fillStyle = moon;
   ctx.fillRect(mx - radius, my - radius, radius * 2, radius * 2);
 
@@ -471,44 +493,63 @@ export function makeSkyTexture(stops: [string, string, string]): THREE.CanvasTex
     ctx.ellipse(x, y, r, r * 0.68, -0.35, 0, Math.PI * 2);
     ctx.fill();
   }
-  ctx.strokeStyle = 'rgba(98,244,255,0.38)';
+  ctx.strokeStyle = 'rgba(98,244,255,0.46)';
   ctx.lineWidth = 1.6;
-  for (let k = 0; k < 5; k++) {
+  for (let k = 0; k < 6; k++) {
     ctx.beginPath();
-    ctx.arc(mx + 34, my + 26, 26 + k * 14, 0.2 + k * 0.3, 1.35 + k * 0.22);
+    ctx.arc(mx + 34, my + 26, 22 + k * 13, 0.18 + k * 0.28, 1.42 + k * 0.2);
     ctx.stroke();
   }
+  // Crisp cyan atmospheric crescent limb-glow
+  ctx.strokeStyle = 'rgba(190,248,255,0.55)';
+  ctx.lineWidth = 3.2;
+  ctx.beginPath();
+  ctx.arc(mx, my, radius - 1.5, Math.PI * 0.92, Math.PI * 1.68);
+  ctx.stroke();
   ctx.restore();
 
   ctx.save();
   ctx.translate(mx, my);
   ctx.rotate(-0.32);
-  ctx.strokeStyle = 'rgba(185,245,255,0.52)';
+  ctx.strokeStyle = 'rgba(195,248,255,0.58)';
   ctx.lineWidth = 8;
   ctx.beginPath();
   ctx.ellipse(0, 0, radius * 1.92, radius * 0.36, 0, 0, Math.PI);
   ctx.stroke();
-  ctx.strokeStyle = 'rgba(255,210,110,0.34)';
-  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = 'rgba(255,218,120,0.42)';
+  ctx.lineWidth = 2.6;
   ctx.beginPath();
   ctx.ellipse(0, 0, radius * 1.68, radius * 0.31, 0, 0, Math.PI);
   ctx.stroke();
   ctx.restore();
 
-  const hg = ctx.createLinearGradient(0, 560, 0, 920);
+  const hg = ctx.createLinearGradient(0, 545, 0, 920);
   hg.addColorStop(0, 'rgba(160,235,255,0)');
-  hg.addColorStop(0.55, 'rgba(150,220,255,0.16)');
-  hg.addColorStop(1, 'rgba(10,18,40,0.45)');
+  hg.addColorStop(0.52, 'rgba(135,220,255,0.19)');
+  hg.addColorStop(0.82, 'rgba(255,165,235,0.08)');
+  hg.addColorStop(1, 'rgba(8,16,38,0.52)');
   ctx.fillStyle = hg;
-  ctx.fillRect(0, 560, 1024, 360);
+  ctx.fillRect(0, 545, 1024, 375);
 
-  ctx.fillStyle = 'rgba(8,16,38,0.42)';
-  for (let x = 0; x < 1024; x += 28) {
-    const sh = 35 + Math.floor(rnd() * 125);
-    const sw = 16 + Math.floor(rnd() * 18);
-    ctx.fillRect(x, 790 - sh, sw, sh + 240);
+  // Distant multi-layered megacity skyline + glowing architectural micro-windows
+  for (let x = 0; x < 1024; x += 24) {
+    const sh = 38 + Math.floor(rnd() * 135);
+    const sw = 15 + Math.floor(rnd() * 16);
+    const topY = 792 - sh;
+    ctx.fillStyle = 'rgba(8,16,38,0.52)';
+    ctx.fillRect(x, topY, sw, sh + 240);
+    ctx.fillStyle = rnd() < 0.3 ? 'rgba(255,210,115,0.42)' : 'rgba(98,244,255,0.42)';
+    ctx.fillRect(x + 2, topY, sw - 4, 1.8);
+    for (let wy = topY + 8; wy < 790; wy += 9) {
+      if (rnd() < 0.45) {
+        ctx.fillRect(x + 3 + Math.floor(rnd() * Math.max(2, sw - 8)), wy, 3, 2);
+      }
+    }
     if (sh > 95) {
-      ctx.fillRect(x + sw * 0.44, 790 - sh - 34, 3, 34);
+      ctx.fillStyle = 'rgba(8,16,38,0.6)';
+      ctx.fillRect(x + sw * 0.44, topY - 36, 2.5, 36);
+      ctx.fillStyle = 'rgba(255,95,150,0.75)';
+      ctx.fillRect(x + sw * 0.44 - 1, topY - 38, 4.5, 4.5);
     }
   }
 

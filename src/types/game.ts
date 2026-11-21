@@ -99,7 +99,7 @@ export type TacticalEventKind = 'supply_beacon' | 'runaway_cart';
 export type ColorblindMode = 'none' | 'deuteranopia' | 'tritanopia';
 export type ReplayCameraMode = 'chase' | 'tactical_top' | 'action_closeup';
 export type KeybindAction = 'moveLeft' | 'moveRight' | 'overdrive' | 'aegis' | 'nuke' | 'swapWeapon' | 'wingmanMode'
-  | 'nirvanaBurst';
+  | 'nirvanaBurst' | 'skyJump';
 
 export interface KeybindMap {
   moveLeft: string;
@@ -110,6 +110,7 @@ export interface KeybindMap {
   swapWeapon: string;
   wingmanMode: string;
   nirvanaBurst: string;
+  skyJump: string;
 }
 
 export const DEFAULT_KEYBINDS: KeybindMap = {
@@ -121,6 +122,7 @@ export const DEFAULT_KEYBINDS: KeybindMap = {
   swapWeapon: 'Tab',
   wingmanMode: 'f',
   nirvanaBurst: 'g',
+  skyJump: 'w',
 };
 
 export interface RangeControlCommand {
@@ -241,6 +243,8 @@ export interface InputSample {
   cycleWingman?: boolean;
   /** Fires 2nd-order Overlimit Nirvana Burst [G / LB+RB] */
   nirvanaBurst?: boolean;
+  /** Triggers stackable Sky-Vault Orbital Leap [W / ArrowUp / HUD 🚀] */
+  skyJump?: boolean;
 }
 
 export interface TierBreakdown {
@@ -576,8 +580,8 @@ export type SimEvent =
   | { type: 'SWARM_SURGE'; tier: number; mult: number; count: number }
   | { type: 'FUSION_UNLOCK'; fusionId: FusionId }
   | { type: 'SINGULARITY_SPAWN'; x: number; z: number; radius: number }
-  | { type: 'JUMP_LAUNCH'; x: number; z: number }
-  | { type: 'JUMP_SLAM'; x: number; z: number; hits: number }
+  | { type: 'JUMP_LAUNCH'; x: number; z: number; skillStage?: number; remainingStocks?: number; peakY?: number }
+  | { type: 'JUMP_SLAM'; x: number; z: number; hits: number; skillStage?: number; radius?: number; bossDamage?: number }
   | { type: 'REFLECTOR_BOUNCE'; x: number; z: number }
   | { type: 'BOUNTY_JACKPOT'; x: number; z: number; squadGain: number; weapon: WeaponId; newLevel: number }
   | { type: 'BOSS_PART_BREAK'; slot: BossPartSlot; label: string; effectDesc?: string; x: number; z: number }
@@ -632,6 +636,7 @@ export type SimEvent =
   | { type: 'NEMESIS_DEFEAT'; x: number; z: number; relicId: ExpeditionRelicId; bonusSquad: number }
   | { type: 'TRI_PRISM_LATTICE_ONLINE'; x: number; z: number; duration: number }
   | { type: 'OVERLIMIT_NIRVANA_BURST'; archetype: NirvanaArchetype; kills: number; bossDamage: number; x: number; z: number }
+  | { type: 'NIRVANA_WAVE_PULSE'; archetype: NirvanaArchetype; wave: 1 | 2; kills: number; bossDamage: number; x: number; z: number }
   | { type: 'BOSS_DEFEAT'; x: number; z: number; bossId: BossSnapshot['id'] }
   | { type: 'ENDLESS_STAGE_START'; wave: number; bosses: number; bonus: number }
   | { type: 'RUN_VICTORY'; sector: SectorId; finalSquad: number }
@@ -727,6 +732,11 @@ export interface SimSnapshot {
   };
   squadAirY: number;
   jumpTimeLeft: number;
+  jumpDuration?: number;
+  jumpStocks?: number;
+  jumpMaxStocks?: number;
+  jumpCharge?: number;
+  jumpSkillStage?: number;
   inBlitzDrill: boolean;
   runwaySpeed: number;
   drillCue?: { action: 'mirror' | 'vault' | 'switch' | 'pad'; x: number };

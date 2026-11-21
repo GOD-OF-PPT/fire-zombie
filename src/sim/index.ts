@@ -68,6 +68,7 @@ export function createSimulation(): SimulationController {
   let pendingOverdrive = false;
   let pendingAegisPulse = false;
   let pendingNukeCount = 0;
+  let pendingSkyJumpCount = 0;
   let pendingSwapWeapon = false;
   let pendingCycleWingman = false;
   let pendingNirvanaBurst = false;
@@ -84,6 +85,7 @@ export function createSimulation(): SimulationController {
       pendingOverdrive = false;
       pendingAegisPulse = false;
       pendingNukeCount = 0;
+      pendingSkyJumpCount = 0;
       pendingSwapWeapon = false;
       pendingCycleWingman = false;
       pendingNirvanaBurst = false;
@@ -120,6 +122,7 @@ export function createSimulation(): SimulationController {
         pendingOverdrive = false;
         pendingAegisPulse = false;
         pendingNukeCount = 0;
+        pendingSkyJumpCount = 0;
         pendingSwapWeapon = false;
         pendingCycleWingman = false;
         pendingNirvanaBurst = false;
@@ -134,6 +137,7 @@ export function createSimulation(): SimulationController {
       pendingOverdrive = false;
       pendingAegisPulse = false;
       pendingNukeCount = 0;
+      pendingSkyJumpCount = 0;
       pendingSwapWeapon = false;
       pendingCycleWingman = false;
       pendingNirvanaBurst = false;
@@ -146,6 +150,7 @@ export function createSimulation(): SimulationController {
       accumulator = 0;
       pendingDragDeltaX = 0;
       pendingNukeCount = 0;
+      pendingSkyJumpCount = 0;
       resetSimWorldToTitle(world);
       invalidateSnapshot();
     },
@@ -175,6 +180,7 @@ export function createSimulation(): SimulationController {
         swapWeapon: input.swapWeapon === true,
         cycleWingman: input.cycleWingman === true,
         nirvanaBurst: input.nirvanaBurst === true,
+        skyJump: input.skyJump === true,
       };
       recorder.recordStep(stepInp);
       const events = stepWorldFixed(world, stepInp);
@@ -200,6 +206,7 @@ export function createSimulation(): SimulationController {
       if (input.overdrive === true) pendingOverdrive = true;
       if (input.aegisPulse === true) pendingAegisPulse = true;
       if (input.nukeStrike === true) pendingNukeCount = Math.min(8, pendingNukeCount + 1);
+      if (input.skyJump === true) pendingSkyJumpCount = Math.min(6, pendingSkyJumpCount + 1);
       if (input.swapWeapon === true) pendingSwapWeapon = true;
       if (input.cycleWingman === true) pendingCycleWingman = true;
       if (input.nirvanaBurst === true) pendingNirvanaBurst = true;
@@ -225,6 +232,8 @@ export function createSimulation(): SimulationController {
         }
         const fireNukeStep = pendingNukeCount > 0;
         if (fireNukeStep) pendingNukeCount -= 1;
+        const fireJumpStep = pendingSkyJumpCount > 0;
+        if (fireJumpStep) pendingSkyJumpCount -= 1;
         const stepInp: InputSample = {
           dragDeltaX: perStepDrag,
           keyAxisX,
@@ -234,6 +243,7 @@ export function createSimulation(): SimulationController {
           swapWeapon: pendingSwapWeapon,
           cycleWingman: pendingCycleWingman,
           nirvanaBurst: pendingNirvanaBurst,
+          skyJump: fireJumpStep,
         };
         recorder.recordStep(stepInp);
         const stepEvents = stepWorldFixed(world, stepInp);

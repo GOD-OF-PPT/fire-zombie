@@ -407,6 +407,10 @@ export class Game {
     });
     this.ui.onOverdrive = () => this.input.requestOverdrive();
     this.ui.onAegis = () => this.input.requestAegis();
+    this.ui.onSkyJump = () => {
+      this.audio.unlock();
+      this.input.requestSkyJump();
+    };
     this.ui.onSwapWeapon = () => this.input.requestWeaponSwap();
     this.ui.onNuke = () => {
       this.audio.unlock();
@@ -1087,9 +1091,27 @@ export class Game {
         const swapWeapon = this.input.consumeWeaponSwap();
         const cycleWingman = this.input.consumeWingmanCycle();
         const nirvanaBurst = this.input.consumeNirvanaBurst();
-        const events = this.sim.tickFrame(simDt, { dragDeltaX: drag, keyAxisX: axis, overdrive, aegisPulse, nukeStrike, swapWeapon, cycleWingman, nirvanaBurst });
+        const skyJump = this.input.consumeSkyJump();
+        const events = this.sim.tickFrame(simDt, {
+          dragDeltaX: drag,
+          keyAxisX: axis,
+          overdrive,
+          aegisPulse,
+          nukeStrike,
+          swapWeapon,
+          cycleWingman,
+          nirvanaBurst,
+          skyJump,
+        });
         snap = this.sim.getSnapshot();
         this.handleEvents(events, snap, true);
+        if (skyJump && (pre.jumpStocks ?? 0) <= 0 && !pre.isFiringRange && !events.some((ev) => ev.type === 'JUMP_LAUNCH')) {
+          if (this.nirvanaDenyClock <= 0) {
+            this.nirvanaDenyClock = 1.05;
+            const jPct = Math.round(Math.max(0, Math.min(1, snap.jumpCharge ?? 0)) * 100);
+            this.ui.toast(`🚀 苍穹跃迁充能中 ${jPct}% · 歼敌加速蓄能`, 1350);
+          }
+        }
         const nirvanaReadyNow =
           !this.fairTrial && (Boolean(snap.isFiringRange) || (snap.nirvanaCharge ?? 0) >= 0.999);
         if (nirvanaBurst && !nirvanaReadyNow && !events.some((ev) => ev.type === 'OVERLIMIT_NIRVANA_BURST')) {
@@ -1155,7 +1177,11 @@ export class Game {
       (Math.abs(sh.x) > 0.05 || Math.abs(sh.y) > 0.05 || Math.abs(sh.rotDeg) > 0.01);
     if (allowViewportShake) {
       this.canvas.style.transform = `translate3d(${sh.x.toFixed(2)}px, ${sh.y.toFixed(2)}px, 0) rotate(${sh.rotDeg.toFixed(3)}deg) scale(${sh.scale.toFixed(4)})`;
-      this.uiRoot.style.transform = `translate3d(${(sh.x * 0.72).toFixed(2)}px, ${(sh.y * 0.72).toFixed(2)}px, 0) rotate(${(sh.rotDeg * 0.55).toFixed(3)}deg)`;
+      if (!this.inRange) {
+        this.uiRoot.style.transform = `translate3d(${(sh.x * 0.72).toFixed(2)}px, ${(sh.y * 0.72).toFixed(2)}px, 0) rotate(${(sh.rotDeg * 0.55).toFixed(3)}deg)`;
+      } else {
+        this.uiRoot.style.transform = '';
+      }
       this.viewportShakeActive = true;
     } else if (this.viewportShakeActive) {
       this.canvas.style.transform = '';
@@ -1450,43 +1476,77 @@ export class Game {
           break;
         }
         case 'JUMP_LAUNCH': {
-          fx.ring(ev.x, ev.z, 0x3ef3ff, 5.8, 0.50);
-          fx.ring(ev.x, ev.z, 0xffd84a, 3.6, 0.36);
-          fx.burst(ev.x, 0.4, ev.z, 0x62f4ff, 72, { speed: 11.5, size: 0.48, life: 0.58, up: 1.8 });
-          fx.streaks(ev.x, 0.6, ev.z, 0xb8ffff, 16, { speed: 16, len: 1.6, life: 0.30, coneBiasZ: -0.35 });
-          this.renderer.triggerShockwave(0.34);
-          this.renderer.shake(0.22);
+          const stage = ev.skillStage ?? 0;
+          this.renderer.triggerJumpLaunchVfx(ev.x, ev.z, stage, snap.squadAirY ?? 0);
           if (live) {
-            a.jumpLaunch();
-            this.input.rumble(0.45, 0.35, 140);
-            this.addScore(140);
-            const p = this.worldToScreen(snap.squadX, 2.5, PLAYER_Z - 0.8);
-            this.ui.floatText(p.x, p.y - 12, '🚀 跃空突袭！', 'aegis', 1.0);
+            a.jumpLaunch(stage);
+            this.input.rumble(stage >= 1 ? 0.72 : 0.45, stage >= 1 ? 0.62 : 0.35, stage >= 1 ? 220 : 140);
+            this.addScore(140 + stage * 90);
+            if (stage >= 1) {
+              this.ui.doFlash(stage >= 2 ? 'rgba(255, 226, 106, 0.34)' : 'rgba(98, 244, 255, 0.28)', 0.22);
+            }
+            const p = this.worldToScreen(snap.squadX, 2.5 + (snap.squadAirY ?? 0) * 0.4, PLAYER_Z - 0.8);
+            const launchTxt =
+              stage >= 3
+                ? `🚀 三段破界跃迁 · 海拔${(ev.peakY ?? 12.8).toFixed(1)}m!`
+                : stage === 2
+                  ? `🚀 二段苍穹推进 · 极速跨越!`
+                  : stage === 1
+                    ? `🚀 苍穹跃迁起跳${(ev.remainingStocks ?? 0) > 0 ? ' · 可空中二段[W]!' : '!'}`
+                    : '🚀 跃空突袭！';
+            this.ui.floatText(p.x, p.y - 12, launchTxt, stage >= 2 ? 'gold' : 'aegis', 1.05);
+            if (stage >= 2) {
+              this.ui.showBanner(
+                html`<div class="b-kicker">🚀 STRATOSPHERIC SKY-VAULT ×${stage}</div><div class="b-title" style="color:${stage >= 3 ? '#ff8cff' : '#ffe26a'}">${stage >= 3 ? '三段破界 · 平流层极速巡航！' : '二段推进 · 超音速飞跃大桥！'}</div><div class="b-sub">峰值高度 ${(ev.peakY ?? 10.4).toFixed(1)}m · 落地触发全桥天陨灭世重砸！</div>`,
+                'od',
+                1150,
+              );
+            }
           }
           break;
         }
         case 'JUMP_SLAM': {
-          const crowd = ev.hits >= 3;
-          this.renderer.triggerJumpSlamVfx(ev.x, ev.z, ev.hits);
+          const stage = ev.skillStage ?? 0;
+          const isSkill = stage >= 1;
+          const crowd = isSkill || ev.hits >= 3;
+          this.renderer.triggerJumpSlamVfx(ev.x, ev.z, ev.hits, stage);
           if (live) {
-            a.jumpSlam(ev.hits);
-            this.addScore(180 + ev.hits * 40);
-            this.input.rumble(crowd ? 0.88 : 0.58, crowd ? 0.78 : 0.45, crowd ? 320 : 190);
-            this.ui.doFlash(
-              crowd ? 'rgba(255, 224, 120, 0.36)' : 'rgba(98, 244, 255, 0.26)',
-              crowd ? 0.24 : 0.16,
-            );
-            this.triggerHitStop(crowd ? 0.048 : 0.022);
-            if (crowd) {
-              a.hordeDeathChorus(ev.hits, ev.x, ev.z);
+            a.jumpSlam(ev.hits, stage);
+            this.addScore(180 + ev.hits * 40 + stage * 180 + Math.round((ev.bossDamage ?? 0) * 0.35));
+            if (isSkill) {
+              this.triggerHitStop(stage >= 2 ? 0.068 : 0.052);
+              this.bulletTimeDur = 0.20;
+              this.bulletTimeTimer = 0.20;
+              this.input.rumble(1.0, 0.92, 460);
+              this.ui.doFlash(
+                stage >= 2 ? 'rgba(255, 232, 118, 0.62)' : 'rgba(98, 244, 255, 0.50)',
+                stage >= 2 ? 0.42 : 0.34,
+              );
+              if (ev.hits >= 2) a.hordeDeathChorus(ev.hits, ev.x, ev.z);
+              const bossSub = (ev.bossDamage ?? 0) > 0 ? ` · 首领重创 -${ev.bossDamage}` : '';
+              this.ui.showBanner(
+                html`<div class="b-kicker">☄️ ORBITAL METEOR TOUCHDOWN · STAGE ${stage}</div><div class="b-title" style="color:${stage >= 2 ? '#ffe46b' : '#7ef9ff'}">☄️ 天陨灭世重砸${ev.hits > 0 ? ` ×${ev.hits}` : ''}！</div><div class="b-sub">冲击半径 ${(ev.radius ?? 14).toFixed(1)}m 碎盾震爆${bossSub}</div>`,
+                'od',
+                1450,
+              );
+            } else {
+              this.input.rumble(crowd ? 0.88 : 0.58, crowd ? 0.78 : 0.45, crowd ? 320 : 190);
+              this.ui.doFlash(
+                crowd ? 'rgba(255, 224, 120, 0.36)' : 'rgba(98, 244, 255, 0.26)',
+                crowd ? 0.24 : 0.16,
+              );
+              this.triggerHitStop(crowd ? 0.048 : 0.022);
+              if (crowd) {
+                a.hordeDeathChorus(ev.hits, ev.x, ev.z);
+              }
+              const p = this.worldToScreen(ev.x, 2.2, ev.z);
+              const slamTxt = crowd
+                ? `💥 陨星震地 ×${ev.hits}!`
+                : ev.hits > 0
+                  ? `⚡ 重锤轰击 ×${ev.hits}!`
+                  : '⚡ 重装震地！';
+              this.ui.floatText(p.x, p.y, slamTxt, crowd ? 'drill-impact' : 'aegis', 0.95);
             }
-            const p = this.worldToScreen(ev.x, 2.2, ev.z);
-            const slamTxt = crowd
-              ? `💥 陨星震地 ×${ev.hits}!`
-              : ev.hits > 0
-                ? `⚡ 重锤轰击 ×${ev.hits}!`
-                : '⚡ 重装震地！';
-            this.ui.floatText(p.x, p.y, slamTxt, crowd ? 'drill-impact' : 'aegis', 0.95);
           }
           break;
         }
@@ -2495,36 +2555,53 @@ export class Game {
         }
         case 'OVERLIMIT_NIRVANA_BURST': {
           const meta = NIRVANA_META[ev.archetype];
-          const colNum = ev.archetype === 'singularity_supernova' ? 0xd982ff : ev.archetype === 'absolute_zero_storm' ? 0x7ef6ff : 0xffe46b;
-          const flareSalvo = ev.archetype === 'singularity_supernova' ? 3 : ev.archetype === 'absolute_zero_storm' ? 2 : 1;
-          const decalKind = ev.archetype === 'absolute_zero_storm' ? 2 : 4;
-          fx.burst(ev.x, 1.5, ev.z, colNum, 165, { speed: 19, size: 0.72, life: 0.92, up: 1.38 });
-          fx.shatter(ev.x, 1.4, ev.z, colNum, 34, true);
-          fx.ring(ev.x, ev.z, 0xffffff, 18, 0.52);
-          fx.ring(ev.x, ev.z, colNum, 13, 0.72);
-          fx.after(0.10, () => fx.ring(ev.x, ev.z - 22, colNum, 24, 0.65));
-          fx.after(0.20, () => fx.ring(ev.x, ev.z - 46, colNum, 28, 0.72));
-          this.renderer.spawnDecal(ev.x, ev.z, 5.2, colNum, decalKind, 20);
-          this.renderer.shake(0.92);
-          this.renderer.triggerScreenQuake(0.85, 0.56);
-          this.renderer.triggerShockwave(1.18);
-          this.renderer.triggerAnamorphicFlare(ev.x, ev.z, 0.92, flareSalvo);
-          this.renderer.triggerExecutionCam(1.1);
-          this.renderer.triggerCinematicImpact(0.021, 0.38, ev.x, ev.z);
+          this.renderer.triggerNirvanaCataclysmVfx(ev.x, ev.z, ev.archetype, 0);
+          this.renderer.triggerExecutionCam(1.25);
           if (live) {
-            this.bulletTimeDur = 0.34;
-            this.bulletTimeTimer = 0.34;
-            this.input.rumble(1.0, 0.92, 360);
-            a.triggerUltimateDuck(0.65);
+            this.nukeHitStopTimer = 0.075;
+            this.bulletTimeDur = 0.42;
+            this.bulletTimeTimer = 0.42;
+            this.input.rumble(1.0, 1.0, 680);
+            fx.after(0.32, () => this.input.rumble(0.88, 0.82, 420));
+            a.triggerUltimateDuck(0.88);
+            a.nirvanaCataclysm(0);
             a.playVocoderChoir('nirvana');
-            this.ui.showLetterbox(1050);
-            this.ui.doFlash('rgba(255, 245, 190, 0.72)', 0.44);
-            this.addScore(680 + ev.kills * 35 + Math.round(ev.bossDamage * 0.4));
+            if (ev.kills >= 2) a.nukeChainShatter(ev.kills);
+            this.ui.showLetterbox(1550);
+            this.ui.doNirvanaFlash(ev.archetype, 1.0);
+            this.addScore(780 + ev.kills * 38 + Math.round(ev.bossDamage * 0.45));
+            const titleCol =
+              ev.archetype === 'singularity_supernova'
+                ? '#e69cff'
+                : ev.archetype === 'absolute_zero_storm'
+                  ? '#9ef9ff'
+                  : '#ffe875';
             this.ui.showBanner(
-              html`<div class="b-kicker">☀️ OVERLIMIT NIRVANA · 二阶终焉奥义</div><div class="b-title">${meta.glyph} ${meta.name}</div><div class="b-sub">清场歼敌 ×${ev.kills}${ev.bossDamage > 0 ? ` · 首领重创 -${ev.bossDamage}` : ''}</div>`,
+              html`<div class="b-kicker">☀️ OVERLIMIT NIRVANA · 二阶终焉奥义解放</div><div class="b-title" style="color:${titleCol}">${meta.glyph} ${meta.name}！</div><div class="b-sub">七重天基神罚柱贯穿全桥 · 歼敌 ×${ev.kills}${ev.bossDamage > 0 ? ` · 首领重创 -${ev.bossDamage}` : ''}</div>`,
               'od',
-              1950,
+              2350,
             );
+          }
+          break;
+        }
+        case 'NIRVANA_WAVE_PULSE': {
+          this.renderer.triggerNirvanaCataclysmVfx(snap.squadX, PLAYER_Z, ev.archetype, ev.wave);
+          if (live) {
+            a.nirvanaCataclysm(ev.wave);
+            if (ev.kills >= 2) a.hordeDeathChorus(ev.kills, 0, -22);
+            this.input.rumble(0.82, 0.75, 280);
+            this.ui.doFlash('rgba(255, 240, 175, 0.42)', 0.24);
+            this.addScore(180 + ev.kills * 28 + Math.round(ev.bossDamage * 0.35));
+            if (ev.kills > 0 || ev.bossDamage > 0) {
+              const p = this.worldToScreen(snap.squadX, 2.6, PLAYER_Z - 2.0);
+              this.ui.floatText(
+                p.x,
+                p.y,
+                ev.bossDamage > 0 ? `☀️ 神罚第${ev.wave + 1}波 · 首领-${ev.bossDamage}!` : `☀️ 神罚第${ev.wave + 1}波 · 歼敌×${ev.kills}!`,
+                'gold',
+                1.05,
+              );
+            }
           }
           break;
         }

@@ -804,7 +804,8 @@ export function stepTrackAndSpawner(world: SimWorld, events: SimEvent[]): void {
     const previousDistance = world.scrollDistance;
     const remaining = sectorCfg.runwayLength - previousDistance;
     const decelFactor = remaining < 20.0 ? clamp(remaining / 20.0, 0.25, 1.0) : 1.0;
-    world.currentScrollSpeed = sectorCfg.scrollSpeed * decelFactor;
+    const skyJetMult = world.jumpTimer > 0 && world.jumpSpeedMult > 1 && remaining >= 20.0 ? world.jumpSpeedMult : 1.0;
+    world.currentScrollSpeed = sectorCfg.scrollSpeed * decelFactor * skyJetMult;
     world.scrollDistance = Math.min(
       sectorCfg.runwayLength,
       world.scrollDistance + world.currentScrollSpeed * FIXED_DT,

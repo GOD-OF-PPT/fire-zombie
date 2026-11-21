@@ -34,11 +34,13 @@ import {
   hasMutator,
   resolveDoomOrbImpacts,
   resolveJumpPadCrossings,
+  SKY_JUMP_MAX_STOCKS,
   stepCompetitionEntitiesMotion,
   stepJumpArc,
   stepMidRunSpectacles,
   stepSingularities,
   syncActiveFusions,
+  tryTriggerSkyJump,
 } from './competition';
 import { stepChainExplosions } from './barrels';
 import {
@@ -159,6 +161,14 @@ function clearCoreRunFields(world: SimWorld, startSquad: number): void {
   world.squadX = 0;
   world.squadAirY = 0;
   world.jumpTimer = 0;
+  world.jumpMaxStocks = world.mods.fairTrial ? 1 : SKY_JUMP_MAX_STOCKS;
+  world.jumpStocks = world.jumpMaxStocks;
+  world.jumpCharge = 1.0;
+  world.jumpDuration = 1.32;
+  world.jumpPeakY = 3.25;
+  world.jumpSpeedMult = 1.0;
+  world.jumpSkillStage = 0;
+  world.nirvanaPulseMask = 0;
   world.landingAmbushX = undefined;
   world.cutback = undefined;
   world.ricochetsThisTick = 0;
@@ -413,6 +423,13 @@ export function createSimWorld(): SimWorld {
 
     squadAirY: 0,
     jumpTimer: 0,
+    jumpStocks: SKY_JUMP_MAX_STOCKS,
+    jumpMaxStocks: SKY_JUMP_MAX_STOCKS,
+    jumpCharge: 1.0,
+    jumpDuration: 1.32,
+    jumpPeakY: 3.25,
+    jumpSpeedMult: 1.0,
+    jumpSkillStage: 0,
     ricochetsThisTick: 0,
     activeFusions: [],
     seekerBlades: [],
@@ -474,6 +491,7 @@ export function createSimWorld(): SimWorld {
     nirvanaCharge: 0,
     nirvanaActiveTimer: 0,
     nirvanaArchetype: null,
+    nirvanaPulseMask: 0,
     triPrismLatticeTimer: 0,
     triPrismTickTimer: 0.12,
     triPrismLinks: [],
@@ -610,12 +628,15 @@ export function resetSimWorldForSector(
 }
 
 function stepWorldEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
+  const remaining = world.script.runwayLength - world.scrollDistance;
+  const skyJetMult = world.jumpTimer > 0 && world.jumpSpeedMult > 1 && remaining >= 20.0 && !world.boss ? world.jumpSpeedMult : 1.0;
+
   // GateRows & Gates
   for (let i = 0; i < world.gateRows.length; i++) {
     const row = world.gateRows[i];
     if (row && row.active) {
       row.prevZ = row.z;
-      row.z += row.vz * FIXED_DT;
+      row.z += row.vz * (row.vz > 0 ? skyJetMult : 1) * FIXED_DT;
     }
   }
   for (let i = 0; i < world.gates.length; i++) {
@@ -623,7 +644,7 @@ function stepWorldEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
     if (gate && gate.active) {
       gate.prevX = gate.x;
       gate.prevZ = gate.z;
-      gate.z += gate.vz * FIXED_DT;
+      gate.z += gate.vz * (gate.vz > 0 ? skyJetMult : 1) * FIXED_DT;
     }
   }
 
@@ -633,7 +654,7 @@ function stepWorldEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
     if (vault && vault.active && !vault.broken) {
       vault.prevX = vault.x;
       vault.prevZ = vault.z;
-      vault.z += vault.vz * FIXED_DT;
+      vault.z += vault.vz * (vault.vz > 0 ? skyJetMult : 1) * FIXED_DT;
     }
   }
 
@@ -643,7 +664,7 @@ function stepWorldEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
     if (barrel && barrel.active && !barrel.detonated) {
       barrel.prevX = barrel.x;
       barrel.prevZ = barrel.z;
-      const vz = barrel.vz !== null ? barrel.vz : world.currentScrollSpeed;
+      const vz = barrel.vz !== null ? barrel.vz * (barrel.vz > 0 ? skyJetMult : 1) : world.currentScrollSpeed;
       barrel.z += vz * FIXED_DT;
       // Round 4 (`barrel_carnival`): Volatile Overheat Barrels glow & auto-ignite if allowed to drift to point-blank!
       if (hasMutator(world, 'barrel_carnival') && !barrel.detonated && barrel.z >= PLAYER_Z - 7.6 && barrel.z <= PLAYER_Z - 1.2) {
@@ -671,7 +692,7 @@ function stepWorldEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
         lens.z = PLAYER_Z - 4.2;
         if (lens.age >= 3.8) lens.active = false;
       } else {
-        const vz = lens.vz !== null ? lens.vz : world.currentScrollSpeed;
+        const vz = lens.vz !== null ? lens.vz * (lens.vz > 0 ? skyJetMult : 1) : world.currentScrollSpeed;
         lens.z += vz * FIXED_DT;
         if (lens.driftAmp !== 0 && lens.driftFreq !== 0) {
           const rawX = lens.baseX + lens.driftAmp * Math.sin(lens.age * lens.driftFreq);
@@ -877,6 +898,9 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
   if (input.nirvanaBurst === true) {
     tryTriggerNirvanaBurst(world, events);
   }
+  if (input.skyJump === true) {
+    tryTriggerSkyJump(world, events);
+  }
 
   // Round 1: Endless Wave 2+ Orbital Anti-AFK Lockout — punishes pure 0-movement AFK parking while never touching active players!
   if (world.endless && world.endless.wave >= 2) {
@@ -887,7 +911,8 @@ export function stepWorldFixed(world: SimWorld, input: InputSample): SimEvent[] 
       input.nukeStrike === true ||
       input.swapWeapon === true ||
       input.cycleWingman === true ||
-      input.nirvanaBurst === true;
+      input.nirvanaBurst === true ||
+      input.skyJump === true;
     if (moved) {
       world.afkIdleTimer = 0;
     } else {
@@ -1293,6 +1318,11 @@ export function buildSimSnapshot(world: SimWorld): SimSnapshot {
     },
     squadAirY: world.squadAirY,
     jumpTimeLeft: world.jumpTimer,
+    jumpDuration: world.jumpDuration,
+    jumpStocks: world.jumpStocks,
+    jumpMaxStocks: world.jumpMaxStocks,
+    jumpCharge: world.jumpCharge,
+    jumpSkillStage: world.jumpSkillStage,
     inBlitzDrill: !!world.script.blitzDrill && world.scrollDistance >= world.script.blitzDrill.mirror - 64 &&
       world.scrollDistance < world.script.blitzDrill.pad + 26,
     runwaySpeed: world.currentScrollSpeed,

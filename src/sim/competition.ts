@@ -10,7 +10,7 @@ import {
   TRACK_HALF_WIDTH,
 } from '../config/constants';
 import type { BossId, BossPartSlot, DamageSourceKey, DualSynergyId, FusionId, MutatorId, OverlimitResonanceId, SimEvent, WeaponId } from '../types/game';
-import { applyBarrelBlastToBoss, checkBossPhaseTransitions } from './bosses';
+import { applyBarrelBlastToBoss, checkBossPhaseTransitions, damageBossCore } from './bosses';
 import { damageBarrel } from './barrels';
 import { mitigateLossWithAegis } from './aegis';
 import { damageEnemy, spawnEnemy } from './enemies';
@@ -37,6 +37,10 @@ import { chargeCapacitorTower, hasChip, spawnCoreShard } from './v20Mechanics';
 import { damageVault, spawnPrismLens } from './weapons';
 
 const JUMP_PEAK_Y = 3.25;
+export const SKY_JUMP_MAX_STOCKS = 3;
+export const SKY_JUMP_COOLDOWN_SEC = 5.0;
+export const SKY_JUMP_PASSIVE_PER_SEC = 1 / SKY_JUMP_COOLDOWN_SEC;
+export const SKY_JUMP_KILL_CHARGE = 0.015;
 const SINGULARITY_RADIUS = 4.1;
 const SINGULARITY_DURATION = 2.2;
 
@@ -757,6 +761,82 @@ export function bounceProjectileAtReflector(
   }
 }
 
+export function grantSkyJumpCharge(world: SimWorld, amount: number): void {
+  if (amount <= 0) return;
+  const maxStocks = Math.max(1, world.jumpMaxStocks || 1);
+  if (world.jumpStocks >= maxStocks && world.jumpCharge >= 1) {
+    world.jumpCharge = 1;
+    return;
+  }
+  let next = world.jumpCharge + amount;
+  while (next >= 1 - 1e-9 && world.jumpStocks < maxStocks) {
+    world.jumpStocks += 1;
+    if (world.jumpStocks >= maxStocks) {
+      next = 1;
+      break;
+    }
+    next = Math.max(0, next - 1);
+  }
+  world.jumpCharge = clamp(next, 0, 1);
+}
+
+/**
+ * Launches the stackable Sky-Vault Orbital Leap (`苍穹重装跃迁` [W / ↑ / HUD 🚀]):
+ * - Accumulates up to 3 charges (`jumpStocks`).
+ * - Stage 1 leaps 7.6m high & ~48m far (1.95x jet speed); tapping again mid-air ignites Stage 2/3 Orbital Boosters up to 12.5m high & 2.5x forward speed!
+ */
+export function tryTriggerSkyJump(world: SimWorld, events: SimEvent[]): boolean {
+  if (world.squadCount <= 0) return false;
+  const maxStocks = Math.max(1, world.jumpMaxStocks || 1);
+  const hasStock = world.jumpStocks >= 1 || world.jumpCharge >= 0.999 || world.isFiringRange;
+  if (!hasStock) return false;
+
+  if (world.isFiringRange) {
+    world.jumpStocks = maxStocks;
+    world.jumpCharge = 1;
+  } else if (world.jumpStocks >= maxStocks) {
+    world.jumpStocks = maxStocks - 1;
+    world.jumpCharge = 0;
+  } else if (world.jumpStocks >= 1) {
+    world.jumpStocks -= 1;
+  } else {
+    world.jumpCharge = 0;
+  }
+
+  const nextStage = world.jumpTimer > 0.08 ? Math.min(3, Math.max(1, world.jumpSkillStage) + 1) : 1;
+  const dur = nextStage === 1 ? 1.75 : nextStage === 2 ? 1.88 : 2.02;
+  const peakY = nextStage === 1 ? 7.6 : nextStage === 2 ? 10.4 : 12.8;
+  const speedMult = nextStage === 1 ? 1.95 : nextStage === 2 ? 2.28 : 2.55;
+
+  world.jumpSkillStage = nextStage;
+  world.jumpDuration = dur;
+  world.jumpTimer = dur;
+  world.jumpPeakY = peakY;
+  world.jumpSpeedMult = speedMult;
+  world.aegisTimer = Math.max(world.aegisTimer, 0.85);
+
+  // Launch thruster shockwave repels point-blank monsters on liftoff!
+  for (let i = 0; i < world.enemies.length; i++) {
+    const e = world.enemies[i];
+    if (!e || !e.active || e.consumed || e.hp <= 0) continue;
+    if (Math.hypot(e.x - world.squadX, e.z - PLAYER_Z) <= 5.2 + e.radius) {
+      e.z = normalizeZero(Math.min(e.z - 2.2, PLAYER_Z - 2.4));
+      e.prevZ = e.z;
+      e.slowTimer = Math.max(e.slowTimer, 1.0);
+    }
+  }
+
+  events.push({
+    type: 'JUMP_LAUNCH',
+    x: world.squadX,
+    z: PLAYER_Z,
+    skillStage: nextStage,
+    remainingStocks: world.jumpStocks,
+    peakY,
+  });
+  return true;
+}
+
 export function resolveJumpPadCrossings(world: SimWorld, events: SimEvent[]): void {
   if (world.jumpTimer > 0) return;
   for (let i = 0; i < world.jumpPads.length; i++) {
@@ -765,9 +845,13 @@ export function resolveJumpPadCrossings(world: SimWorld, events: SimEvent[]): vo
     if (pad.prevZ <= PLAYER_Z && pad.z >= PLAYER_Z) {
       if (Math.abs(world.squadX - pad.x) <= pad.halfWidth + world.formationRadius * 0.5) {
         pad.triggered = true;
+        world.jumpDuration = JUMP_DURATION_SEC;
         world.jumpTimer = JUMP_DURATION_SEC;
+        world.jumpPeakY = JUMP_PEAK_Y;
+        world.jumpSpeedMult = 1.0;
+        world.jumpSkillStage = 0;
         world.landingAmbushX = pad.flankAmbush ? pad.x : undefined;
-        events.push({ type: 'JUMP_LAUNCH', x: world.squadX, z: PLAYER_Z });
+        events.push({ type: 'JUMP_LAUNCH', x: world.squadX, z: PLAYER_Z, skillStage: 0, peakY: JUMP_PEAK_Y });
         break;
       }
     }
@@ -775,10 +859,22 @@ export function resolveJumpPadCrossings(world: SimWorld, events: SimEvent[]): vo
 }
 
 export function stepJumpArc(world: SimWorld, events: SimEvent[]): void {
+  // Continuous passive recharge of stackable Sky-Vault jump charges!
+  const maxStocks = Math.max(1, world.jumpMaxStocks || 1);
+  if (world.jumpStocks < maxStocks || world.jumpCharge < 1) {
+    const odBoost = world.overdriveTimer > 0 ? 1.35 : 1.0;
+    grantSkyJumpCharge(world, SKY_JUMP_PASSIVE_PER_SEC * odBoost * FIXED_DT);
+  }
+
   if (world.jumpTimer <= 0) {
     world.squadAirY = 0;
+    world.jumpSpeedMult = 1.0;
+    world.jumpSkillStage = 0;
     return;
   }
+  const activeDur = Math.max(0.2, world.jumpDuration || JUMP_DURATION_SEC);
+  const activePeak = Math.max(JUMP_PEAK_Y, world.jumpPeakY || JUMP_PEAK_Y);
+  const stage = world.jumpSkillStage || 0;
   const nextT = world.jumpTimer - FIXED_DT;
   if (world.landingAmbushX !== undefined && world.jumpTimer > 0.43 && nextT <= 0.43) {
     const lane = world.landingAmbushX;
@@ -794,50 +890,82 @@ export function stepJumpArc(world: SimWorld, events: SimEvent[]): void {
   if (nextT <= 1e-9) {
     world.jumpTimer = 0;
     world.squadAirY = 0;
-    // Touchdown Meteor Sky-Slam Shockwave!
-    world.aegisTimer = Math.max(world.aegisTimer, 0.45);
-    const slamRadius = 8.4;
-    const slamDmg = 130 * world.mods.damageMult * (hasMutator(world, 'glass_cannon') ? 2.0 : 1.0);
+    world.jumpSpeedMult = 1.0;
+    world.jumpSkillStage = 0;
+    // Touchdown Meteor Sky-Slam Shockwave — scales into a cataclysmic full-bridge meteor impact on Sky-Vault leaps!
+    world.aegisTimer = Math.max(world.aegisTimer, stage >= 1 ? 1.15 : 0.45);
+    const slamRadius = stage === 0 ? 8.4 : stage === 1 ? 13.8 : stage === 2 ? 16.5 : 19.5;
+    const baseDmg = stage === 0 ? 130 : stage === 1 ? 280 : stage === 2 ? 420 : 580;
+    const slamDmg =
+      (baseDmg + (stage >= 1 ? world.trueSquadDps * (0.95 + stage * 0.45) : 0)) *
+      world.mods.damageMult *
+      (hasMutator(world, 'glass_cannon') ? 2.0 : 1.0);
     let slammed = 0;
     const snapLen = world.enemies.length;
     for (let i = 0; i < snapLen; i++) {
       const e = world.enemies[i];
       if (!e || !e.active || e.consumed || e.bypassed || e.hp <= 0) continue;
       if (Math.hypot(e.x - world.squadX, e.z - PLAYER_Z) <= slamRadius + e.radius) {
-        e.z = normalizeZero(Math.min(e.z - 3.0, PLAYER_Z - 3.0));
+        const pushBack = stage >= 1 ? 4.4 + stage * 0.8 : 3.0;
+        e.z = normalizeZero(Math.min(e.z - pushBack, PLAYER_Z - 3.2));
         e.prevZ = e.z;
         e.hitPulse = 1.0;
+        if (stage >= 2) {
+          e.armorBroken = true;
+          e.shieldHp = 0;
+        }
         slammed += 1;
         recordDamage(world, 'explosives', Math.min(e.hp, slamDmg));
-        damageEnemy(world, e, slamDmg, 1.65, events);
+        damageEnemy(world, e, slamDmg, stage >= 1 ? 2.2 : 1.65, events, { bypassShield: stage >= 1 });
       }
     }
     // Kinetic touchdown shockwave ignites nearby Surge Barrels & shatters close hostile projectiles!
+    const barrelRad = stage >= 1 ? 11.5 : 6.2;
     for (let bIdx = 0; bIdx < world.barrels.length; bIdx++) {
       const b = world.barrels[bIdx];
-      if (b && b.active && !b.detonated && Math.hypot(b.x - world.squadX, b.z - PLAYER_Z) <= 6.2) {
+      if (b && b.active && !b.detonated && Math.hypot(b.x - world.squadX, b.z - PLAYER_Z) <= barrelRad) {
         damageBarrel(world, b, 999, events, applyBarrelBlastToBoss, true);
       }
     }
+    const orbRad = stage >= 1 ? 12.0 : 5.6;
     for (let pIdx = world.projectiles.length - 1; pIdx >= 0; pIdx--) {
       const p = world.projectiles[pIdx];
-      if (p && p.active && p.hostile && Math.hypot(p.x - world.squadX, p.z - PLAYER_Z) <= 5.6) {
+      if (p && p.active && p.hostile && Math.hypot(p.x - world.squadX, p.z - PLAYER_Z) <= orbRad) {
         world.projectilePool.release(p);
         world.projectiles.splice(pIdx, 1);
       }
     }
+    // Sky-Vault Meteor Slam in Boss Arena crashes shockwaves into Boss Core!
+    let bossDamage = 0;
+    if (stage >= 1 && world.boss && world.boss.active && world.boss.hp > 0) {
+      const rawBossSlam = Math.max(220, Math.round(world.boss.maxHp * (0.035 + stage * 0.018) + slamDmg * 0.6));
+      const preB = world.boss.hp;
+      damageBossCore(world, false, rawBossSlam, events);
+      bossDamage = Math.max(0, Math.round(preB - world.boss.hp));
+      if (bossDamage > 0) recordDamage(world, 'explosives', bossDamage);
+    }
     if (world.mods.manualOverdrive && !world.mods.fairTrial) {
-      addResonance(world, 0.08 + Math.min(0.14, slammed * 0.02), events);
-      world.nirvanaCharge = Math.min(1, (world.nirvanaCharge ?? 0) + 0.045);
+      addResonance(world, (stage >= 1 ? 0.14 : 0.08) + Math.min(0.18, slammed * 0.022), events);
+      world.nirvanaCharge = Math.min(1, (world.nirvanaCharge ?? 0) + (stage >= 1 ? 0.075 : 0.045));
     }
-    if ((world.endless?.upgrades.blades ?? 0) >= 1) {
-      spawnOrRefreshSingularity(world, world.squadX, PLAYER_Z - 4.0, events, 4.2, 2.6);
+    if ((world.endless?.upgrades.blades ?? 0) >= 1 || stage >= 3) {
+      spawnOrRefreshSingularity(world, world.squadX, PLAYER_Z - 5.2, events, stage >= 3 ? 5.4 : 4.2, 2.8);
     }
-    events.push({ type: 'JUMP_SLAM', x: world.squadX, z: PLAYER_Z, hits: slammed });
+    events.push({
+      type: 'JUMP_SLAM',
+      x: world.squadX,
+      z: PLAYER_Z,
+      hits: slammed,
+      skillStage: stage,
+      radius: slamRadius,
+      bossDamage,
+    });
   } else {
     world.jumpTimer = nextT;
-    const p = 1 - nextT / JUMP_DURATION_SEC;
-    world.squadAirY = normalizeZero(JUMP_PEAK_Y * 4 * p * (1 - p));
+    const p = 1 - nextT / activeDur;
+    // Asymmetric hangtime-then-meteor-plunge curve on Sky-Vault leaps so the apex feels lofty and the dive feels explosive!
+    const arcShape = stage >= 1 ? Math.pow(4 * p * (1 - p), 0.78) : 4 * p * (1 - p);
+    world.squadAirY = normalizeZero(activePeak * arcShape);
   }
 }
 
@@ -1101,10 +1229,13 @@ export function hitDoomOrbWithDamage(
 }
 
 export function stepCompetitionEntitiesMotion(world: SimWorld, events: SimEvent[]): void {
+  const remaining = world.script.runwayLength - world.scrollDistance;
+  const skyJetMult = world.jumpTimer > 0 && world.jumpSpeedMult > 1 && remaining >= 20.0 && !world.boss ? world.jumpSpeedMult : 1.0;
+
   for (let i = world.jumpPads.length - 1; i >= 0; i--) {
     const pad = world.jumpPads[i]!;
     pad.prevZ = pad.z;
-    pad.z += pad.vz * FIXED_DT;
+    pad.z += pad.vz * (pad.vz > 0 ? skyJetMult : 1) * FIXED_DT;
     if (pad.z > DESPAWN_Z) world.jumpPads.splice(i, 1);
   }
 
@@ -1112,7 +1243,7 @@ export function stepCompetitionEntitiesMotion(world: SimWorld, events: SimEvent[
     const r = world.reflectors[i]!;
     r.prevX = r.x;
     r.prevZ = r.z;
-    r.z += r.vz * FIXED_DT;
+    r.z += r.vz * (r.vz > 0 ? skyJetMult : 1) * FIXED_DT;
     if (r.pulse > 0) {
       const n = r.pulse - 4.5 * FIXED_DT;
       r.pulse = n <= 1e-9 ? 0 : n;
@@ -1122,8 +1253,8 @@ export function stepCompetitionEntitiesMotion(world: SimWorld, events: SimEvent[
 
   for (let i = world.contractWalls.length - 1; i >= 0; i--) {
     const w = world.contractWalls[i]!;
-    w.zFront += w.vz * FIXED_DT;
-    w.zBack += w.vz * FIXED_DT;
+    w.zFront += w.vz * (w.vz > 0 ? skyJetMult : 1) * FIXED_DT;
+    w.zBack += w.vz * (w.vz > 0 ? skyJetMult : 1) * FIXED_DT;
     if (w.zBack > DESPAWN_Z) world.contractWalls.splice(i, 1);
   }
 

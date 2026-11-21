@@ -2064,9 +2064,22 @@ export class AudioEngine {
     this.fmBell(880, 0.24, { ratio: 1.5, modIndex: 1.4, vol: 0.07, slideTo: 330, panX, worldZ });
   }
 
-  jumpLaunch(): void {
+  jumpLaunch(skillStage = 0): void {
     if (!this.ctx || !this.sfx) return;
     const t = this.ctx.currentTime;
+    if (skillStage >= 1) {
+      const pm = 1 + (skillStage - 1) * 0.16;
+      this.duckMusic(0.42, 0.25, 0.18);
+      this.playFoley('shotgunPunch', { vol: 0.46, rate: 1.12 * pm, when: t, priority: true });
+      this.subPunch(136, 36, 0.34, 0.42, t);
+      this.noise(0.32, { warm: true, vol: 0.24, freq: 1450 * pm, slideTo: 320, when: t });
+      this.tone(185 * pm, 0.44, { type: 'sawtooth', vol: 0.115, slideTo: 1680 * pm, attack: 0.01, lpFreq: 3400, when: t });
+      const notes = [392, 523.25, 783.99, 1046.5];
+      notes.forEach((f, i) =>
+        this.fmBell(f * pm, 0.28, { ratio: 2.0, modIndex: 1.25, vol: 0.105, slideTo: f * pm * 1.25, when: t + i * 0.032, priority: true }),
+      );
+      return;
+    }
     this.subPunch(102, 46, 0.18, 0.25, t);
     this.tone(240, 0.28, { type: 'sawtooth', vol: 0.085, slideTo: 1240, attack: 0.015, lpFreq: 2800, when: t });
     this.fmBell(330, 0.30, { ratio: 2.0, modIndex: 1.15, vol: 0.125, slideTo: 1046.5, when: t, priority: true });
@@ -2080,10 +2093,27 @@ export class AudioEngine {
     this.fmBell(1320, 0.16, { ratio: 2, modIndex: 0.6, vol: 0.10, when: t + 0.065 });
   }
 
-  jumpSlam(hits = 3): void {
+  jumpSlam(hits = 3, skillStage = 0): void {
     if (!this.ctx || !this.sfx) return;
     const t = this.ctx.currentTime;
-    const crowd = hits >= 3;
+    const isSkill = skillStage >= 1;
+    const crowd = isSkill || hits >= 3;
+    if (isSkill) {
+      const pm = 1 + (skillStage - 1) * 0.1;
+      this.duckMusic(0.76, 0.95, 0.45);
+      this.tone(1480 * pm, 0.085, { type: 'sawtooth', vol: 0.12, slideTo: 58, attack: 0.004, lpFreq: 3200, when: t });
+      const imp = t + 0.022;
+      this.playFoley('heavyBoom', { vol: 0.88, rate: 0.62 * pm, when: imp, priority: true });
+      this.playFoley('heavyBoom', { vol: 0.64, rate: 0.84, when: imp + 0.045, panX: -2.0, worldZ: -12, priority: true });
+      this.playFoley('heavyBoom', { vol: 0.64, rate: 0.78, when: imp + 0.065, panX: 2.0, worldZ: -18, priority: true });
+      this.playFoley('crystalTick', { vol: 0.34, rate: 0.82, when: imp + 0.02, priority: true });
+      this.subPunch(166, 20, 1.35, 0.60, imp);
+      this.noise(1.18, { warm: true, vol: 0.38, freq: 680, slideTo: 42, when: imp + 0.015 });
+      [523.25, 659.25, 783.99, 1046.5].forEach((f, i) =>
+        this.fmBell(f * pm, 0.34, { ratio: 2.0, modIndex: 1.3, vol: 0.095, when: imp + 0.02 + i * 0.028, priority: true }),
+      );
+      return;
+    }
     this.duckMusic(crowd ? 0.56 : 0.32, 0.08, 0.22);
     // Crisp meteor down-whistle snapping into seismic ground-zero thud!
     this.tone(920, 0.065, { type: 'sawtooth', vol: 0.09, slideTo: 82, attack: 0.004, lpFreq: 2400, when: t });
@@ -2101,6 +2131,62 @@ export class AudioEngine {
       this.fmBell(523.25, 0.24, { ratio: 2.0, modIndex: 1.25, vol: 0.085, when: imp + 0.02, priority: true });
       this.fmBell(783.99, 0.26, { ratio: 2.0, modIndex: 1.15, vol: 0.075, when: imp + 0.045, priority: true });
     }
+  }
+
+  /** Monumental 2nd-Order Overlimit Nirvana Orbital Judgment Cannon + Celestial Harmonic Swell! */
+  nirvanaCataclysm(wave = 0): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.sfx) return;
+    const t = ctx.currentTime;
+    if (wave > 0) {
+      const pm = 1 + wave * 0.12;
+      this.duckMusic(0.62, 0.65, 0.35);
+      this.playFoley('heavyBoom', { vol: 0.76, rate: 0.68 * pm, when: t, priority: true });
+      this.subPunch(138, 22, 0.95, 0.48, t);
+      this.noise(0.75, { warm: true, vol: 0.30, freq: 820, slideTo: 52, when: t + 0.01 });
+      [587.33, 880, 1174.66, 1567.98].forEach((f, i) =>
+        this.fmBell(f * pm, 0.34, {
+          ratio: 2.0,
+          modIndex: 1.25,
+          vol: 0.09,
+          panX: (i - 1.5) * 1.1,
+          when: t + i * 0.032,
+          priority: true,
+        }),
+      );
+      return;
+    }
+    this.duckMusic(0.86, 1.9, 0.85);
+    this.subPunch(64, 185, 0.045, 0.32, t);
+    this.tone(2150, 0.34, { type: 'sawtooth', vol: 0.135, slideTo: 86, attack: 0.006, lpFreq: 3800, when: t + 0.012 });
+    const b = t + 0.035;
+    this.playFoley('heavyBoom', { vol: 0.92, rate: 0.58, when: b, priority: true });
+    this.playFoley('heavyBoom', { vol: 0.74, rate: 0.82, when: b + 0.045, panX: -2.4, worldZ: -24, priority: true });
+    this.playFoley('heavyBoom', { vol: 0.74, rate: 0.76, when: b + 0.065, panX: 2.4, worldZ: -42, priority: true });
+    this.subPunch(168, 20, 1.95, 0.66, b);
+    this.noise(1.75, { warm: true, vol: 0.42, freq: 860, slideTo: 44, when: b + 0.02 });
+    const fanfare = [523.25, 659.25, 783.99, 987.77, 1174.66, 1567.98];
+    fanfare.forEach((f, i) =>
+      this.fmBell(f, 0.56, {
+        ratio: 2.0,
+        modIndex: 1.35,
+        vol: 0.105,
+        panX: (i % 2 === 0 ? -1 : 1) * (0.8 + i * 0.25),
+        when: b + 0.02 + i * 0.036,
+        priority: true,
+      }),
+    );
+    [261.63, 392.0, 523.25].forEach((f, idx) =>
+      this.tone(f, 1.35, {
+        type: 'sawtooth',
+        detune: idx === 1 ? 6 : -6,
+        vol: 0.048,
+        attack: 0.04,
+        lpFreq: 1950,
+        lpEndFreq: 680,
+        when: b + 0.06,
+      }),
+    );
   }
 
   reflectorBounce(panX = 0): void {

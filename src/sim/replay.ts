@@ -79,7 +79,8 @@ export class ReplayRecorder {
       (input.nukeStrike ? 4 : 0) |
       (input.swapWeapon ? 8 : 0) |
       (input.cycleWingman ? 16 : 0) |
-      (input.nirvanaBurst ? 32 : 0);
+      (input.nirvanaBurst ? 32 : 0) |
+      (input.skyJump ? 64 : 0);
 
     if (dx !== 0 || flags !== 0 || kx !== this.lastKx) {
       const kf: ReplayKeyframe = { t: this.tick };
@@ -208,6 +209,7 @@ export class ReplayPlayer {
       swapWeapon: (flags & 8) !== 0,
       cycleWingman: (flags & 16) !== 0,
       nirvanaBurst: (flags & 32) !== 0,
+      skyJump: (flags & 64) !== 0,
     };
   }
 

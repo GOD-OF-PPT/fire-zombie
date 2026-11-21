@@ -348,6 +348,7 @@ export function loadSave(): SaveData {
         swapWeapon: typeof parsed.keybinds?.swapWeapon === 'string' && parsed.keybinds.swapWeapon ? parsed.keybinds.swapWeapon : DEFAULT_KEYBINDS.swapWeapon,
         wingmanMode: typeof parsed.keybinds?.wingmanMode === 'string' && parsed.keybinds.wingmanMode ? parsed.keybinds.wingmanMode : DEFAULT_KEYBINDS.wingmanMode,
         nirvanaBurst: typeof parsed.keybinds?.nirvanaBurst === 'string' && parsed.keybinds.nirvanaBurst ? parsed.keybinds.nirvanaBurst : DEFAULT_KEYBINDS.nirvanaBurst,
+        skyJump: typeof parsed.keybinds?.skyJump === 'string' && parsed.keybinds.skyJump ? parsed.keybinds.skyJump : DEFAULT_KEYBINDS.skyJump,
       },
       unlockedChips: Array.isArray(parsed.unlockedChips)
         ? parsed.unlockedChips.filter((c): c is OverclockChipId => VALID_CHIPS.includes(c as OverclockChipId))

@@ -441,8 +441,8 @@ export const NIRVANA_META: Record<NirvanaArchetype, { name: string; short: strin
 
 export function addNirvanaCharge(world: SimWorld, amount: number): void {
   if (world.mods.fairTrial || amount <= 0) return;
-  // Lock self-refund only on the initial 0.75s detonation window (`nirvanaActiveTimer > 1.85`)
-  if (world.nirvanaActiveTimer > 1.85) return;
+  // Lock self-refund during the active cataclysm pulse window (`nirvanaActiveTimer > 1.05`)
+  if (world.nirvanaActiveTimer > 1.05) return;
   const relicMult = world.mods.expeditionRelics?.includes('relic_prism_capacitor') ? 1.35 : 1.0;
   world.nirvanaCharge = clamp(world.nirvanaCharge + amount * relicMult, 0, 1);
 }
@@ -463,7 +463,7 @@ export function registerTriPrismRefraction(world: SimWorld, hitWingmanMirror: bo
   // Charge Nirvana gauge rapidly on every refracted hit, and 3.5x faster when chaining Wingman + Fixed 45° Mirror!
   const hasCapRelic = world.mods.expeditionRelics?.includes('relic_prism_capacitor') ?? false;
   const gain = (chainedBoth ? 0.14 : 0.042) * (hasCapRelic ? 1.35 : 1.0);
-  if (world.nirvanaActiveTimer <= 1.85) {
+  if (world.nirvanaActiveTimer <= 1.05) {
     world.nirvanaCharge = clamp(world.nirvanaCharge + gain, 0, 1);
   }
   world.v23RefractedDmg = (world.v23RefractedDmg ?? 0) + Math.max(12, world.trueSquadDps * (chainedBoth ? 0.16 : 0.06));
@@ -489,18 +489,20 @@ export function tryTriggerNirvanaBurst(world: SimWorld, events: SimEvent[]): boo
 
   const arch = resolveNirvanaArchetype(world);
   world.nirvanaCharge = 0;
-  world.nirvanaActiveTimer = 2.6;
+  world.nirvanaActiveTimer = 2.8;
   world.nirvanaArchetype = arch;
+  world.nirvanaPulseMask = 0;
+  world.aegisTimer = Math.max(world.aegisTimer, 1.85);
 
-  const baseBlast = Math.max(320, Math.round(world.trueSquadDps * 4.4));
+  const baseBlast = Math.max(460, Math.round(world.trueSquadDps * 5.6));
   let kills = 0;
 
-  // Sweep all active enemies on the highway with archetype-specific devastation
+  // Sweep ALL active enemies down the entire -155m horizon with archetype-specific devastation!
   for (let i = 0; i < world.enemies.length; i++) {
     const e = world.enemies[i]!;
-    if (!e.active || e.consumed || e.hp <= 0 || e.z < -82) continue;
+    if (!e.active || e.consumed || e.hp <= 0 || e.z < -155) continue;
     if (arch === 'absolute_zero_storm') {
-      e.slowTimer = Math.max(e.slowTimer, 4.5);
+      e.slowTimer = Math.max(e.slowTimer, 5.2);
       e.armorBroken = true;
       e.shieldHp = 0;
     }
@@ -508,48 +510,57 @@ export function tryTriggerNirvanaBurst(world: SimWorld, events: SimEvent[]): boo
     recordDamage(world, 'fusions', dealt);
     world.v23NirvanaDmg = (world.v23NirvanaDmg ?? 0) + dealt;
     const prevHp = e.hp;
-    damageEnemy(world, e, baseBlast, 1.4, events, { bypassShield: true, weapon: world.weapon });
+    damageEnemy(world, e, baseBlast, 1.8, events, { bypassShield: true, weapon: world.weapon });
     if (prevHp > 0 && (e.hp <= 0 || !e.active || e.consumed)) kills++;
+  }
+
+  // Incinerate hostile projectiles across the entire bridge!
+  for (let i = world.projectiles.length - 1; i >= 0; i--) {
+    const p = world.projectiles[i];
+    if (p && p.active && p.hostile) {
+      world.projectilePool.release(p);
+      world.projectiles.splice(i, 1);
+    }
   }
 
   // Heavy Boss & Nemesis core strike
   let bossDmg = 0;
   if (world.boss && world.boss.active && world.boss.hp > 0) {
-    bossDmg = Math.max(420, Math.round(world.boss.maxHp * 0.16));
+    bossDmg = Math.max(580, Math.round(world.boss.maxHp * 0.20));
     if (arch === 'absolute_zero_storm') {
       world.boss.hazardZones.length = 0;
-      world.boss.breakTimer = Math.max(world.boss.breakTimer ?? 0, 3.5);
+      world.boss.breakTimer = Math.max(world.boss.breakTimer ?? 0, 4.0);
     }
     recordDamage(world, 'fusions', bossDmg);
     world.v23NirvanaDmg = (world.v23NirvanaDmg ?? 0) + bossDmg;
     damageBossCore(world, false, bossDmg, events);
   }
   if (world.nemesis && world.nemesis.active) {
-    damageNemesis(world, baseBlast * 1.4, world.weapon, true, events);
+    damageNemesis(world, baseBlast * 1.65, world.weapon, true, events);
   }
 
   if (arch === 'prism_kaleidoscope') {
-    // Fan 18 chromatic prism bolts across the runway
-    for (let k = 0; k < 18; k++) {
+    // Fan 24 super-amplified chromatic prism hyper-bolts across the runway
+    for (let k = 0; k < 24; k++) {
       const p = world.projectilePool.acquire();
       p.id = allocV23Id();
-      p.weapon = k % 2 === 0 ? 'rail' : 'scatter';
-      p.radius = 0.28;
-      p.damage = Math.max(28, world.trueSquadDps * 0.25);
-      p.remainingPierce = 4;
+      p.weapon = k % 3 === 0 ? 'rail' : k % 3 === 1 ? 'scatter' : 'pulse';
+      p.radius = 0.34;
+      p.damage = Math.max(38, world.trueSquadDps * 0.34);
+      p.remainingPierce = 6;
       p.amplified = true;
-      p.powerScale = 1.45;
+      p.powerScale = 1.65;
       p.hostile = false;
       p.hostileLoss = 0;
       p.distanceTraveled = 0;
-      p.maxRange = 78;
+      p.maxRange = 115;
       p.splashRadius = 0;
       p.splashDamageRatio = 0;
       p.cryoSlowDuration = 0;
       p.sweepStartFraction = 0;
-      const spreadAngle = ((k - 8.5) / 8.5) * 0.48;
-      p.vx = Math.sin(spreadAngle) * 44;
-      p.vz = -Math.cos(spreadAngle) * 48;
+      const spreadAngle = ((k - 11.5) / 11.5) * 0.52;
+      p.vx = Math.sin(spreadAngle) * 46;
+      p.vz = -Math.cos(spreadAngle) * 52;
       p.prevX = world.squadX;
       p.prevZ = PLAYER_Z - 1.2;
       p.x = world.squadX;
@@ -557,23 +568,34 @@ export function tryTriggerNirvanaBurst(world: SimWorld, events: SimEvent[]): boo
       p.active = true;
       world.projectiles.push(p);
     }
-    world.triPrismLatticeTimer = Math.max(world.triPrismLatticeTimer, 5.2);
+    world.triPrismLatticeTimer = Math.max(world.triPrismLatticeTimer, 6.2);
   } else if (arch === 'singularity_supernova') {
-    world.singularities.push({
-      id: allocV23Id(),
-      x: 0,
-      z: -16.5,
-      radius: 6.2,
-      timer: 4.0,
-      tickAcc: 0.1,
-      maxTimer: 4.0,
-    });
+    world.singularities.push(
+      {
+        id: allocV23Id(),
+        x: 0,
+        z: -18.0,
+        radius: 7.4,
+        timer: 4.5,
+        tickAcc: 0.1,
+        maxTimer: 4.5,
+      },
+      {
+        id: allocV23Id(),
+        x: 0,
+        z: -42.0,
+        radius: 6.4,
+        timer: 4.0,
+        tickAcc: 0.1,
+        maxTimer: 4.0,
+      },
+    );
   }
 
   if (world.mods.expeditionRelics?.includes('relic_nirvana_core')) {
     world.squadCount = Math.min(999, world.squadCount + 12);
   }
-  addResonance(world, 0.45, events);
+  addResonance(world, 0.55, events);
 
   events.push({
     type: 'OVERLIMIT_NIRVANA_BURST',
@@ -581,7 +603,7 @@ export function tryTriggerNirvanaBurst(world: SimWorld, events: SimEvent[]): boo
     kills,
     bossDamage: bossDmg,
     x: world.squadX,
-    z: -15.5,
+    z: -16.5,
   });
   return true;
 }
@@ -589,12 +611,53 @@ export function tryTriggerNirvanaBurst(world: SimWorld, events: SimEvent[]): boo
 export function stepV23Systems(world: SimWorld, events: SimEvent[]): void {
   if (world.mods.fairTrial) return;
 
-  // 1. Fast Nirvana passive recharge across all non-FairTrial modes, further supercharged by Reactor, Overdrive & Lattice
+  // 1. Multi-Wave Nirvana Cataclysm Aftershocks + Fast Passive Recharge
   if (world.nirvanaActiveTimer > 0) {
     world.nirvanaActiveTimer = Math.max(0, world.nirvanaActiveTimer - FIXED_DT);
+    const arch = world.nirvanaArchetype ?? resolveNirvanaArchetype(world);
+    const triggerAftershock = (waveBit: 1 | 2, waveNum: 1 | 2) => {
+      world.nirvanaPulseMask |= waveBit;
+      const pulseDmg = Math.max(240, Math.round(world.trueSquadDps * 2.8));
+      let waveKills = 0;
+      for (let i = 0; i < world.enemies.length; i++) {
+        const e = world.enemies[i];
+        if (!e || !e.active || e.consumed || e.hp <= 0 || e.z < -150) continue;
+        if (arch === 'absolute_zero_storm') {
+          e.slowTimer = Math.max(e.slowTimer, 3.8);
+          e.armorBroken = true;
+        }
+        const dealt = Math.min(e.hp, pulseDmg);
+        recordDamage(world, 'fusions', dealt);
+        world.v23NirvanaDmg = (world.v23NirvanaDmg ?? 0) + dealt;
+        const pre = e.hp;
+        damageEnemy(world, e, pulseDmg, 1.2, events, { bypassShield: true, weapon: world.weapon });
+        if (pre > 0 && (e.hp <= 0 || !e.active || e.consumed)) waveKills++;
+      }
+      let waveBossDmg = 0;
+      if (world.boss && world.boss.active && world.boss.hp > 0) {
+        waveBossDmg = Math.max(180, Math.round(world.boss.maxHp * 0.045));
+        recordDamage(world, 'fusions', waveBossDmg);
+        world.v23NirvanaDmg = (world.v23NirvanaDmg ?? 0) + waveBossDmg;
+        damageBossCore(world, false, waveBossDmg, events);
+      }
+      events.push({
+        type: 'NIRVANA_WAVE_PULSE',
+        archetype: arch,
+        wave: waveNum,
+        kills: waveKills,
+        bossDamage: waveBossDmg,
+        x: world.squadX,
+        z: waveNum === 1 ? -28 : -48,
+      });
+    };
+    if (world.nirvanaActiveTimer <= 2.05 && (world.nirvanaPulseMask & 1) === 0) {
+      triggerAftershock(1, 1);
+    } else if (world.nirvanaActiveTimer <= 1.25 && (world.nirvanaPulseMask & 2) === 0) {
+      triggerAftershock(2, 2);
+    }
   }
-  if (world.nirvanaActiveTimer <= 1.85 && world.nirvanaCharge < 1 && world.squadCount > 0) {
-    let rate = 0.052;
+  if (world.nirvanaActiveTimer <= 1.05 && world.nirvanaCharge < 1 && world.squadCount > 0) {
+    let rate = 0.056;
     if (world.isFiringRange) {
       rate = 0.75;
     } else if (world.triPrismLatticeTimer > 0) {

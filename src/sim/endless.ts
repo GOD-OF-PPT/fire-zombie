@@ -43,6 +43,10 @@ export function advanceEndlessStage(world: SimWorld): EndlessStageTransition {
   world.contractWalls.length = 0;
   world.doomOrbs.length = 0;
   world.jumpTimer = 0;
+  world.jumpSpeedMult = 1.0;
+  world.jumpSkillStage = 0;
+  world.jumpStocks = Math.max(1, world.jumpMaxStocks || 3);
+  world.jumpCharge = 1.0;
   world.landingAmbushX = undefined;
   world.cutback = undefined;
   world.squadAirY = 0;

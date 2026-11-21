@@ -593,6 +593,7 @@ export class Renderer {
     timer: number;
     dur: number;
     crowd: boolean;
+    stage: number;
   }> = [];
   private jumpSlamCursor = 0;
   public auraInstMesh!: THREE.InstancedMesh;
@@ -644,6 +645,23 @@ export class Renderer {
   private nirvanaRingInner!: THREE.Mesh;
   private nirvanaOuterMat!: THREE.MeshBasicMaterial;
   private nirvanaInnerMat!: THREE.MeshBasicMaterial;
+  private nirvanaSkyHalo!: THREE.Group;
+  private nirvanaSkyOuter!: THREE.Mesh;
+  private nirvanaSkyInner!: THREE.Mesh;
+  private nirvanaCoreGroup!: THREE.Group;
+  private nirvanaCoreMesh!: THREE.Mesh;
+  private nirvanaCoreCage!: THREE.Mesh;
+  private nirvanaCoreMat!: THREE.MeshBasicMaterial;
+  private nirvanaCageMat!: THREE.MeshBasicMaterial;
+  private nirvanaPillars: THREE.Mesh[] = [];
+  private nirvanaPillarHalos: THREE.Mesh[] = [];
+  private nirvanaPillarMat!: THREE.MeshBasicMaterial;
+  private nirvanaCurtainMesh!: THREE.Mesh;
+  private nirvanaCurtainMat!: THREE.MeshBasicMaterial;
+  private nirvanaGlowAmt = 0;
+  private machConeGroup!: THREE.Group;
+  private machConeMat!: THREE.MeshBasicMaterial;
+  private machConeTimer = 0;
   private decalShaderMat!: THREE.ShaderMaterial;
   public photoModeState: { active: boolean; yaw: number; pitch: number; fov: number; filter: PhotoFilterKind } | null = null;
   private formationTetherMesh!: THREE.InstancedMesh;
@@ -1246,19 +1264,19 @@ export class Renderer {
 
   // ------------------------------------------------------------------ scene setup
   private buildLights(): void {
-    // Sculptural 3-point lighting: deep indigo ground fill + crisp 3/4 directional key + subtle rim kicker
-    this.hemi = new THREE.HemisphereLight(0xcfe8ff, 0x1b1642, 0.56);
+    // Sculptural 3-point studio lighting: crisp sapphire sky/indigo ground fill + warm golden-ivory key + cyan-violet rim kicker
+    this.hemi = new THREE.HemisphereLight(0xd8f0ff, 0x1a1545, 0.62);
     this.scene.add(this.hemi);
-    this.dirLight = new THREE.DirectionalLight(0xfff0dc, 1.45);
-    this.dirLight.position.set(-9, 14, 6);
+    this.dirLight = new THREE.DirectionalLight(0xfff3e2, 1.56);
+    this.dirLight.position.set(-9, 14.5, 6.5);
     this.scene.add(this.dirLight);
-    const back = new THREE.DirectionalLight(0x6ad8ff, 0.45);
-    back.position.set(5, 7, -14);
+    const back = new THREE.DirectionalLight(0x5ce6ff, 0.58);
+    back.position.set(5.5, 8.0, -14);
     this.scene.add(back);
   }
 
   private buildEnvironment(): void {
-    // AAA Wet Rain-Slick Cyberpunk Bridge Deck with 8-Source Real-Time Anisotropic Neon Puddle Reflections!
+    // AAA Wet Rain-Slick Cyberpunk Bridge Deck with Carbon-Hex Weave, Gold-Cyan Filigree & 12-Source Anisotropic Neon Reflections!
     this.trackMat = new THREE.ShaderMaterial({
       uniforms: {
         uScroll: { value: 0 },
@@ -1295,14 +1313,24 @@ export class Renderer {
           return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
                      mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
         }
+        float hexWeave(vec2 p) {
+          p *= vec2(3.2, 1.85);
+          vec2 h = vec2(1.0, 1.73205);
+          vec2 a = mod(p, h) - h * 0.5;
+          vec2 b = mod(p - h * 0.5, h) - h * 0.5;
+          vec2 g = dot(a, a) < dot(b, b) ? a : b;
+          float d = max(abs(g.x), dot(abs(g), vec2(0.5, 0.866025)));
+          return smoothstep(0.47, 0.50, d);
+        }
         void main() {
           float zz = vW.z - uScroll;
           float ax = abs(vW.x);
           float plate = floor(zz / 8.0);
           float plateTone = 0.94 + hash(vec2(plate, floor(ax / 2.5))) * 0.1;
           float brushed = sin(vW.x * 160.0 + sin(zz * 0.3)) * 0.004;
+          float hex = hexWeave(vec2(vW.x, zz)) * smoothstep(uHalf - 0.8, 0.0, ax);
           float centerSheen = pow(max(0.0, 1.0 - ax / uHalf), 2.0);
-          vec3 c = uTrack * (plateTone * 0.74 + centerSheen * 0.25 + brushed);
+          vec3 c = uTrack * (plateTone * 0.72 + centerSheen * 0.27 + brushed) + uGrid * hex * 0.042;
 
           // Procedural wet-rain puddle mask + subtle animated raindrop concentric micro-ripples
           float n1 = vnoise(vec2(vW.x * 0.52, zz * 0.16));
@@ -1312,40 +1340,42 @@ export class Renderer {
           vec2 rainUv = fract(vec2(vW.x * 2.2, zz * 2.2)) - 0.5;
           float rPhase = fract(hash(rainCell) + uTime * 1.35);
           float rRing = smoothstep(0.06, 0.0, abs(length(rainUv) - rPhase * 0.45)) * (1.0 - rPhase);
-          float wetShimmer = puddle * (0.72 + rRing * 0.85);
-          // PBR Schlick Fresnel wet-metal grazing specular + brushed titanium micro-anisotropy (additive bright parity!)
+          float wetShimmer = puddle * (0.76 + rRing * 0.88);
+          // PBR Schlick Fresnel wet-metal grazing specular + brushed titanium micro-anisotropy
           vec3 viewVec = normalize(vec3(-vW.x * 0.25, 10.6, 16.0 - vW.z));
           float ndv = clamp(viewVec.y, 0.05, 1.0);
-          float f0 = mix(0.06, 0.42, puddle);
+          float f0 = mix(0.06, 0.44, puddle);
           float fresnel = f0 + (1.0 - f0) * pow(1.0 - ndv, 4.2);
-          c += mix(uGrid, uEdge, 0.48) * (puddle * (0.08 + rRing * 0.13) + fresnel * 0.14);
+          c += mix(uGrid, uEdge, 0.52) * (puddle * (0.085 + rRing * 0.14) + fresnel * 0.15);
 
           float px = abs(fract((vW.x + 5.5) / 2.75) - 0.5);
           float seam = smoothstep(0.48 - fwidth(px), 0.49, px);
-          c *= 1.0 - seam * 0.26;
+          c *= 1.0 - seam * 0.28;
           // Elongated wet specular pools from edge neon lamps
           float lampZ = abs(fract((zz + 1.5) / 8.0) - 0.5) * 8.0;
-          float reflection = exp(-lampZ * lampZ * 0.24) * pow(ax / uHalf, 5.2) * (0.75 + puddle * 0.9);
-          c += uEdge * reflection * 0.16;
+          float reflection = exp(-lampZ * lampZ * 0.24) * pow(ax / uHalf, 5.0) * (0.78 + puddle * 0.95);
+          c += uEdge * reflection * 0.18;
 
           float cross = line(zz / 8.0, 0.018);
           float bevel = line((zz + 0.11) / 8.0, 0.008);
-          c *= 1.0 - cross * 0.24;
-          c += uGrid * bevel * 0.18;
-          float innerFrame = smoothstep(0.025, 0.0, abs(ax - (uHalf - 0.72)));
-          c += uGrid * innerFrame * 0.17;
+          c *= 1.0 - cross * 0.25;
+          c += uGrid * bevel * 0.20;
+          float innerFrame = smoothstep(0.026, 0.0, abs(ax - (uHalf - 0.72)));
+          float goldTrim = smoothstep(0.016, 0.0, abs(ax - (uHalf - 0.54)));
+          c += uGrid * innerFrame * 0.19 + vec3(1.0, 0.84, 0.42) * goldTrim * 0.22;
 
           float rz = min(fract(zz / 8.0), 1.0 - fract(zz / 8.0)) * 8.0;
           float rivet = smoothstep(0.14, 0.035, length(vec2(ax - (uHalf - 0.94), rz)));
-          c += mix(uGrid, vec3(0.85), 0.55) * rivet * 0.38;
+          c += mix(uGrid, vec3(0.92, 0.96, 1.0), 0.6) * rivet * 0.42;
           float lanes = line((vW.x + uHalf) / (uHalf * 2.0 / 3.0), 0.012) * step(0.52, fract(zz / 5.0));
-          c += uGrid * lanes * 0.24;
+          c += uGrid * lanes * 0.26;
           float chev = fract((zz + ax * 0.85) / 10.0);
-          c += uEdge * smoothstep(0.026, 0.0, abs(chev - 0.5)) * smoothstep(uHalf, uHalf - 1.1, ax) * smoothstep(uHalf - 2.3, uHalf - 1.4, ax) * 0.3;
+          float chevPulse = 0.78 + 0.22 * sin(zz * 0.25 + uTime * 5.0);
+          c += mix(uEdge, vec3(1.0, 0.86, 0.45), 0.22) * smoothstep(0.028, 0.0, abs(chev - 0.5)) * smoothstep(uHalf, uHalf - 1.1, ax) * smoothstep(uHalf - 2.3, uHalf - 1.4, ax) * 0.34 * chevPulse;
           float lanePos = abs(fract((vW.x + uHalf) / (uHalf * 2.0 / 3.0)) - 0.5);
           float conduit = smoothstep(0.018, 0.003, lanePos);
           float packet = pow(max(0.0, sin((zz + uTime * 22.0) * 0.28)), 8.0);
-          c += mix(uGrid, uEdge, 0.5) * conduit * (0.12 + packet * 0.28);
+          c += mix(uGrid, uEdge, 0.55) * conduit * (0.13 + packet * 0.32);
 
           // 12-Source Real-Time Anisotropic Wet-Metal Flowing Neon Reflections!
           vec2 rippleWarp = rainUv * rRing * 0.35;
@@ -1356,23 +1386,23 @@ export class Renderer {
               float dx = (vW.x + rippleWarp.x) - L.x;
               float dz = (vW.z + rippleWarp.y - L.y) * 0.29;
               float d2 = (dx * dx + dz * dz) / max(0.35, L.z * L.z);
-              float spec = exp(-d2 * 1.52) * L.w * (0.38 + wetShimmer * 0.94) * flowWave;
+              float spec = exp(-d2 * 1.52) * L.w * (0.40 + wetShimmer * 0.96) * flowWave;
               c += uNeonColors[i] * spec;
             }
           }
 
           if (uOverdrive > 0.01) {
             float warp = pow(max(0.0, sin(vW.x * 14.0) * sin((zz + uTime * 48.0) * 0.35)), 6.0);
-            c += vec3(1.0, 0.88, 0.35) * warp * uOverdrive * 0.32;
+            c += vec3(1.0, 0.88, 0.35) * warp * uOverdrive * 0.34;
           }
           if (uBoss > 0.01) {
             float bossBand = smoothstep(uHalf - 0.85, uHalf - 0.32, ax) * step(0.5, fract((zz - uTime * 6.0) / 2.4));
-            c += vec3(1.0, 0.18, 0.32) * bossBand * uBoss * 0.26;
+            c += vec3(1.0, 0.18, 0.32) * bossBand * uBoss * 0.28;
           }
           float scan = exp(-900.0 * pow(fract((zz + uTime * 4.0) / 32.0) - 0.5, 2.0));
-          c += uEdge * scan * smoothstep(uHalf, 0.0, ax) * 0.065;
+          c += uEdge * scan * smoothstep(uHalf, 0.0, ax) * 0.075;
           float edge = smoothstep(uHalf - 0.32, uHalf, ax);
-          c = mix(c, uEdge * 0.95, edge * 0.88);
+          c = mix(c, uEdge * 0.96, edge * 0.90);
           float fog = smoothstep(64.0, 162.0, -vW.z);
           c = mix(c, uFog, fog);
           gl_FragColor = vec4(c, 1.0);
@@ -1403,7 +1433,7 @@ export class Renderer {
           vec2 p = vec2(vW.x, vW.z - uScroll) / 3.5;
           vec2 g = abs(fract(p) - 0.5);
           float l = smoothstep(0.47, 0.5, max(g.x, g.y));
-          vec3 c = uBase + uGrid * l * 0.16;
+          vec3 c = uBase + uGrid * l * 0.18;
           float fog = smoothstep(38.0, 152.0, -vW.z + abs(vW.x) * 0.4);
           gl_FragColor = vec4(mix(c, uFog, fog), 1.0);
         }`,
@@ -1429,7 +1459,7 @@ export class Renderer {
     this.posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.18, 0.72, 0.18), this.postMat, 64);
     this.scene.add(this.posts);
 
-    // Stylized city skyline towers
+    // Stylized architectural cyberpunk skyline towers
     const towerGeo = new THREE.BoxGeometry(1, 1, 1);
     towerGeo.translate(0, 0.5, 0);
     this.towerMat = new THREE.ShaderMaterial({
@@ -1458,7 +1488,8 @@ export class Renderer {
         float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         void main() {
           vec3 n = abs(vN);
-          vec3 c = uBase * (0.6 + 0.55 * clamp(vL.y / max(vH, 1.0), 0.0, 1.0));
+          float hFrac = clamp(vL.y / max(vH, 1.0), 0.0, 1.0);
+          vec3 c = uBase * (0.58 + 0.62 * hFrac);
           if (n.y < 0.5) {
             float u = (n.x > 0.5 ? vL.z : vL.x) / 0.6;
             float v = vL.y / 0.75;
@@ -1467,23 +1498,24 @@ export class Renderer {
             vec2 aa = max(fwidth(vec2(u, v)), vec2(0.015));
             vec2 windowMask = smoothstep(vec2(0.18), vec2(0.18) + aa, f) * (1.0 - smoothstep(vec2(0.78) - aa, vec2(0.78), f));
             float win = windowMask.x * windowMask.y;
-            // Quantize the instance seed before hashing: tiny interpolator errors otherwise
-            // turn a constant window into sparkling pixel noise on mobile GPUs.
             float h = hash(cell + floor(vSeed + 0.5));
-            float lit = step(0.58, h) * win * step(0.6, vL.y);
-            vec3 wc = mix(uWinA, uWinB, step(0.86, h));
-            c += wc * lit * (0.16 + 0.12 * sin(uTime * 0.18 + h * 40.0));
-            c += uWinA * 0.09 * smoothstep(0.47, 0.5, abs(fract(u * 0.125) - 0.5));
+            float lit = step(0.56, h) * win * step(0.6, vL.y);
+            vec3 wc = mix(uWinA, mix(uWinB, vec3(1.0, 0.85, 0.45), 0.35), step(0.84, h));
+            c += wc * lit * (0.18 + 0.12 * sin(uTime * 0.18 + h * 40.0));
+            // Architectural vertical neon fin + glowing rooftop penthouse crown trim!
+            float neonFin = smoothstep(0.475, 0.5, abs(fract(u * 0.125) - 0.5));
+            float crownBand = smoothstep(0.93, 0.985, hFrac) * step(3.5, vH);
+            c += uWinA * 0.12 * neonFin + mix(uWinA, uWinB, step(0.5, fract(vSeed * 0.37))) * crownBand * 0.42;
             float floorLine = 1.0 - smoothstep(0.018, 0.035 + aa.y, min(f.y, 1.0 - f.y));
             c *= 1.0 - floorLine * 0.25;
           } else {
-            c = uWinA * 0.22;
+            c = uWinA * 0.26;
           }
           // Dual-band volumetric cyber haze + sweeping horizon searchlight shafts
           float depthFog = smoothstep(46.0, 158.0, -vW.z) * 0.86 + 0.10;
           float lowHaze = exp(-max(0.0, vL.y) * 0.16) * smoothstep(24.0, 130.0, -vW.z);
           float shaft = pow(max(0.0, sin(vW.x * 0.11 + vW.y * 0.07 + uTime * 0.35)), 8.0) * smoothstep(55.0, 145.0, -vW.z);
-          vec3 volFog = uFog + uWinB * lowHaze * 0.14 + uWinA * shaft * 0.18;
+          vec3 volFog = uFog + uWinB * lowHaze * 0.15 + uWinA * shaft * 0.20;
           gl_FragColor = vec4(mix(c, volFog, depthFog), 1.0);
         }`,
     });
@@ -1971,6 +2003,7 @@ export class Renderer {
         timer: 0,
         dur: 0.52,
         crowd: false,
+        stage: 0,
       });
     }
 
@@ -2795,6 +2828,9 @@ export class Renderer {
     if (this.triPrismLatticeMesh) { this.triPrismLatticeMesh.count = 0; this.triPrismLatticeMesh.visible = false; }
     if (this.nemesisGroup) this.nemesisGroup.visible = false;
     if (this.nirvanaBurstGroup) this.nirvanaBurstGroup.visible = false;
+    if (this.machConeGroup) this.machConeGroup.visible = false;
+    this.nirvanaGlowAmt = 0;
+    this.machConeTimer = 0;
     this.photoModeState = null;
     if (this.bossShoulderPods) {
       for (const pod of this.bossShoulderPods) pod.visible = false;
@@ -2931,9 +2967,15 @@ export class Renderer {
       (this.impactPass.uniforms.uNukeTint!.value as THREE.Vector3).copy(this.nukeTintVec);
       (this.impactPass.uniforms.uCenter!.value as THREE.Vector2).copy(this.impactCenter);
     }
+    if (this.nirvanaGlowAmt > 0) {
+      this.nirvanaGlowAmt *= Math.exp(-Math.min(0.05, Math.max(0, dt)) * 1.15);
+      if (this.nirvanaGlowAmt < 0.004) this.nirvanaGlowAmt = 0;
+    }
     if (this.composer) {
       if (this.bloomPass) {
-        this.bloomPass.strength = snap.inBlitzDrill ? 0.16 : 0.32 + this.nukeHeatAmt * 0.76;
+        this.bloomPass.strength = snap.inBlitzDrill
+          ? 0.16
+          : 0.34 + this.nukeHeatAmt * 0.76 + this.nirvanaGlowAmt * 0.62;
       }
       this.composer.render();
     } else {
@@ -4535,24 +4577,130 @@ export class Renderer {
     return { id: -1, group, coreMat, cage, cageMat, haloMat, ctx, tex, key: '', seen: false };
   }
 
+  /** Triggers hypersonic jetpack ignition, 3D Mach-cone sonic vapor boom, and camera launch kick! */
+  triggerJumpLaunchVfx(x: number, z: number, skillStage = 0, airY = 0): void {
+    const fx = this.effects;
+    if (skillStage <= 0) {
+      fx.ring(x, z, 0x3ef3ff, 3.6, 0.36);
+      fx.ring(x, z, 0xffd84a, 2.4, 0.26);
+      fx.burst(x, 0.35, z, 0x62f4ff, 26, { speed: 9.5, size: 0.36, life: 0.38, up: 1.65, gravity: 2.0 });
+      this.shake(0.18);
+      return;
+    }
+    const colMain = skillStage >= 3 ? 0xff66e0 : skillStage === 2 ? 0xffd84a : 0x3ef3ff;
+    const colSub = skillStage >= 3 ? 0xffe678 : skillStage === 2 ? 0x62f4ff : 0xffd84a;
+    const y0 = Math.max(0.28, airY + 0.45);
+
+    if (this.machConeGroup) {
+      this.machConeTimer = 0.62;
+      this.machConeGroup.position.set(x, y0 + 0.35, z);
+      this.machConeGroup.scale.setScalar(0.55);
+      this.machConeGroup.visible = true;
+      this.machConeMat.color.setHex(colMain);
+      this.machConeMat.opacity = 0.92;
+    }
+
+    if (airY < 1.2) {
+      fx.groundFlash(x, z, colMain, 5.8 + skillStage * 1.1, 0.34);
+      fx.ring(x, z, 0xffffff, 7.6 + skillStage * 1.6, 0.34);
+      fx.ring(x, z, colMain, 10.4 + skillStage * 2.0, 0.52);
+      this.spawnDecal(x, z, 3.8 + skillStage * 0.6, colMain, 5, 12);
+    } else {
+      // Mid-air booster ignition shockwave rings!
+      fx.burst(x, y0, z, 0xffffff, 54, { speed: 15.5, size: 0.52, life: 0.42, up: 0.35, gravity: 0.8 });
+    }
+    fx.streaks(x, y0, z, 0xffffff, 28 + skillStage * 8, {
+      speed: 24 + skillStage * 4,
+      len: 2.35,
+      life: 0.36,
+      coneBiasZ: 0.65,
+    });
+    fx.burst(x, y0, z, colMain, 72 + skillStage * 18, {
+      speed: 14.5 + skillStage * 2.2,
+      size: 0.52,
+      life: 0.56,
+      up: -1.15,
+      gravity: 1.5,
+    });
+    fx.burst(x, y0 + 0.4, z, colSub, 46 + skillStage * 12, {
+      speed: 11.5,
+      size: 0.44,
+      life: 0.48,
+      up: 1.85,
+      gravity: 2.2,
+    });
+
+    this.shake(0.28 + skillStage * 0.06);
+    this.kickCamera((-0.52 - skillStage * 0.14) * this.shakeScale, (Math.random() - 0.5) * 0.42);
+    this.triggerShockwave(0.72 + skillStage * 0.15);
+    this.triggerAnamorphicFlare(x, z, 0.62 + skillStage * 0.14, skillStage >= 2 ? 1 : 2);
+  }
+
   /** Triggers a 3D Meteor Sky-Slam shock-dome, plasma crown, crater decal, seismic quake, and radial shockwaves on jump landing! */
-  triggerJumpSlamVfx(x: number, z: number, hits = 0): void {
-    const crowd = hits >= 3;
+  triggerJumpSlamVfx(x: number, z: number, hits = 0, skillStage = 0): void {
+    const isSkill = skillStage >= 1;
+    const crowd = isSkill || hits >= 3;
     const slot = this.jumpSlamPool[this.jumpSlamCursor]!;
     this.jumpSlamCursor = (this.jumpSlamCursor + 1) % this.jumpSlamPool.length;
-    slot.dur = crowd ? 0.62 : 0.48;
+    slot.stage = skillStage;
+    slot.dur = isSkill ? 0.94 + (skillStage - 1) * 0.15 : crowd ? 0.62 : 0.48;
     slot.timer = slot.dur;
     slot.crowd = crowd;
     slot.group.position.set(x, 0, z);
     slot.group.visible = true;
-    slot.domeMat.color.setHex(crowd ? 0xffd84a : 0x3ef3ff);
-    slot.crownMat.color.setHex(crowd ? 0xff9a1f : 0x62f4ff);
-    slot.fissureMat.color.setHex(crowd ? 0xfff3a8 : 0xb8ffff);
+    slot.domeMat.color.setHex(skillStage >= 3 ? 0xff6ee8 : isSkill ? 0xffe266 : crowd ? 0xffd84a : 0x3ef3ff);
+    slot.crownMat.color.setHex(skillStage >= 3 ? 0x62f4ff : isSkill ? 0xff7b29 : crowd ? 0xff9a1f : 0x62f4ff);
+    slot.fissureMat.color.setHex(isSkill ? 0xffffff : crowd ? 0xfff3a8 : 0xb8ffff);
 
     const fx = this.effects;
     const colCore = 0xffffff;
-    const colMid = crowd ? 0xffd84a : 0x62f4ff;
-    const colOuter = crowd ? 0xff5a2a : 0x2b88ff;
+    const colMid = skillStage >= 3 ? 0xff6ee8 : isSkill || crowd ? 0xffd84a : 0x62f4ff;
+    const colOuter = isSkill ? 0x3ef3ff : crowd ? 0xff5a2a : 0x2b88ff;
+
+    if (isSkill) {
+      const rBoost = (skillStage - 1) * 2.8;
+      // Cataclysmic Orbital Meteor Touchdown: 4-stage super-wide shockwave rings across the entire highway!
+      fx.groundFlash(x, z, 0xffffff, 10.5 + rBoost, 0.46);
+      fx.ring(x, z, colCore, 14.5 + rBoost, 0.38);
+      fx.ring(x, z, colMid, 17.8 + rBoost, 0.58);
+      fx.ring(x, z, colOuter, 20.8 + rBoost, 0.78);
+      fx.after(0.10, () => fx.ring(x, z, 0xff7b29, 23.5 + rBoost, 0.56));
+      fx.after(0.22, () => fx.ring(x, z, colCore, 16.0 + rBoost, 0.44));
+
+      fx.shatter(x, 0.85, z, colMid, 44 + skillStage * 8, true);
+      fx.streaks(x, 0.75, z, colCore, 42 + skillStage * 8, {
+        speed: 30 + skillStage * 4,
+        len: 2.65,
+        life: 0.44,
+        coneBiasZ: 0,
+      });
+      fx.burst(x, 0.45, z, colCore, 145 + skillStage * 25, {
+        speed: 22 + skillStage * 3,
+        size: 0.68,
+        life: 0.74,
+        up: 1.95,
+        gravity: 4.4,
+      });
+      fx.burst(x, 1.25, z, colMid, 115 + skillStage * 20, {
+        speed: 17.5 + skillStage * 2.5,
+        size: 0.58,
+        life: 0.92,
+        up: 2.45,
+        gravity: 2.8,
+      });
+
+      this.spawnDecal(x, z, 8.2 + (skillStage - 1) * 1.2, 0xff9a24, 4, 20);
+      this.nukeHeatAmt = Math.max(this.nukeHeatAmt, 0.46 + (skillStage - 1) * 0.12);
+      this.nukeFlareAmt = Math.max(this.nukeFlareAmt, 0.55);
+      this.impactCenter.set(0.5, 0.58);
+
+      this.shake(0.88);
+      this.triggerScreenQuake(1.18 + (skillStage - 1) * 0.18, 0.92 + (skillStage - 1) * 0.16);
+      this.kickCamera((0.92 + (skillStage - 1) * 0.18) * this.shakeScale, (Math.random() - 0.5) * 0.75);
+      this.triggerShockwave(1.18);
+      this.triggerAnamorphicFlare(x, z, 0.95, skillStage >= 2 ? 0 : 1);
+      return;
+    }
 
     // Multi-wave ground shockwave rings + delayed secondary seismic ripple!
     fx.ring(x, z, colCore, crowd ? 9.8 : 6.8, 0.34);
@@ -4611,27 +4759,66 @@ export class Renderer {
       }
     }
 
-    // 2. Mag-Lev Jump Pads, Airborne Meteor Dive Trail & 3D Sky-Slam Shock-Domes
+    // Animate 3D Mach-cone sonic vapor boom during Sky-Vault launch!
+    if (this.machConeGroup) {
+      if (this.machConeTimer > 0) {
+        this.machConeTimer = Math.max(0, this.machConeTimer - dt);
+        const mp = 1 - this.machConeTimer / 0.62;
+        this.machConeGroup.visible = this.machConeTimer > 0;
+        const sc = 0.75 + mp * 5.8;
+        this.machConeGroup.scale.set(sc, sc, 0.8 + mp * 2.4);
+        this.machConeGroup.rotation.z = t * 9.5;
+        this.machConeGroup.position.z += deltaScroll * 0.65;
+        this.machConeMat.opacity = Math.pow(1 - mp, 1.45) * 0.88;
+      } else {
+        this.machConeGroup.visible = false;
+      }
+    }
+
+    // 2. Mag-Lev Jump Pads, Airborne Jetpack Plumes, Meteor Dive Trail & 3D Sky-Slam Shock-Domes
     const flight = snap.jumpTimeLeft ?? 0;
+    const jStage = snap.jumpSkillStage ?? 0;
     this.landingMarker.visible = flight > 0;
     if (flight > 0) {
-      const fracLeft = THREE.MathUtils.clamp(flight / JUMP_DURATION_SEC, 0, 1);
-      const landZ = PLAYER_Z - flight * snap.runwaySpeed;
+      const totalDur = Math.max(0.45, snap.jumpDuration ?? JUMP_DURATION_SEC);
+      const fracLeft = THREE.MathUtils.clamp(flight / totalDur, 0, 1);
+      const landZ = THREE.MathUtils.clamp(PLAYER_Z - flight * snap.runwaySpeed, -145, PLAYER_Z);
+      const skillScale = jStage >= 1 ? 1.55 + (jStage - 1) * 0.22 : 1.0;
       this.landingMarker.position.set(snap.squadX, 0.10, landZ);
-      this.landingMarker.rotation.y = t * 4.2;
-      this.landingMarker.scale.setScalar(0.82 + 0.58 * fracLeft);
+      this.landingMarker.rotation.y = t * (jStage >= 1 ? 7.2 : 4.2);
+      this.landingMarker.scale.setScalar((0.82 + 0.58 * fracLeft) * skillScale);
       const bull = this.landingMarker.getObjectByName('bullseye') as THREE.Mesh | undefined;
       if (bull) {
         bull.scale.setScalar(0.85 + (1 - fracLeft) * 0.65 + 0.12 * Math.sin(t * 22));
       }
       const beacon = this.landingMarker.getObjectByName('beacon') as THREE.Mesh | undefined;
       if (beacon) {
-        beacon.scale.set(0.75 + (1 - fracLeft) * 0.5, 0.6 + (1 - fracLeft) * 0.85, 0.75 + (1 - fracLeft) * 0.5);
-        (beacon.material as THREE.MeshBasicMaterial).opacity = 0.18 + (1 - fracLeft) * 0.42;
+        const bHeight = (0.6 + (1 - fracLeft) * 0.85) * (jStage >= 1 ? 2.15 : 1.0);
+        beacon.scale.set(0.75 + (1 - fracLeft) * 0.5, bHeight, 0.75 + (1 - fracLeft) * 0.5);
+        (beacon.material as THREE.MeshBasicMaterial).opacity = 0.22 + (1 - fracLeft) * 0.48;
       }
-      // Emit fiery cyan-gold meteor dive trail off the airborne squad during the downward slam half!
-      if (fracLeft < 0.52 && dt > 0 && Math.random() < 0.78) {
-        const airY = snap.squadAirY ?? 1.5;
+      const airY = snap.squadAirY ?? 1.5;
+      if (jStage >= 1 && dt > 0) {
+        // Continuous twin hypersonic jetpack comet plumes + golden stardust wake throughout Sky-Vault flight!
+        const jetCol = fracLeft < 0.42 ? 0xffd84a : jStage >= 3 ? 0xff6ee8 : 0x62f4ff;
+        this.effects.burst(
+          snap.squadX - 0.65 + (Math.random() - 0.5) * 0.45,
+          airY + 0.35,
+          PLAYER_Z + 0.45,
+          jetCol,
+          2,
+          { speed: 7.5, size: 0.44, life: 0.28, up: -0.6, gravity: 0 },
+        );
+        this.effects.burst(
+          snap.squadX + 0.65 + (Math.random() - 0.5) * 0.45,
+          airY + 0.35,
+          PLAYER_Z + 0.45,
+          0xffffff,
+          1,
+          { speed: 6.2, size: 0.36, life: 0.22, up: -0.4, gravity: 0 },
+        );
+      } else if (fracLeft < 0.52 && dt > 0 && Math.random() < 0.78) {
+        // Emit fiery cyan-gold meteor dive trail off the airborne squad during the downward slam half!
         this.effects.burst(
           snap.squadX + (Math.random() - 0.5) * 1.4,
           airY + 0.45,
@@ -4655,22 +4842,25 @@ export class Renderer {
       s.group.position.z += deltaScroll;
       const p = 1 - s.timer / Math.max(0.01, s.dur);
       const easeOut = 1 - Math.pow(1 - p, 3);
-      const fade = Math.pow(1 - p, 1.55);
-      const maxR = s.crowd ? 7.6 : 5.2;
+      const fade = Math.pow(1 - p, 1.45);
+      const isSkill = s.stage >= 1;
+      const maxR = isSkill ? 11.4 + (s.stage - 1) * 2.2 : s.crowd ? 7.6 : 5.2;
       const rNow = 1.1 + easeOut * maxR;
-      s.dome.scale.set(rNow, 1.0 + easeOut * (s.crowd ? 3.8 : 2.6), rNow);
-      s.dome.rotation.y = t * 5.0;
-      s.domeMat.opacity = 0.78 * fade;
+      const domeH = isSkill ? 6.4 + (s.stage - 1) * 1.5 : s.crowd ? 3.8 : 2.6;
+      s.dome.scale.set(rNow, 1.0 + easeOut * domeH, rNow);
+      s.dome.rotation.y = t * (isSkill ? 7.8 : 5.0);
+      s.domeMat.opacity = (isSkill ? 0.92 : 0.78) * fade;
 
-      const crownR = 0.85 + easeOut * (s.crowd ? 4.4 : 3.0);
-      const crownH = (s.crowd ? 6.8 : 4.6) * Math.sin(Math.min(1, p * 1.4) * Math.PI * 0.5);
+      const crownR = 0.85 + easeOut * (isSkill ? 6.8 + (s.stage - 1) * 1.4 : s.crowd ? 4.4 : 3.0);
+      const peakCrownH = isSkill ? 15.8 + (s.stage - 1) * 3.2 : s.crowd ? 6.8 : 4.6;
+      const crownH = peakCrownH * Math.sin(Math.min(1, p * 1.4) * Math.PI * 0.5);
       s.crown.scale.set(crownR, Math.max(0.2, crownH), crownR);
-      s.crown.rotation.y = -t * 7.5;
-      s.crownMat.opacity = 0.68 * fade;
+      s.crown.rotation.y = -t * (isSkill ? 10.5 : 7.5);
+      s.crownMat.opacity = (isSkill ? 0.84 : 0.68) * fade;
 
-      const fisR = 1.2 + easeOut * (s.crowd ? 8.2 : 5.6);
+      const fisR = 1.2 + easeOut * (isSkill ? 13.5 + (s.stage - 1) * 2.4 : s.crowd ? 8.2 : 5.6);
       s.fissure.scale.set(fisR, fisR, 1);
-      s.fissureMat.opacity = 0.85 * fade;
+      s.fissureMat.opacity = (isSkill ? 0.95 : 0.85) * fade;
     }
 
     for (const v of this.jumpPadViews.values()) v.seen = false;
@@ -6565,19 +6755,20 @@ export class Renderer {
       }
     }
 
-    // 2. Speed/Overdrive/Airborne Dynamic FOV + Chromatic Shockwave Decay + Nuclear Blast Punch
+    // 2. Speed/Overdrive/Airborne Dynamic FOV + Chromatic Shockwave Decay + Nuclear/Nirvana Blast Punch
     const airY = snap.squadAirY ?? 0;
     const descentZoom = this.nukeDescentTremor > 0 ? -this.nukeDescentTremor * 9.5 : 0;
     const targetFovOff =
       (snap.overdriveTimer > 0 ? 5.2 : 0) +
-      (airY > 0.1 ? Math.min(6.2, airY * 2.2) : 0) +
+      (airY > 0.1 ? Math.min(11.8, airY * 1.45) : 0) +
+      (this.nirvanaGlowAmt > 0.04 ? this.nirvanaGlowAmt * 4.8 : 0) +
       (snap.blitzActive ? 2.0 : 0) +
       nukeFovPunch * this.shakeScale +
       descentZoom -
       (this.shockwaveAmt > 0.25 ? this.shockwaveAmt * 2.4 : 0) -
       (this.phaseCamTimer > 0 ? Math.sin((1 - this.phaseCamTimer / this.phaseCamDur) * Math.PI) * 6.2 : 0);
     this.dynFovOffset += (targetFovOff - this.dynFovOffset) * (1 - Math.exp(-safeDt * 9.5));
-    const desiredFov = THREE.MathUtils.clamp(this.fov + this.dynFovOffset, 42, 78);
+    const desiredFov = THREE.MathUtils.clamp(this.fov + this.dynFovOffset, 42, 82);
     if (Math.abs(this.camera.fov - desiredFov) > 0.03) {
       this.camera.fov = desiredFov;
       this.camera.updateProjectionMatrix();
@@ -6618,8 +6809,15 @@ export class Renderer {
     this.camKickRoll *= kickDecay;
 
     const bb = this.bossBlend;
-    const y = CAM_BASE_Y + bb * 1.65 - phaseZoomBell * 1.35 + airY * 0.38 + (cinematic ? 1.1 : 0) - this.camKickZ * 0.18;
-    const z = CAM_BASE_Z + bb * 1.9 - phaseZoomBell * 3.6 + (snap.overdriveTimer > 0 ? 0.45 : 0) + (cinematic ? 1.4 : 0) + this.camKickZ;
+    const y = CAM_BASE_Y + bb * 1.65 - phaseZoomBell * 1.35 + airY * 0.56 + (cinematic ? 1.1 : 0) - this.camKickZ * 0.18;
+    const z =
+      CAM_BASE_Z +
+      bb * 1.9 -
+      phaseZoomBell * 3.6 +
+      Math.min(3.8, airY * 0.32) +
+      (snap.overdriveTimer > 0 ? 0.45 : 0) +
+      (cinematic ? 1.4 : 0) +
+      this.camKickZ;
     this.trauma = Math.max(0, this.trauma - dt * 1.85);
     const sh = this.trauma * this.trauma;
 
@@ -6661,7 +6859,11 @@ export class Renderer {
       this.camera.rotation.z += this.camBankRoll * 1.45 + this.camKickRoll + rollQuake;
     } else {
       this.camera.position.set(this.camX + awakenOrbitX + sx, y + sy, z + sz);
-      this.camera.lookAt(this.camX * 0.56 + lookQx, 0.3 + airY * 0.25 + lookQy, -8.4 - bb * 2.2);
+      this.camera.lookAt(
+        this.camX * 0.56 + lookQx,
+        0.3 + airY * 0.42 + lookQy,
+        -8.4 - bb * 2.2 - Math.min(9.5, airY * 0.85),
+      );
       this.camera.rotation.z += this.camBankRoll + this.camKickRoll + rollQuake;
     }
   }
@@ -6932,16 +7134,157 @@ export class Renderer {
     this.nemesisGroup.visible = false;
     this.scene.add(this.nemesisGroup);
 
-    // 3. 2nd-Order Overlimit Nirvana Burst Expanding Cataclysm Mandala
+    // 3. 2nd-Order Overlimit Nirvana Cataclysm Construct:
+    //    Ground Mandala + Overhead Celestial Astrolabe + 3D Supernova Core + 7 Orbital Judgment Pillars + Sweeping Laser Curtain!
     this.nirvanaBurstGroup = new THREE.Group();
-    this.nirvanaOuterMat = additive(0xffe26a, 0.88);
-    this.nirvanaInnerMat = additive(0x62f4ff, 0.85);
-    this.nirvanaRingOuter = new THREE.Mesh(new THREE.RingGeometry(2.2, 3.55, 12).rotateX(-Math.PI / 2), this.nirvanaOuterMat);
-    this.nirvanaRingInner = new THREE.Mesh(new THREE.RingGeometry(1.35, 2.05, 16).rotateX(-Math.PI / 2), this.nirvanaInnerMat);
+    this.nirvanaOuterMat = additive(0xffe26a, 0.92);
+    this.nirvanaInnerMat = additive(0x62f4ff, 0.9);
+    this.nirvanaRingOuter = new THREE.Mesh(new THREE.RingGeometry(2.2, 3.65, 12).rotateX(-Math.PI / 2), this.nirvanaOuterMat);
+    this.nirvanaRingInner = new THREE.Mesh(new THREE.RingGeometry(1.25, 2.05, 16).rotateX(-Math.PI / 2), this.nirvanaInnerMat);
+    this.nirvanaRingOuter.position.set(0, 0.16, -16);
+    this.nirvanaRingInner.position.set(0, 0.20, -16);
     this.nirvanaBurstGroup.add(this.nirvanaRingOuter, this.nirvanaRingInner);
-    this.nirvanaBurstGroup.position.y = 0.14;
+
+    // Overhead Sacred Celestial Astrolabe suspended high in the sky
+    this.nirvanaSkyHalo = new THREE.Group();
+    this.nirvanaSkyOuter = new THREE.Mesh(new THREE.RingGeometry(7.2, 8.65, 8).rotateX(-Math.PI / 2), this.nirvanaOuterMat);
+    this.nirvanaSkyInner = new THREE.Mesh(new THREE.RingGeometry(4.35, 5.35, 16).rotateX(-Math.PI / 2), this.nirvanaInnerMat);
+    this.nirvanaSkyHalo.add(this.nirvanaSkyOuter, this.nirvanaSkyInner);
+    this.nirvanaSkyHalo.position.set(0, 9.4, -22);
+    this.nirvanaSkyHalo.rotation.x = 0.24;
+    this.nirvanaBurstGroup.add(this.nirvanaSkyHalo);
+
+    // Suspended 3D Supernova Star-Core + Counter-Rotating Geodesic Cage
+    this.nirvanaCoreGroup = new THREE.Group();
+    this.nirvanaCoreMat = additive(0xffffff, 0.96);
+    this.nirvanaCageMat = new THREE.MeshBasicMaterial({
+      color: 0xffe46b,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.88,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.nirvanaCoreMesh = new THREE.Mesh(new THREE.IcosahedronGeometry(1.68, 2), this.nirvanaCoreMat);
+    this.nirvanaCoreCage = new THREE.Mesh(new THREE.IcosahedronGeometry(2.55, 1), this.nirvanaCageMat);
+    const coreEquatorial = new THREE.Mesh(new THREE.TorusGeometry(3.35, 0.095, 8, 36), this.nirvanaOuterMat);
+    coreEquatorial.rotation.x = 1.05;
+    this.nirvanaCoreGroup.add(this.nirvanaCoreMesh, this.nirvanaCoreCage, coreEquatorial);
+    this.nirvanaCoreGroup.position.set(0, 4.7, -20);
+    this.nirvanaBurstGroup.add(this.nirvanaCoreGroup);
+
+    // 7 Towering 38m Heaven-Piercing Orbital Judgment Pillars down the highway
+    this.nirvanaPillarMat = additive(0xfff099, 0.72);
+    this.nirvanaPillars = [];
+    this.nirvanaPillarHalos = [];
+    const pillarGeo = new THREE.CylinderGeometry(0.56, 1.18, 38, 16, 1, true).translate(0, 19, 0);
+    const pillarHaloGeo = new THREE.RingGeometry(1.05, 2.25, 20).rotateX(-Math.PI / 2);
+    const pillarCoords: Array<[number, number]> = [
+      [-4.3, -8],
+      [4.3, -13],
+      [-2.35, -19],
+      [2.35, -26],
+      [0.0, -34],
+      [-3.85, -44],
+      [3.85, -55],
+    ];
+    for (const [px, pz] of pillarCoords) {
+      const pil = new THREE.Mesh(pillarGeo, this.nirvanaPillarMat);
+      pil.position.set(px, 0.05, pz);
+      const ph = new THREE.Mesh(pillarHaloGeo, this.nirvanaInnerMat);
+      ph.position.set(px, 0.12, pz);
+      this.nirvanaPillars.push(pil);
+      this.nirvanaPillarHalos.push(ph);
+      this.nirvanaBurstGroup.add(pil, ph);
+    }
+
+    // Full-Bridge Sweeping Judgment Curtain
+    this.nirvanaCurtainMat = additive(0x62f4ff, 0.76, this.stripeTex);
+    this.nirvanaCurtainMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(TRACK_HALF_WIDTH * 2 + 1.8, 5.6, 0.58),
+      this.nirvanaCurtainMat,
+    );
+    this.nirvanaCurtainMesh.position.set(0, 2.8, 10);
+    this.nirvanaBurstGroup.add(this.nirvanaCurtainMesh);
+
     this.nirvanaBurstGroup.visible = false;
     this.scene.add(this.nirvanaBurstGroup);
+
+    // 4. Hypersonic 3D Mach-Cone Vapor Boom for Sky-Vault Launch
+    this.machConeGroup = new THREE.Group();
+    this.machConeMat = additive(0x62f4ff, 0.88);
+    const coneShell = new THREE.Mesh(
+      new THREE.ConeGeometry(1.15, 2.5, 24, 1, true).rotateX(Math.PI / 2),
+      this.machConeMat,
+    );
+    const coneRingA = new THREE.Mesh(new THREE.RingGeometry(0.82, 1.24, 28), this.machConeMat);
+    coneRingA.position.z = -0.45;
+    const coneRingB = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.76, 24), this.machConeMat);
+    coneRingB.position.z = 0.55;
+    this.machConeGroup.add(coneShell, coneRingA, coneRingB);
+    this.machConeGroup.visible = false;
+    this.scene.add(this.machConeGroup);
+  }
+
+  /** Triggers earth-shaking 3D Overlimit Nirvana Cataclysm VFX (initial release + follow-up orbital judgment waves)! */
+  triggerNirvanaCataclysmVfx(x: number, z: number, arch: NirvanaArchetype, wave = 0): void {
+    const fx = this.effects;
+    const colA = arch === 'singularity_supernova' ? 0xd982ff : arch === 'absolute_zero_storm' ? 0x80f8ff : 0xffe46b;
+    const colB = arch === 'singularity_supernova' ? 0xffb84d : arch === 'absolute_zero_storm' ? 0xffffff : 0x62f4ff;
+
+    if (arch === 'singularity_supernova') {
+      this.nukeTintVec.set(0.88, 0.48, 1.0);
+    } else if (arch === 'absolute_zero_storm') {
+      this.nukeTintVec.set(0.45, 0.94, 1.0);
+    } else {
+      this.nukeTintVec.set(1.0, 0.86, 0.36);
+    }
+
+    this.nirvanaGlowAmt = wave === 0 ? 1.0 : Math.max(this.nirvanaGlowAmt, 0.82);
+    this.nukeHeatAmt = Math.max(this.nukeHeatAmt, wave === 0 ? 0.68 : 0.44);
+    this.nukeFlareAmt = Math.max(this.nukeFlareAmt, wave === 0 ? 0.88 : 0.56);
+    this.nukeWaveDur = wave === 0 ? 1.18 : 0.88;
+    this.nukeWaveTimer = this.nukeWaveDur;
+    this.impactCenter.set(0.5, 0.44);
+
+    // Massive multi-wave screen quake + shockwave + anamorphic streaks!
+    this.shake(wave === 0 ? 0.96 : 0.58);
+    this.triggerScreenQuake(wave === 0 ? 1.85 : 0.78, wave === 0 ? 0.98 : 0.62);
+    this.kickCamera((wave === 0 ? 1.05 : 0.56) * this.shakeScale, (Math.random() - 0.5) * 0.68);
+    this.triggerShockwave(wave === 0 ? 1.2 : 0.88);
+    this.triggerCinematicImpact(wave === 0 ? 0.019 : 0.013, wave === 0 ? 0.36 : 0.24, x, -18);
+    this.triggerAnamorphicFlare(x, -12, wave === 0 ? 1.0 : 0.75, arch === 'singularity_supernova' ? 0 : 1);
+    this.triggerAnamorphicFlare(0, -28, wave === 0 ? 0.92 : 0.68, 2);
+
+    // Cascading orbital judgment detonations all the way down the neon highway!
+    const depths = wave === 0 ? [z - 4, -8, -19, -32, -46, -62] : [-10, -26, -44, -64];
+    depths.forEach((dz, idx) => {
+      const delay = idx * 0.065;
+      fx.after(delay, () => {
+        const px = idx === 0 ? x : Math.sin(idx * 2.1 + wave) * 3.1;
+        fx.groundFlash(px, dz, idx % 2 === 0 ? colA : colB, 9.5, 0.42);
+        fx.ring(px, dz, 0xffffff, 13.5, 0.36);
+        fx.ring(px, dz, colA, 17.5, 0.58);
+        fx.ring(px, dz, colB, 11.2, 0.46);
+        fx.streaks(px, 1.2, dz, 0xffffff, wave === 0 ? 26 : 16, {
+          speed: 28,
+          len: 2.8,
+          life: 0.42,
+          coneBiasZ: 0,
+        });
+        fx.burst(px, 1.1, dz, idx % 2 === 0 ? colA : colB, wave === 0 ? 85 : 50, {
+          speed: 19.5,
+          size: 0.64,
+          life: 0.75,
+          up: 2.2,
+          gravity: 2.6,
+        });
+        if (idx < 3) {
+          this.spawnDecal(px, dz, 6.8, colA, 4, 18);
+        }
+      });
+    });
   }
 
   private updateV23Visuals(snap: SimSnapshot, _dt: number, t: number): void {
@@ -6995,26 +7338,65 @@ export class Renderer {
       this.nemesisGroup.visible = false;
     }
 
-    // 3. 2nd-Order Overlimit Nirvana Burst Mandala
+    // 3. 2nd-Order Overlimit Nirvana Cataclysm Construct
     const nirRem = snap.nirvanaActiveTimer ?? 0;
     if (nirRem > 0) {
-      const p = 1 - Math.min(1, nirRem / 2.6);
+      const p = 1 - Math.min(1, nirRem / 2.8);
       const arch: NirvanaArchetype = snap.nirvanaArchetype ?? 'prism_kaleidoscope';
+      const colOuter = arch === 'singularity_supernova' ? 0xd982ff : arch === 'absolute_zero_storm' ? 0x80f8ff : 0xffe46b;
+      const colInner = arch === 'singularity_supernova' ? 0xffb84d : arch === 'absolute_zero_storm' ? 0xffffff : 0x62f4ff;
+
       this.nirvanaBurstGroup.visible = true;
-      this.nirvanaBurstGroup.position.set(snap.squadX * 0.35, 0.16, -12.0);
-      const sc = 1.2 + p * 8.5;
-      this.nirvanaBurstGroup.scale.setScalar(sc);
-      this.nirvanaRingOuter.rotation.z = t * 4.2;
-      this.nirvanaRingInner.rotation.z = -t * 6.0;
-      this.nirvanaOuterMat.color.setHex(
-        arch === 'singularity_supernova' ? 0xd982ff : arch === 'absolute_zero_storm' ? 0x80f8ff : 0xffe46b,
-      );
-      this.nirvanaInnerMat.color.setHex(
-        arch === 'singularity_supernova' ? 0xffb84d : arch === 'absolute_zero_storm' ? 0xffffff : 0x62f4ff,
-      );
-      const fade = Math.max(0, 1 - p);
-      this.nirvanaOuterMat.opacity = 0.86 * fade;
-      this.nirvanaInnerMat.opacity = 0.82 * fade;
+      this.nirvanaBurstGroup.position.set(snap.squadX * 0.22, 0, 0);
+
+      // Ground Mandala expansion
+      const groundSc = 1.4 + p * 8.2;
+      this.nirvanaRingOuter.scale.setScalar(groundSc);
+      this.nirvanaRingInner.scale.setScalar(groundSc * 0.88);
+      this.nirvanaRingOuter.rotation.z = t * 4.8;
+      this.nirvanaRingInner.rotation.z = -t * 6.8;
+
+      // Overhead Celestial Astrolabe rotation + breathing
+      const skySc = 1.0 + Math.sin(Math.min(1, p * 2.4) * Math.PI * 0.5) * 0.45 + 0.08 * Math.sin(t * 9);
+      this.nirvanaSkyHalo.scale.setScalar(skySc);
+      this.nirvanaSkyOuter.rotation.z = -t * 2.6;
+      this.nirvanaSkyInner.rotation.z = t * 4.4;
+
+      // 3D Supernova Star-Core pulsation
+      const corePulse = 1.0 + 0.28 * Math.sin(t * 20) + Math.sin(p * Math.PI) * 0.45;
+      this.nirvanaCoreGroup.scale.setScalar(corePulse);
+      this.nirvanaCoreMesh.rotation.set(t * 3.2, t * 4.6, 0);
+      this.nirvanaCoreCage.rotation.set(-t * 2.4, t * 3.8, t * 1.9);
+
+      // 7 Heaven-Piercing Orbital Judgment Pillars pulsing in staggered phase waves
+      const fade = Math.pow(Math.max(0, 1 - p), 0.72);
+      for (let i = 0; i < this.nirvanaPillars.length; i++) {
+        const pil = this.nirvanaPillars[i]!;
+        const ph = this.nirvanaPillarHalos[i]!;
+        const waveBell = 0.65 + 0.55 * Math.sin(t * 16 - i * 0.9);
+        pil.scale.set(waveBell, 1.0, waveBell);
+        pil.rotation.y = t * (i % 2 === 0 ? 5.2 : -5.2);
+        ph.scale.setScalar(1.1 + 0.45 * waveBell);
+        ph.rotation.z = t * (i % 2 === 0 ? 4.0 : -4.0);
+      }
+
+      // Sweeping full-bridge judgment curtain (3 rapid sweeps across the 2.8s duration!)
+      const sweepPhase = (p * 3.0) % 1.0;
+      this.nirvanaCurtainMesh.position.z = PLAYER_Z - sweepPhase * 125.0;
+      this.nirvanaCurtainMesh.scale.y = 0.85 + 0.35 * Math.sin(t * 26);
+
+      this.nirvanaOuterMat.color.setHex(colOuter);
+      this.nirvanaInnerMat.color.setHex(colInner);
+      this.nirvanaCageMat.color.setHex(colOuter);
+      this.nirvanaPillarMat.color.setHex(arch === 'singularity_supernova' ? 0xf2a6ff : arch === 'absolute_zero_storm' ? 0xb8ffff : 0xfff099);
+      this.nirvanaCurtainMat.color.setHex(colInner);
+
+      this.nirvanaOuterMat.opacity = 0.92 * fade;
+      this.nirvanaInnerMat.opacity = 0.88 * fade;
+      this.nirvanaCoreMat.opacity = 0.96 * fade;
+      this.nirvanaCageMat.opacity = 0.86 * fade;
+      this.nirvanaPillarMat.opacity = 0.74 * fade;
+      this.nirvanaCurtainMat.opacity = 0.78 * (1 - sweepPhase * 0.65) * fade;
     } else {
       this.nirvanaBurstGroup.visible = false;
     }
