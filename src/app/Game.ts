@@ -2940,7 +2940,7 @@ export class Game {
     if (r.victory) this.audio.victory();
     this.audio.setMusic(this.sector, 0);
     this.ui.showResult(r, (i) => this.audio.star(i));
-    if (r.endless && !r.victory) {
+    if (r.endless) {
       this.rankingRun = {
         id: ++this.rankingSequence,
         submitted: false,

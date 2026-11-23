@@ -52,6 +52,50 @@ async function endlessDefeat(page: Page) {
   await defeat(page);
 }
 
+async function extractAtFirstCheckpoint(page: Page) {
+  await page.goto('/index.html?seed=5');
+  await page.getByTestId('endless-btn').click();
+  await page.evaluate(() => (window as any).__prism.fastForward(200, true));
+  await page.getByTestId('extract-endless-btn').click();
+  await expect(page.getByTestId('result-screen')).toContainText('赏金安全撤离');
+  return page.evaluate(() => {
+    const g = (window as any).__prism, s = g.sim.getSnapshot();
+    return {
+      score: g.score,
+      wave: s.endless.wave,
+      distance: Math.round(s.endless.distance * 1000) / 1000,
+      duration: Math.round(Math.max(g.runTime, s.simTime) * 1000) / 1000,
+    };
+  });
+}
+
+test('endless extraction prompts for a name, then submits the final score automatically on later extractions', async ({ page }) => {
+  const api = await mockRanking(page);
+  const first = await extractAtFirstCheckpoint(page);
+  await expect(page.getByTestId('ranking-name-screen')).toBeVisible();
+  expect(api.scores).toHaveLength(0);
+  await page.getByTestId('ranking-name-input').fill('撤离玩家');
+  await page.getByTestId('ranking-name-submit').click();
+  await expect(page.getByTestId('ranking-result-status')).toContainText('我的名次 #7');
+  expect(api.scores).toHaveLength(1);
+  expect(api.scores[0]).toMatchObject({ username: '撤离玩家', metrics: first });
+
+  api.failScores = true;
+  const second = await extractAtFirstCheckpoint(page);
+  await expect(page.getByTestId('ranking-name-screen')).toBeHidden();
+  await expect(page.getByTestId('ranking-retry')).toBeVisible();
+  expect(api.scores).toHaveLength(2);
+  expect(api.scores[1]).toMatchObject({ username: '撤离玩家', metrics: second });
+  api.failScores = false;
+  await page.getByTestId('ranking-retry').click();
+  await expect(page.getByTestId('ranking-result-status')).toContainText('我的名次 #7');
+  await page.getByTestId('result-leaderboard-btn').click();
+  await page.getByTestId('ranking-close').click();
+  expect(api.scores).toHaveLength(3);
+  expect(api.scores[2]).toEqual(api.scores[1]);
+  expect(api.sessions).toBe(1);
+});
+
 test('first endless defeat asks once, uploads actual metrics and reuses name/player after reload', async ({ page }) => {
   const api = await mockRanking(page);
   await endlessDefeat(page);

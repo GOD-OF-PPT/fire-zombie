@@ -72,7 +72,7 @@ export interface SaveData {
   unlocked: SectorId;
   records: Record<SectorId, SectorRecord>;
   endless: EndlessRecord;
-  /** Public ranking display name, entered once on an endless defeat. */
+  /** Public ranking display name saved after an endless run. */
   leaderboardName: string;
   blitz: BlitzRecord;
   fairTrial: BlitzRecord;
