@@ -39,7 +39,7 @@ import { ENEMY_CONFIGS } from '../config/enemies';
 import { SECTORS } from '../config/sectors';
 import { REWARD_META, SECTOR_META } from '../app/meta';
 import { Effects } from './Effects';
-import { EnvironmentDetail } from './environmentDetail';
+import { EnvironmentDetail, towerZ } from './environmentDetail';
 import { Infrastructure } from './infrastructure';
 import {
   COLORS,
@@ -58,7 +58,7 @@ import {
   paintVaultPlate,
 } from './textures';
 import { makeCharacterMaterial } from './models/rig';
-import { buildBladeGeo, buildBoltGeo, buildRewardDisplayGeo } from './models/soldiers';
+import { buildBladeGeo, buildBoltGeo, buildCommandPennant, buildRewardDisplayGeo } from './models/soldiers';
 import { GeoBuilder, box, cone, cyl, oct, sph, tor } from './models/kit';
 import {
   AnimatedActor,
@@ -561,6 +561,7 @@ export class Renderer {
 
   // squad & shared VFX meshes
   private squadGlow!: THREE.Mesh;
+  private readonly commandPennant = new THREE.Mesh(buildCommandPennant(), new THREE.MeshBasicMaterial({ vertexColors: true }));
   private squadGlowMat!: THREE.MeshBasicMaterial;
   private squadRing!: THREE.Mesh;
   private squadRingMat!: THREE.MeshBasicMaterial;
@@ -600,8 +601,8 @@ export class Renderer {
   public jugHaloInstMesh!: THREE.InstancedMesh;
   public shardDropInstMesh!: THREE.InstancedMesh;
   public weatherMesh!: THREE.InstancedMesh;
-  private projMesh!: THREE.InstancedMesh;
-  private projCoreMesh!: THREE.InstancedMesh;
+  private projMesh!: THREE.InstancedMesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  private projCoreMesh!: THREE.InstancedMesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   private orbMesh!: THREE.InstancedMesh;
   private orbMarks!: THREE.InstancedMesh;
   private gateViews = new Map<number, GateView>();
@@ -659,6 +660,7 @@ export class Renderer {
   private nirvanaCurtainMesh!: THREE.Mesh;
   private nirvanaCurtainMat!: THREE.MeshBasicMaterial;
   private nirvanaGlowAmt = 0;
+  private outroFxElapsed = 0;
   private machConeGroup!: THREE.Group;
   private machConeMat!: THREE.MeshBasicMaterial;
   private machConeTimer = 0;
@@ -677,6 +679,7 @@ export class Renderer {
   private reactorPrisms: THREE.Mesh[] = [];
   private reactorWallMesh!: THREE.Mesh;
   private reactorWallMat!: THREE.MeshBasicMaterial;
+  private reactorContacts: { x: number; z: number }[] = [];
   private coBossGroup!: THREE.Group;
   private coBossActor: ReturnType<typeof spawnActor> | null = null;
   private coBossShield!: THREE.Mesh;
@@ -1327,7 +1330,7 @@ export class Renderer {
           float ax = abs(vW.x);
           float plate = floor(zz / 8.0);
           float plateTone = 0.94 + hash(vec2(plate, floor(ax / 2.5))) * 0.1;
-          float brushed = sin(vW.x * 160.0 + sin(zz * 0.3)) * 0.004;
+          float brushed = (vnoise(vec2(vW.x * 10.0, zz * 0.7)) - 0.5) * 0.075;
           float hex = hexWeave(vec2(vW.x, zz)) * smoothstep(uHalf - 0.8, 0.0, ax);
           float centerSheen = pow(max(0.0, 1.0 - ax / uHalf), 2.0);
           vec3 c = uTrack * (plateTone * 0.72 + centerSheen * 0.27 + brushed) + uGrid * hex * 0.042;
@@ -1341,6 +1344,9 @@ export class Renderer {
           float rPhase = fract(hash(rainCell) + uTime * 1.35);
           float rRing = smoothstep(0.06, 0.0, abs(length(rainUv) - rPhase * 0.45)) * (1.0 - rPhase);
           float wetShimmer = puddle * (0.76 + rRing * 0.88);
+          float laneX = mod(vW.x + uHalf, uHalf * 2.0 / 3.0) - uHalf / 3.0;
+          float wheelTrack = 1.0 - smoothstep(0.10, 0.28, abs(abs(laneX) - 0.55));
+          c *= 1.0 - wheelTrack * (0.13 + n2 * 0.22);
           // PBR Schlick Fresnel wet-metal grazing specular + brushed titanium micro-anisotropy
           vec3 viewVec = normalize(vec3(-vW.x * 0.25, 10.6, 16.0 - vW.z));
           float ndv = clamp(viewVec.y, 0.05, 1.0);
@@ -1512,7 +1518,7 @@ export class Renderer {
             c = uWinA * 0.26;
           }
           // Dual-band volumetric cyber haze + sweeping horizon searchlight shafts
-          float depthFog = smoothstep(46.0, 158.0, -vW.z) * 0.86 + 0.10;
+          float depthFog = smoothstep(34.0, 143.0, -vW.z) * 0.82 + 0.14;
           float lowHaze = exp(-max(0.0, vL.y) * 0.16) * smoothstep(24.0, 130.0, -vW.z);
           float shaft = pow(max(0.0, sin(vW.x * 0.11 + vW.y * 0.07 + uTime * 0.35)), 8.0) * smoothstep(55.0, 145.0, -vW.z);
           vec3 volFog = uFog + uWinB * lowHaze * 0.15 + uWinA * shaft * 0.20;
@@ -1694,26 +1700,23 @@ export class Renderer {
           vec3 col = vCol;
           float mask = 0.0;
           if (kind < 0.5) {
-            // 0: Scorched Blast Crater + Glowing Radial Ember Fissures
-            float darkPit = smoothstep(0.95, 0.2, r);
-            float rimRing = smoothstep(0.18, 0.0, abs(r - 0.62));
-            float rays = pow(max(0.0, cos(ang * 7.0 + sin(r * 10.0))), 6.0) * smoothstep(0.95, 0.15, r);
-            float glow = rimRing * 0.65 + rays * 0.85;
-            col = mix(vec3(0.04, 0.06, 0.14), vCol * 1.25, clamp(glow, 0.0, 1.0));
-            mask = clamp(darkPit * 0.52 + glow * 0.72, 0.0, 1.0);
+            float pit = length(vUv * vec2(1.27, 1.0)) + 0.09 * sin(vUv.y * 9.0 + seed * 12.0);
+            float lip = (1.0 - smoothstep(0.04, 0.15, abs(pit - 0.61))) * smoothstep(-0.25, 0.6, vUv.x);
+            col = mix(vec3(0.024, 0.030, 0.044), vCol * 0.54, lip);
+            mask = (1.0 - smoothstep(0.40, 0.93, pit)) * 0.69;
           } else if (kind < 1.5) {
-            // 1: Bioluminescent Acid / Plasma Ichor Splatter
-            float lobes = 0.58 + 0.28 * sin(ang * 5.0 + seed * 9.0) + 0.14 * cos(ang * 9.0 - seed * 4.0);
-            float blob = smoothstep(lobes, lobes - 0.22, r);
-            float edgeGlow = smoothstep(lobes, lobes - 0.08, r) * (1.0 - smoothstep(lobes - 0.1, lobes - 0.28, r));
-            col = vCol * (0.78 + edgeGlow * 0.65);
-            mask = blob * 0.64;
+            // A smear trails the impact, with a broken edge and one smaller droplet.
+            vec2 uv = vUv + vec2(0.10 * sin(vUv.y * 4.5 + seed * 9.0), 0.0);
+            float streak = length(uv * vec2(2.3 + 1.2 * uv.y, 1.12));
+            float drop = length((uv - vec2(0.30 + seed * 0.12, -0.51)) * vec2(7.0, 4.8));
+            float stain = min(streak, drop);
+            col = mix(vec3(0.025, 0.036, 0.049), vCol, 0.33 + 0.22 * smoothstep(0.45, 0.82, stain));
+            mask = (1.0 - smoothstep(0.58, 0.88, stain)) * 0.53;
           } else if (kind < 2.5) {
-            // 2: Crystalline Permafrost Fracture Star
-            float star = pow(abs(cos(ang * 3.0)), 2.2) * 0.85 + 0.15;
-            float shard = smoothstep(star, star - 0.25, r);
-            col = mix(vCol, vec3(0.92, 0.98, 1.0), smoothstep(0.55, 0.0, r) * 0.55);
-            mask = shard * 0.72;
+            float joint = vUv.x + (abs(vUv.y + seed * 0.4) - 0.32) * 0.48;
+            float fork = min(abs(joint), abs(joint - max(0.0, vUv.y + 0.14) * 0.84));
+            col = mix(vCol, vec3(0.34, 0.57, 0.64), 0.52);
+            mask = (1.0 - smoothstep(0.018, 0.072, fork)) * (1.0 - smoothstep(0.25, 0.97, r)) * 0.65;
           } else if (kind < 3.5) {
             // 3: Shattered Armor Scorch & Diagonal Plasma Slash
             float slash = smoothstep(0.16, 0.02, abs(vUv.y + sin(vUv.x * 3.0) * 0.08)) * smoothstep(0.96, 0.3, abs(vUv.x));
@@ -1726,6 +1729,9 @@ export class Renderer {
             float pulse = 0.86 + 0.14 * sin(uTime * 7.0 + seed * 12.0);
             col = mix(vec3(0.22, 0.14, 0.28), mix(vCol, vec3(1.0, 0.96, 0.68), corePool * 0.72) * 1.68 * pulse, clamp(veins * 1.15 + corePool, 0.0, 1.0));
             mask = clamp(veins * 0.86 + corePool * 0.68, 0.0, 0.88);
+            float cooling = smoothstep(0.25, 1.55, vDecal.w);
+            col = mix(col, vec3(0.038, 0.031, 0.048) + vCol * veins * 0.13, cooling);
+            mask *= 1.0 - 0.64 * cooling;
           } else {
             // 5: Magnetic Storm Tidal Ripple & Electro-Field Scar
             float rings = smoothstep(0.085, 0.0, abs(fract(r * 3.2 - uTime * 0.9 + seed) - 0.5) - 0.36) * smoothstep(0.98, 0.12, r);
@@ -2200,8 +2206,28 @@ export class Renderer {
     this.reactorHaloGroup.add(haloTrack);
     this.scene.add(this.reactorHaloGroup);
 
-    this.reactorWallMat = additive(0x62f4ff, 0.85, this.stripeTex);
-    this.reactorWallMesh = new THREE.Mesh(new THREE.BoxGeometry(TRACK_HALF_WIDTH * 2.05, 2.35, 0.65), this.reactorWallMat);
+    // A raised, bowed crest carries the brightest line; the wake tapers down onto the deck.
+    const wave = new THREE.PlaneGeometry(TRACK_HALF_WIDTH * 2.03, 1, 32, 2);
+    const positions = wave.getAttribute('position');
+    const uv = wave.getAttribute('uv');
+    for (let i = 0; i < positions.count; i++) {
+      const side = 2 * uv.getX(i) - 1;
+      const front = uv.getY(i);
+      positions.setXYZ(i, positions.getX(i), 0.12 + front * (0.56 + 0.25 * side * side),
+        (1 - front) * 1.8 + side * side * 0.85);
+    }
+    const { ctx, tex } = makeCanvasTexture(256, 64);
+    const wake = ctx.createLinearGradient(0, 0, 0, 64);
+    wake.addColorStop(0, '#edffff');
+    wake.addColorStop(0.065, '#85fff5');
+    wake.addColorStop(0.13, 'rgba(24,211,221,0.64)');
+    wake.addColorStop(0.40, 'rgba(18,138,192,0.38)');
+    wake.addColorStop(1, 'rgba(13,94,168,0)');
+    ctx.fillStyle = wake;
+    ctx.fillRect(0, 0, 256, 64);
+    tex.needsUpdate = true;
+    this.reactorWallMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true });
+    this.reactorWallMesh = new THREE.Mesh(wave, this.reactorWallMat);
     this.reactorWallMesh.visible = false;
     this.scene.add(this.reactorWallMesh);
 
@@ -2259,7 +2285,6 @@ export class Renderer {
       toneMapped: false,
       transparent: true,
       opacity: 0.92,
-      blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
     this.projMesh = new THREE.InstancedMesh(boltGeo, mat, MAX_PROJ);
@@ -2268,10 +2293,10 @@ export class Renderer {
     this.projMesh.frustumCulled = false;
 
     const coreMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
+      color: 0xfff4dc,
       toneMapped: false,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.72,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -2380,7 +2405,7 @@ export class Renderer {
     this.hemi.groundColor.set(pal.fog).multiplyScalar(0.8);
     this.railMat.color.set(pal.edge);
     this.postMat.color.set(pal.edge);
-    this.towerCapMat.color.set(pal.grid);
+    this.towerCapMat.color.set(pal.grid).lerp(this.tmpColor.set(pal.track), 0.62);
     this.environmentDetail.setPalette(pal);
   }
 
@@ -2646,6 +2671,12 @@ export class Renderer {
     this.glowTex.dispose();
     this.hexTex.dispose();
     this.riotShields.dispose();
+    this.commandPennant.removeFromParent();
+    this.commandPennant.geometry.dispose();
+    this.commandPennant.material.dispose();
+    this.reactorWallMat.map?.dispose();
+    this.reactorWallMat.dispose();
+    this.reactorWallMesh.geometry.dispose();
     const seenMats = new Set<THREE.Material>();
     for (const child of this.landingMarker.children) {
       const m = child as THREE.Mesh;
@@ -2686,7 +2717,7 @@ export class Renderer {
     d.x = THREE.MathUtils.clamp(x, -TRACK_HALF_WIDTH + 0.45, TRACK_HALF_WIDTH - 0.45);
     d.z = z;
     d.radius = radius;
-    d.rot = Math.random() * Math.PI * 2;
+    d.rot = kind <= 2 ? (Math.random() - 0.5) * 0.92 : Math.random() * Math.PI * 2;
     d.age = 0;
     d.maxAge = maxAge;
     d.kind = kind;
@@ -2700,6 +2731,11 @@ export class Renderer {
     this.muzzleFlash = 1;
   }
 
+  markReactorSweep(contacts: ReadonlyArray<{ x: number; z: number }>): void {
+    this.reactorContacts.length = 0;
+    this.reactorContacts.push(...contacts);
+  }
+
   private releaseSquadSlot(slot: SquadSlotState): void {
     if (slot.actor) {
       slot.actor.root.visible = false;
@@ -2711,6 +2747,8 @@ export class Renderer {
   }
 
   resetRun(): void {
+    this.outroFxElapsed = 0;
+    this.reactorContacts.length = 0;
     this.effects.clear();
     this.bossDeathT = -1;
     this.bossHidden = false;
@@ -2909,6 +2947,8 @@ export class Renderer {
     }
     this.time += dt;
     const t = this.time;
+    // Finish the visual tail even when the last hit freezes the final simulation snapshot.
+    this.outroFxElapsed = cinematic ? Math.min(4, this.outroFxElapsed + dt) : 0;
     const sectorCfg = SECTORS[snap.sector];
     const scroll = snap.endless?.distance ?? snap.runwayProgress * sectorCfg.runwayLength;
     this.trackMat.uniforms.uScroll!.value = scroll;
@@ -2968,7 +3008,7 @@ export class Renderer {
       (this.impactPass.uniforms.uCenter!.value as THREE.Vector2).copy(this.impactCenter);
     }
     if (this.nirvanaGlowAmt > 0) {
-      this.nirvanaGlowAmt *= Math.exp(-Math.min(0.05, Math.max(0, dt)) * 1.15);
+      this.nirvanaGlowAmt *= Math.exp(-Math.max(0, dt) * 2.2);
       if (this.nirvanaGlowAmt < 0.004) this.nirvanaGlowAmt = 0;
     }
     if (this.composer) {
@@ -2985,10 +3025,9 @@ export class Renderer {
 
   private updateEnvironment(scroll: number, time: number): void {
     const d = this.dummy;
-    const span = 175;
     for (let i = 0; i < this.towerData.length; i++) {
       const tw = this.towerData[i]!;
-      const z = -162 + ((((tw.z * 1.34 + scroll * 0.9) % span) + span) % span);
+      const z = towerZ(tw, scroll);
       d.position.set(tw.x, -0.6, z);
       d.rotation.set(0, 0, 0);
       d.scale.set(tw.w, tw.h, tw.d);
@@ -3087,10 +3126,18 @@ export class Renderer {
       let oz = 0;
       if (infCount > 1) {
         if (overdrive) {
-          const rank = Math.ceil(k / 2);
-          const side = k % 2 === 1 ? 1 : -1;
-          ox = k === 0 ? 0 : side * rank * 0.44;
-          oz = k === 0 ? -0.42 : rank * 0.25 - 0.28;
+          // Keep the point of the V visible. Additional ranks fill in behind its wings
+          // instead of accumulating at the track boundary on long volleys.
+          if (k === 0) {
+            oz = -0.64;
+          } else {
+            const pair = Math.floor((k - 1) / 2);
+            const row = Math.floor(pair / 5);
+            const wing = pair % 5 + 1;
+            const side = k % 2 === 1 ? 1 : -1;
+            ox = side * (wing * 0.49 + (row % 2) * 0.16);
+            oz = wing * 0.26 + row * 0.61 - 0.32;
+          }
         } else {
           const r = spacing * Math.sqrt(k + 0.35);
           const theta = k * GOLDEN_ANGLE_RAD;
@@ -3120,6 +3167,8 @@ export class Renderer {
     this.currentWeapon = snap.weapon;
 
     const targets = lib ? this.computeVisualSquadTargets(snap) : [];
+    const captain = targets.findIndex(target => target.tier === 2);
+    this.commandPennant.visible = captain >= 0;
     const follow = 1 - Math.exp(-Math.max(dt, 0.001) * 15);
     const overdrive = snap.overdriveTimer > 0;
     const wc = WEAPON_COLOR[snap.weapon];
@@ -3152,7 +3201,7 @@ export class Renderer {
           pool.pop() ??
           spawnActor(lib.heroes[target.tier - 1]!, {
             rimColor: target.tier === 2 ? 0xffe484 : 0x9beeff,
-            rimStrength: 0.42,
+            rimStrength: 0.32,
             outlineWidth: 0.0054,
             weapons: target.tier < 3 ? lib.weapons : undefined,
             initialWeapon: this.currentWeapon,
@@ -3184,6 +3233,10 @@ export class Renderer {
 
       const actor = slot.actor;
       const isMech = slot.tier === 3;
+      if (i === captain) {
+        if (this.commandPennant.parent !== actor.root) actor.root.add(this.commandPennant);
+        this.commandPennant.rotation.z = 0.04 * Math.sin(t * 8) - THREE.MathUtils.clamp(slot.vx * 0.016, -0.18, 0.18);
+      }
       if (!isMech && lib) {
         const desiredW =
           unlockedSecondary.length > 0 && i >= 3 && i % 2 === 1
@@ -3216,7 +3269,7 @@ export class Renderer {
       const fl = this.muzzleFlash * (0.55 + 0.45 * Math.sin(i * 7.3 + t * 37));
       const recoilZ = fl * 0.06;
       const heroBoost = isMech ? 1.08 : 1.18;
-      const sc = slot.s * heroBoost * (overdrive ? 1.08 : 1);
+      const sc = slot.s * heroBoost * (i === captain ? 1.10 : 1) * (overdrive ? 1.08 : 1);
       actor.root.position.set(slot.x, airY, slot.z + recoilZ);
       const yaw = THREE.MathUtils.clamp(-slot.vx * 0.028, -0.35, 0.35);
       const bank = THREE.MathUtils.clamp(-slot.vx * 0.014, -0.1, 0.1);
@@ -3245,7 +3298,7 @@ export class Renderer {
       }
 
       if (fl > 0.08 && !isVictory && !isIdleReady && flashes < MAX_RENDER_SQUAD) {
-        const mx = slot.x + (isMech ? 0 : 0.16);
+        const mx = slot.x + (isMech ? 0 : this.modelSource === 'procedural' ? 0.30 : 0.16);
         const my = (isMech ? 1.45 : slot.tier === 2 ? 0.92 : 0.76) + airY;
         const mz = slot.z - (isMech ? 0.95 : 0.72);
         d.position.set(mx, my, mz);
@@ -3284,7 +3337,7 @@ export class Renderer {
     this.squadGlow.scale.set(gs, gs, 1);
     this.squadGlow.position.set(snap.squadX, 0.03, PLAYER_Z - 0.05);
     this.squadGlow.visible = snap.squadCount > 0;
-    this.squadGlowMat.opacity = 0.28 + (overdrive ? 0.24 : aegisActive ? 0.18 : 0);
+    this.squadGlowMat.opacity = 0.17 + (overdrive ? 0.14 : aegisActive ? 0.10 : 0);
 
     const ringScale = snap.formationRadius * 2.15 + 1.05 + Math.sin(t * 4) * 0.04;
     this.squadRing.scale.set(ringScale, ringScale, 1);
@@ -3316,8 +3369,8 @@ export class Renderer {
       this.aegisWire.rotation.y = t * 1.8;
       this.aegisWire.rotation.z = Math.sin(t * 2.5) * 0.2;
       const fade = Math.min(1, (snap.aegisTimer ?? 0) * 3.5);
-      this.aegisWireMat.opacity = (0.52 + Math.sin(t * 18) * 0.14) * fade;
-      this.aegisShellMat.opacity = (0.14 + Math.sin(t * 12) * 0.04) * fade;
+      this.aegisWireMat.opacity = (0.31 + Math.sin(t * 12) * 0.07) * fade;
+      this.aegisShellMat.opacity = (0.075 + Math.sin(t * 12) * 0.018) * fade;
     } else {
       this.aegisGroup.visible = false;
     }
@@ -3883,7 +3936,7 @@ export class Renderer {
       }
       const yaw = Math.atan2(p.vx, p.vz);
       const amp = p.amplified ? 1.28 : 1;
-      const ox = sx * ps * amp;
+      const ox = sx * ps * amp * (p.weapon === 'plasma' ? 1 : 0.87);
       const oz = sz * (0.85 + ps * 0.18) * amp;
       d.position.set(p.x, 0.66, p.z);
       d.rotation.set(p.weapon === 'plasma' ? this.time * 8 : 0, yaw, 0);
@@ -3891,13 +3944,16 @@ export class Renderer {
       d.updateMatrix();
       this.projMesh.setMatrixAt(n, d.matrix);
 
-      // Blazing pure-white inner needle core so every stream pops with razor-sharp contrast
-      d.scale.set(ox * 0.46, ox * 0.46, oz * 0.78);
+      // A short hot nose leaves the weapon colour visible along the length of the shot.
+      const nose = p.weapon === 'plasma' ? 0.16 : 0.30;
+      d.position.x += Math.sin(yaw) * oz * nose;
+      d.position.z += Math.cos(yaw) * oz * nose;
+      d.scale.set(ox * 0.5, ox * 0.46, oz * (p.weapon === 'rail' ? 0.32 : 0.26));
       d.updateMatrix();
       this.projCoreMesh.setMatrixAt(n, d.matrix);
 
       const boltHex = p.amplified ? 0xffe27a : WEAPON_COLOR[p.weapon];
-      const glowGain = snap.projectiles.length > 55 ? 1.38 : 1.72;
+      const glowGain = p.amplified ? 1.4 : 1.12;
       this.tmpColor.setHex(boltHex).multiplyScalar(glowGain);
       this.projMesh.setColorAt(n, this.tmpColor);
       if ((p.amplified || p.weapon === 'plasma' || p.weapon === 'rail') && Math.random() < 0.16) {
@@ -3906,6 +3962,9 @@ export class Renderer {
       n++;
     }
     this.projMesh.count = n;
+    const density = THREE.MathUtils.smoothstep(n, 30, 175);
+    this.projMesh.material.opacity = 0.91 - 0.23 * density;
+    this.projCoreMesh.material.opacity = 0.72 - 0.36 * density;
     this.projCoreMesh.count = n;
     this.projMesh.visible = n > 0;
     this.projCoreMesh.visible = n > 0;
@@ -4033,13 +4092,15 @@ export class Renderer {
     const pulse = g.hitPulse;
     const flip = g.flipPulse;
     v.curtainMat.opacity = (0.15 + pulse * 0.1 + flip * 0.35 + Math.sin(t * 4 + g.id) * 0.03) * v.fade;
-    v.plateMat.opacity = g.triggered ? v.fade : 1;
+    // Once a row has been decided, its crossbeam should clear the squad as it passes the camera.
+    const passed = THREE.MathUtils.smoothstep(g.z, PLAYER_Z, PLAYER_Z + 1.1);
+    v.plateMat.opacity = v.fade * (1 - passed);
+    v.group.visible = passed < 0.99;
     const plateW = Math.min(w * 0.94, 4.8);
     const ps = plateW * (1 + pulse * 0.07 + flip * 0.18);
     v.plate.scale.set(ps, ps, 1);
     v.postMat.emissiveIntensity = 0.12 + flip * 0.8 + pulse * 0.25;
-    const ts = g.triggered ? 1 + (1 - v.fade) * 0.4 : 1;
-    v.group.scale.set(ts, ts, 1);
+    v.group.scale.set(1, 1 - passed * 0.85, 1);
   }
 
   // ---------------------------------------------------------------- vaults
@@ -5360,7 +5421,7 @@ export class Renderer {
       this.decalDataArr[c4] = dec.kind;
       this.decalDataArr[c4 + 1] = fade;
       this.decalDataArr[c4 + 2] = (i % 17) / 17;
-      this.decalDataArr[c4 + 3] = 0;
+      this.decalDataArr[c4 + 3] = dec.age;
       count++;
     }
     this.decals.count = count;
@@ -5386,9 +5447,12 @@ export class Renderer {
       const sqHex = snap.overdriveTimer > 0 ? 0xffdf58 : WEAPON_COLOR[snap.weapon];
       pushLight(snap.squadX, PLAYER_Z - 0.8, 3.2, 0.42 + this.muzzleFlash * 0.36 + (snap.overdriveTimer > 0 ? 0.25 : 0), sqHex);
     }
-    // Active Nuke Fireball reflection
-    if ((snap.nukeBlastTimer ?? 0) > 0) {
-      pushLight(snap.nukeTargetX ?? 0, snap.nukeTargetZ ?? -19.5, 14.0, 0.95, 0xffaa32);
+    // Each fireball lights the deck at its own position and cools with its ground glow.
+    for (const blast of this.nukeBlastPool) {
+      const glow = blast.groundScorchMat.opacity;
+      if (blast.group.visible && glow > 0.025) {
+        pushLight(blast.group.position.x, blast.group.position.z, 7 + 7 * glow, glow, blast.craterRingMat.color.getHex());
+      }
     }
     // Active Maglev Crossing reflection
     for (const tr of snap.maglevTrains ?? []) {
@@ -5779,12 +5843,17 @@ export class Renderer {
           col = mix(col, hiGlow, smoothstep(0.38, 0.70, heat));
           col = mix(col, coreWhite, smoothstep(0.68, 0.95, heat));
           col += rimTint * pow(fresnel, 2.1) * (0.62 - uProgress * 0.25);
+          // The cap keeps its silhouette, but the hot core gives way to backlit ash.
+          float cooling = smoothstep(0.065, 0.47, uProgress);
+          float relief = clamp(0.52 + dot(normalize(vViewN), normalize(vec3(-0.55, 0.72, 0.41))) * 0.30 + turb * 0.18, 0.0, 1.0);
+          vec3 ash = mix(vec3(0.048, 0.041, 0.063), vec3(0.29, 0.23, 0.22), relief);
+          col = mix(col, ash + midGlow * smoothstep(0.64, 0.92, turb) * 0.43, cooling);
 
           gl_FragColor = vec4(col, uOpacity);
         }
       `,
       transparent: true,
-      depthWrite: true,
+      depthWrite: false,
       toneMapped: false,
     });
   }
@@ -6095,6 +6164,8 @@ export class Renderer {
     let maxTremor = 0;
     let peakThermalFlash = 0;
     let dominantPalette = 0;
+    let blastCount = 0;
+    for (const strike of strikes) if (strike.blastTimer > this.outroFxElapsed) blastCount++;
 
     for (let sIdx = 0; sIdx < strikes.length; sIdx++) {
       const st = strikes[sIdx]!;
@@ -6103,10 +6174,10 @@ export class Renderer {
       const cSecondary = pIdx === 1 ? 0x2b68ff : pIdx === 2 ? 0x9b38ff : 0xff2a55;
       const cBeam = pIdx === 1 ? 0x62f4ff : pIdx === 2 ? 0xe05cff : 0xff7828;
 
-      if (st.dropTimer > 0 && dropSlotIdx < this.nukeDropPool.length) {
+      if (st.dropTimer > this.outroFxElapsed && dropSlotIdx < this.nukeDropPool.length) {
         const slot = this.nukeDropPool[dropSlotIdx++]!;
         const dropDur = Math.max(0.1, st.dropDuration || 1.15);
-        const p = THREE.MathUtils.clamp(1 - st.dropTimer / dropDur, 0, 1);
+        const p = THREE.MathUtils.clamp(1 - (st.dropTimer - this.outroFxElapsed) / dropDur, 0, 1);
         const eased = 0.46 * p + 0.54 * p * p * p;
         const warheadY = 17.5 * (1 - eased) + 1.75;
         const tremor = p > 0.25 ? Math.pow((p - 0.25) / 0.75, 2) * 0.34 : 0;
@@ -6172,35 +6243,40 @@ export class Renderer {
         }
       }
 
-      if (st.dropTimer <= 0 && st.blastTimer > 0 && blastSlotIdx < this.nukeBlastPool.length) {
+      if (st.dropTimer <= 0 && st.blastTimer > this.outroFxElapsed && blastSlotIdx < this.nukeBlastPool.length) {
         const bSlot = this.nukeBlastPool[blastSlotIdx++]!;
         const blastDur = Math.max(0.5, st.blastDuration || 3.25);
-        const p = THREE.MathUtils.clamp(1 - st.blastTimer / blastDur, 0, 1);
-        const fade = p < 0.62 ? 1 : Math.max(0, 1 - (p - 0.62) / 0.38);
+        const age = blastDur - st.blastTimer + this.outroFxElapsed;
+        const p = THREE.MathUtils.clamp(age / blastDur, 0, 1);
+        const afterImpact = THREE.MathUtils.smoothstep(age, 0.18, 0.90);
+        const overlap = 1 / (1 + afterImpact * Math.max(0, blastCount - 1) * 0.70);
+        const hot = (1 - THREE.MathUtils.smoothstep(age, 0.18, 1.15)) * overlap;
+        const front = (1 - THREE.MathUtils.smoothstep(age, 0.18, 0.80)) * overlap;
+        const smoke = (1 - 0.68 * afterImpact) * (1 - THREE.MathUtils.smoothstep(p, 0.52, 0.92)) * overlap;
 
         bSlot.group.visible = true;
         bSlot.group.position.set(st.x, 0, st.z);
 
-        const thermalFlash = Math.max(0, 1 - p * 2.1);
+        const thermalFlash = Math.max(0, 1 - age / 0.85);
         if (thermalFlash >= peakThermalFlash) {
           peakThermalFlash = thermalFlash;
           dominantPalette = pIdx;
         }
 
-        const scorchScale = 15 + p * 25;
-        bSlot.groundScorch.scale.set(scorchScale, scorchScale, 1);
+        const scorchScale = (15 + p * 25) * (1 - 0.38 * afterImpact);
+        bSlot.groundScorch.scale.set(scorchScale, 1, scorchScale);
         bSlot.groundScorchMat.color.setHex(cSecondary);
-        bSlot.groundScorchMat.opacity = 0.88 * fade;
+        bSlot.groundScorchMat.opacity = 0.88 * hot;
 
         const craterR = 5.2 + Math.pow(p, 0.4) * 13.5;
-        bSlot.craterRing.scale.set(craterR, craterR, 1);
+        bSlot.craterRing.scale.set(craterR, 1, craterR);
         bSlot.craterRingMat.color.setHex(cPrimary);
-        bSlot.craterRingMat.opacity = Math.max(0, (1 - p * 1.15) * 0.86);
+        bSlot.craterRingMat.opacity = 0.86 * hot;
 
         const shockP = Math.min(1, p / 0.42);
         const shockR = 1.6 + Math.pow(shockP, 0.66) * 132.0;
         bSlot.shockWall.scale.set(shockR, Math.max(0.35, 2.1 - shockP * 1.45), shockR);
-        bSlot.shockWallMat.opacity = p < 0.42 ? (1 - shockP) * 0.94 : 0;
+        bSlot.shockWallMat.opacity = (1 - shockP) * 0.94 * front;
         bSlot.shockWallMat.color.setHex(p < 0.11 ? 0xffffff : cPrimary);
 
         const shock2P = THREE.MathUtils.clamp((p - 0.06) / 0.42, 0, 1);
@@ -6208,14 +6284,14 @@ export class Renderer {
         bSlot.blastRing2.visible = p >= 0.06 && p < 0.48;
         bSlot.blastRing2.scale.set(shock2R, Math.max(0.28, 1.55 - shock2P * 1.05), shock2R);
         bSlot.blastRing2Mat.color.setHex(cSecondary);
-        bSlot.blastRing2Mat.opacity = p >= 0.06 && p < 0.48 ? (1 - shock2P) * 0.88 : 0;
+        bSlot.blastRing2Mat.opacity = (1 - shock2P) * 0.88 * front;
 
         // Heaven-Piercing Orbital Judgment Beam
         const pillarP = Math.min(1, p / 0.40);
         bSlot.sunPillar.visible = p < 0.40;
         const pillarRad = 0.85 + Math.sin(pillarP * Math.PI) * 2.75;
         bSlot.sunPillar.scale.set(pillarRad, 1.0 + pillarP * 0.35, pillarRad);
-        bSlot.sunPillarMat.opacity = p < 0.40 ? Math.pow(1 - pillarP, 1.35) * 0.94 : 0;
+        bSlot.sunPillarMat.opacity = Math.pow(1 - pillarP, 1.35) * 0.94 * hot;
         bSlot.sunPillarMat.color.setHex(p < 0.12 ? 0xffffff : cPrimary);
 
         // Tilted Planetary Equatorial Plasma Halo (anime planet-buster ring!)
@@ -6225,33 +6301,34 @@ export class Renderer {
         const tiltDir = st.salvoIndex % 2 === 0 ? -1 : 1;
         bSlot.equatorHalo.position.y = 3.6 + p * 3.8;
         bSlot.equatorHalo.rotation.set(0.38 * tiltDir, t * 2.4 * tiltDir, -0.26 * tiltDir);
-        bSlot.equatorHalo.scale.set(eqR, eqR, 1);
+        bSlot.equatorHalo.scale.set(eqR, 1, eqR);
         bSlot.equatorHaloMat.color.setHex(p < 0.14 ? 0xffffff : cPrimary);
-        bSlot.equatorHaloMat.opacity = p < 0.55 ? Math.pow(1 - eqP, 1.15) * 0.9 : 0;
+        bSlot.equatorHaloMat.opacity = Math.pow(1 - eqP, 1.15) * 0.9 * front;
 
         const fbRadius = p < 0.16 ? 2.6 + (p / 0.16) * 11.2 : 13.8 + (p - 0.16) * 4.8;
         const fbFade = Math.max(0, 1 - p * 1.82);
         bSlot.fireball.scale.set(fbRadius, fbRadius * 0.78, fbRadius);
-        bSlot.fireballMat.opacity = 0.86 * fbFade;
+        bSlot.fireballMat.opacity = 0.86 * fbFade * front;
         bSlot.fireballMat.color.setHex(p < 0.10 ? 0xffffff : cBeam);
 
         const capY = 3.4 + Math.pow(p, 0.48) * 10.8;
         const stemH = Math.max(1.4, capY - 0.35);
-        bSlot.stem.scale.set(1.18 + p * 0.62, stemH, 1.18 + p * 0.62);
+        const columnWidth = (1.18 + p * 0.62) * (1 - 0.54 * afterImpact);
+        bSlot.stem.scale.set(columnWidth, stemH, columnWidth);
         bSlot.stem.position.y = stemH * 0.48;
         bSlot.stem.rotation.set(0, t * 2.1 + sIdx, 0);
         bSlot.stemMat.uniforms.uTime!.value = t + sIdx * 1.7;
         bSlot.stemMat.uniforms.uProgress!.value = p;
-        bSlot.stemMat.uniforms.uOpacity!.value = 0.98 * fade;
+        bSlot.stemMat.uniforms.uOpacity!.value = 0.98 * smoke;
         bSlot.stemMat.uniforms.uPalette!.value = pIdx;
 
-        const capScale = 1.0 + Math.pow(p, 0.42) * 2.48;
+        const capScale = (1.0 + Math.pow(p, 0.42) * 2.48) * (1 - 0.26 * afterImpact);
         bSlot.cap.position.y = capY;
         bSlot.cap.scale.set(capScale * 1.30, capScale * 0.94, capScale * 1.30);
         bSlot.cap.rotation.set(0, -t * 1.3 - sIdx, 0);
         bSlot.capMat.uniforms.uTime!.value = t + sIdx * 1.7;
         bSlot.capMat.uniforms.uProgress!.value = p;
-        bSlot.capMat.uniforms.uOpacity!.value = 0.99 * fade;
+        bSlot.capMat.uniforms.uOpacity!.value = 0.99 * smoke;
         bSlot.capMat.uniforms.uPalette!.value = pIdx;
 
         bSlot.crown.position.y = capY + 0.58 * capScale;
@@ -6259,12 +6336,12 @@ export class Renderer {
         bSlot.crown.rotation.set(0, t * 1.0 + sIdx, 0);
         bSlot.crownMat.uniforms.uTime!.value = t + sIdx * 1.7;
         bSlot.crownMat.uniforms.uProgress!.value = p * 0.82;
-        bSlot.crownMat.uniforms.uOpacity!.value = 0.98 * fade;
+        bSlot.crownMat.uniforms.uOpacity!.value = 0.98 * smoke;
         bSlot.crownMat.uniforms.uPalette!.value = pIdx;
 
         bSlot.coreDome.position.y = capY * 0.92;
         bSlot.coreDome.scale.setScalar(capScale * 2.12);
-        bSlot.coreDomeMat.opacity = Math.max(0, (1 - p * 1.32) * 0.82) * fade;
+        bSlot.coreDomeMat.opacity = Math.max(0, (1 - p * 1.32) * 0.82) * hot;
         bSlot.coreDomeMat.color.setHex(p < 0.22 ? 0xffffff : cPrimary);
 
         const lowCycle = (p * 2.4 + sIdx * 0.25) % 1.0;
@@ -6272,27 +6349,27 @@ export class Renderer {
         bSlot.vortexLower.scale.setScalar(1.15 + lowCycle * 1.12 + p * 0.4);
         bSlot.vortexLower.rotation.set(0, t * 4.0, 0);
         bSlot.vortexLowerMat.color.setHex(cSecondary);
-        bSlot.vortexLowerMat.opacity = Math.sin(lowCycle * Math.PI) * 0.86 * fade;
+        bSlot.vortexLowerMat.opacity = Math.sin(lowCycle * Math.PI) * 0.86 * hot;
 
         bSlot.vortexUpper.position.y = capY - 0.36 * capScale;
         bSlot.vortexUpper.scale.setScalar(capScale * 1.28);
         bSlot.vortexUpper.rotation.set(0, -t * 3.0, 0);
         bSlot.vortexUpperMat.color.setHex(cPrimary);
-        bSlot.vortexUpperMat.opacity = 0.84 * fade;
+        bSlot.vortexUpperMat.opacity = 0.84 * hot;
 
         const wilsonP = Math.min(1, p / 0.38);
         const wilsonR = 4.4 + wilsonP * 25.5;
         bSlot.wilsonDome.position.y = 0.2;
         bSlot.wilsonDome.scale.set(wilsonR, wilsonR * 0.76, wilsonR);
-        bSlot.wilsonDomeMat.opacity = p < 0.38 ? Math.sin(wilsonP * Math.PI) * 0.56 : 0;
+        bSlot.wilsonDomeMat.opacity = Math.sin(wilsonP * Math.PI) * 0.56 * front;
 
         const machR = 3.8 + p * 38.0;
         bSlot.machRing.position.y = capY * 0.82;
-        bSlot.machRing.scale.set(machR, machR, 1);
+        bSlot.machRing.scale.set(machR, 1, machR);
         bSlot.machRingMat.color.setHex(cPrimary);
-        bSlot.machRingMat.opacity = Math.max(0, (1 - p * 1.15) * 0.88);
+        bSlot.machRingMat.opacity = Math.max(0, (1 - p * 1.15) * 0.88) * hot;
 
-        if (p < 0.82 && Math.random() < dt * 42) {
+        if (hot > 0.05 && Math.random() < dt * 42 * hot) {
           const ang = Math.random() * Math.PI * 2;
           const rad = capScale * 3.0;
           this.effects.burst(st.x + Math.cos(ang) * rad, capY, st.z + Math.sin(ang) * rad, p < 0.35 ? cPrimary : cSecondary, 3, {
@@ -6588,10 +6665,18 @@ export class Renderer {
 
     if (snap.reactorWallZ !== null && snap.reactorWallZ !== undefined) {
       this.reactorWallMesh.visible = true;
-      this.reactorWallMesh.position.set(0, 1.2, snap.reactorWallZ);
-      this.reactorWallMat.opacity = 0.68 + 0.22 * Math.sin(t * 30);
+      this.reactorWallMesh.position.set(0, 0, snap.reactorWallZ);
+      this.reactorWallMat.opacity = 0.9 + 0.08 * Math.sin(t * 14);
+      for (let i = this.reactorContacts.length - 1; i >= 0; i--) {
+        const point = this.reactorContacts[i]!;
+        if (snap.reactorWallZ > point.z) continue;
+        this.effects.streaks(point.x, 0.78, point.z, 0xb8fff2, 6, { speed: 11, len: 0.85, life: 0.22, coneBiasZ: -0.6 });
+        this.effects.groundFlash(point.x, point.z, 0x57eadf, 1.55, 0.16);
+        this.reactorContacts.splice(i, 1);
+      }
     } else {
       this.reactorWallMesh.visible = false;
+      this.reactorContacts.length = 0;
     }
 
     // 6. Dynamic Tactical Drop Events (限时战术空投信标 & 失控核心货运车 — Pooled & Shared Geometry)
@@ -6902,12 +6987,12 @@ export class Renderer {
     this.reactorMandalaGroup = new THREE.Group();
     this.reactorMandalaMat = additive(0xffdf58, 0.78);
     this.reactorMandalaOuter = new THREE.Mesh(
-      new THREE.RingGeometry(2.35, 2.68, 6).rotateX(-Math.PI / 2),
+      new THREE.RingGeometry(2.54, 2.66, 6).rotateX(-Math.PI / 2),
       this.reactorMandalaMat,
     );
     this.reactorMandalaInner = new THREE.Mesh(
-      new THREE.RingGeometry(1.42, 1.72, 8).rotateX(-Math.PI / 2),
-      additive(0x62f4ff, 0.74),
+      new THREE.RingGeometry(1.62, 1.72, 8).rotateX(-Math.PI / 2),
+      additive(0x62f4ff, 0.52),
     );
     const crossSpoke = new THREE.Mesh(
       new THREE.PlaneGeometry(5.2, 0.16).rotateX(-Math.PI / 2),
@@ -7011,10 +7096,10 @@ export class Renderer {
       this.reactorMandalaGroup.visible = true;
       this.reactorMandalaGroup.position.set(snap.squadX, 0.058 + airY * 0.85, PLAYER_Z);
       const burstBoost = this.awakenCamTimer > 0 ? 1 + Math.sin((1 - this.awakenCamTimer / this.awakenCamDur) * Math.PI) * 0.82 : 1;
-      const baseS = (snap.formationRadius * 0.62 + 0.95) * burstBoost;
+      const baseS = ((snap.formationRadius + 0.8) / 2.54) * burstBoost;
       this.reactorMandalaGroup.scale.setScalar(baseS);
-      this.reactorMandalaOuter.rotation.z = t * 1.45;
-      this.reactorMandalaInner.rotation.z = -t * 2.15;
+      this.reactorMandalaOuter.rotation.y = t * 1.45;
+      this.reactorMandalaInner.rotation.y = -t * 2.15;
       this.reactorMandalaMat.opacity = this.awakenCamTimer > 0 ? 0.92 : 0.44 + 0.14 * Math.sin(t * 5);
     } else {
       this.reactorMandalaGroup.visible = false;
@@ -7233,6 +7318,17 @@ export class Renderer {
     const colA = arch === 'singularity_supernova' ? 0xd982ff : arch === 'absolute_zero_storm' ? 0x80f8ff : 0xffe46b;
     const colB = arch === 'singularity_supernova' ? 0xffb84d : arch === 'absolute_zero_storm' ? 0xffffff : 0x62f4ff;
 
+    // The aftershocks are new hits downrange. Keep their light at the impact,
+    // so a pulse cannot restart the full-screen exposure or an overlapping nuke's camera envelope.
+    if (wave > 0) {
+      this.shake(0.22);
+      fx.groundFlash(x, z, colA, 3.8, 0.18);
+      fx.ring(x, z, colA, wave === 1 ? 6.5 : 8.0, 0.38);
+      fx.streaks(x, 1.2, z, colB, 16, { speed: 17, len: 1.45, life: 0.24, coneBiasZ: -0.5 });
+      fx.burst(x, 1.1, z, colA, 32, { speed: 10, size: 0.43, life: 0.38, up: 1.4 });
+      return;
+    }
+
     if (arch === 'singularity_supernova') {
       this.nukeTintVec.set(0.88, 0.48, 1.0);
     } else if (arch === 'absolute_zero_storm') {
@@ -7241,39 +7337,39 @@ export class Renderer {
       this.nukeTintVec.set(1.0, 0.86, 0.36);
     }
 
-    this.nirvanaGlowAmt = wave === 0 ? 1.0 : Math.max(this.nirvanaGlowAmt, 0.82);
-    this.nukeHeatAmt = Math.max(this.nukeHeatAmt, wave === 0 ? 0.68 : 0.44);
-    this.nukeFlareAmt = Math.max(this.nukeFlareAmt, wave === 0 ? 0.88 : 0.56);
-    this.nukeWaveDur = wave === 0 ? 1.18 : 0.88;
+    this.nirvanaGlowAmt = 1;
+    this.nukeHeatAmt = Math.max(this.nukeHeatAmt, 0.68);
+    this.nukeFlareAmt = Math.max(this.nukeFlareAmt, 0.88);
+    this.nukeWaveDur = 0.82;
     this.nukeWaveTimer = this.nukeWaveDur;
     this.impactCenter.set(0.5, 0.44);
 
     // Massive multi-wave screen quake + shockwave + anamorphic streaks!
-    this.shake(wave === 0 ? 0.96 : 0.58);
-    this.triggerScreenQuake(wave === 0 ? 1.85 : 0.78, wave === 0 ? 0.98 : 0.62);
-    this.kickCamera((wave === 0 ? 1.05 : 0.56) * this.shakeScale, (Math.random() - 0.5) * 0.68);
-    this.triggerShockwave(wave === 0 ? 1.2 : 0.88);
-    this.triggerCinematicImpact(wave === 0 ? 0.019 : 0.013, wave === 0 ? 0.36 : 0.24, x, -18);
-    this.triggerAnamorphicFlare(x, -12, wave === 0 ? 1.0 : 0.75, arch === 'singularity_supernova' ? 0 : 1);
-    this.triggerAnamorphicFlare(0, -28, wave === 0 ? 0.92 : 0.68, 2);
+    this.shake(0.96);
+    this.triggerScreenQuake(1.85, 0.98);
+    this.kickCamera(1.05 * this.shakeScale, (Math.random() - 0.5) * 0.68);
+    this.triggerShockwave(1.2);
+    this.triggerCinematicImpact(0.019, 0.36, x, -18);
+    this.triggerAnamorphicFlare(x, -12, 1.0, arch === 'singularity_supernova' ? 0 : 1);
+    this.triggerAnamorphicFlare(0, -28, 0.92, 2);
 
     // Cascading orbital judgment detonations all the way down the neon highway!
-    const depths = wave === 0 ? [z - 4, -8, -19, -32, -46, -62] : [-10, -26, -44, -64];
+    const depths = [z - 4, -8, -19, -32, -46, -62];
     depths.forEach((dz, idx) => {
       const delay = idx * 0.065;
       fx.after(delay, () => {
-        const px = idx === 0 ? x : Math.sin(idx * 2.1 + wave) * 3.1;
+        const px = idx === 0 ? x : Math.sin(idx * 2.1) * 3.1;
         fx.groundFlash(px, dz, idx % 2 === 0 ? colA : colB, 9.5, 0.42);
         fx.ring(px, dz, 0xffffff, 13.5, 0.36);
         fx.ring(px, dz, colA, 17.5, 0.58);
         fx.ring(px, dz, colB, 11.2, 0.46);
-        fx.streaks(px, 1.2, dz, 0xffffff, wave === 0 ? 26 : 16, {
+        fx.streaks(px, 1.2, dz, 0xffffff, 26, {
           speed: 28,
           len: 2.8,
           life: 0.42,
           coneBiasZ: 0,
         });
-        fx.burst(px, 1.1, dz, idx % 2 === 0 ? colA : colB, wave === 0 ? 85 : 50, {
+        fx.burst(px, 1.1, dz, idx % 2 === 0 ? colA : colB, 85, {
           speed: 19.5,
           size: 0.64,
           life: 0.75,
@@ -7339,7 +7435,7 @@ export class Renderer {
     }
 
     // 3. 2nd-Order Overlimit Nirvana Cataclysm Construct
-    const nirRem = snap.nirvanaActiveTimer ?? 0;
+    const nirRem = (snap.nirvanaActiveTimer ?? 0) - this.outroFxElapsed;
     if (nirRem > 0) {
       const p = 1 - Math.min(1, nirRem / 2.8);
       const arch: NirvanaArchetype = snap.nirvanaArchetype ?? 'prism_kaleidoscope';
@@ -7350,38 +7446,41 @@ export class Renderer {
       this.nirvanaBurstGroup.position.set(snap.squadX * 0.22, 0, 0);
 
       // Ground Mandala expansion
-      const groundSc = 1.4 + p * 8.2;
+      const settle = THREE.MathUtils.smoothstep(p, 0.07, 0.42);
+      const groundSc = 1.4 + Math.min(p, 0.30) * 8.2;
       this.nirvanaRingOuter.scale.setScalar(groundSc);
       this.nirvanaRingInner.scale.setScalar(groundSc * 0.88);
-      this.nirvanaRingOuter.rotation.z = t * 4.8;
-      this.nirvanaRingInner.rotation.z = -t * 6.8;
+      this.nirvanaRingOuter.rotation.y = t * 4.8;
+      this.nirvanaRingInner.rotation.y = -t * 6.8;
 
       // Overhead Celestial Astrolabe rotation + breathing
       const skySc = 1.0 + Math.sin(Math.min(1, p * 2.4) * Math.PI * 0.5) * 0.45 + 0.08 * Math.sin(t * 9);
       this.nirvanaSkyHalo.scale.setScalar(skySc);
-      this.nirvanaSkyOuter.rotation.z = -t * 2.6;
-      this.nirvanaSkyInner.rotation.z = t * 4.4;
+      this.nirvanaSkyOuter.rotation.y = -t * 2.6;
+      this.nirvanaSkyInner.rotation.y = t * 4.4;
 
       // 3D Supernova Star-Core pulsation
       const corePulse = 1.0 + 0.28 * Math.sin(t * 20) + Math.sin(p * Math.PI) * 0.45;
-      this.nirvanaCoreGroup.scale.setScalar(corePulse);
+      this.nirvanaCoreGroup.scale.setScalar(corePulse * (1 - 0.60 * settle));
       this.nirvanaCoreMesh.rotation.set(t * 3.2, t * 4.6, 0);
       this.nirvanaCoreCage.rotation.set(-t * 2.4, t * 3.8, t * 1.9);
 
       // 7 Heaven-Piercing Orbital Judgment Pillars pulsing in staggered phase waves
-      const fade = Math.pow(Math.max(0, 1 - p), 0.72);
+      const fade = (1 - 0.85 * settle) * (1 - THREE.MathUtils.smoothstep(p, 0.47, 0.90));
       for (let i = 0; i < this.nirvanaPillars.length; i++) {
         const pil = this.nirvanaPillars[i]!;
         const ph = this.nirvanaPillarHalos[i]!;
         const waveBell = 0.65 + 0.55 * Math.sin(t * 16 - i * 0.9);
-        pil.scale.set(waveBell, 1.0, waveBell);
+        const width = waveBell * (1 - 0.72 * settle);
+        pil.scale.set(width, 1 - 0.4 * settle, width);
         pil.rotation.y = t * (i % 2 === 0 ? 5.2 : -5.2);
         ph.scale.setScalar(1.1 + 0.45 * waveBell);
-        ph.rotation.z = t * (i % 2 === 0 ? 4.0 : -4.0);
+        ph.rotation.y = t * (i % 2 === 0 ? 4.0 : -4.0);
       }
 
-      // Sweeping full-bridge judgment curtain (3 rapid sweeps across the 2.8s duration!)
-      const sweepPhase = (p * 3.0) % 1.0;
+      // One opening sweep; the two subsequent damage pulses are drawn at their hit positions.
+      const sweepPhase = Math.min(1, p * 3);
+      this.nirvanaCurtainMesh.visible = sweepPhase < 1;
       this.nirvanaCurtainMesh.position.z = PLAYER_Z - sweepPhase * 125.0;
       this.nirvanaCurtainMesh.scale.y = 0.85 + 0.35 * Math.sin(t * 26);
 
@@ -7391,8 +7490,9 @@ export class Renderer {
       this.nirvanaPillarMat.color.setHex(arch === 'singularity_supernova' ? 0xf2a6ff : arch === 'absolute_zero_storm' ? 0xb8ffff : 0xfff099);
       this.nirvanaCurtainMat.color.setHex(colInner);
 
-      this.nirvanaOuterMat.opacity = 0.92 * fade;
-      this.nirvanaInnerMat.opacity = 0.88 * fade;
+      const ringFade = fade * (1 - 0.78 * settle);
+      this.nirvanaOuterMat.opacity = 0.92 * ringFade;
+      this.nirvanaInnerMat.opacity = 0.88 * ringFade;
       this.nirvanaCoreMat.opacity = 0.96 * fade;
       this.nirvanaCageMat.opacity = 0.86 * fade;
       this.nirvanaPillarMat.opacity = 0.74 * fade;

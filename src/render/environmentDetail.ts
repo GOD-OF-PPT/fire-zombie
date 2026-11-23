@@ -16,7 +16,11 @@ interface DetailPalette {
   fog: number;
 }
 
-const CITY_SPAN = 130;
+// Tower body, roof, floors and antenna must wrap at the same point.
+export function towerZ(tower: TowerDatum, scroll: number): number {
+  return -162 + THREE.MathUtils.euclideanModulo(tower.z * 1.34 + scroll * 0.9, 175);
+}
+const SIGN_COUNT = 8;
 const TRAFFIC_COUNT = 28;
 const SEARCHLIGHT_COUNT = 8;
 
@@ -149,9 +153,9 @@ export class EnvironmentDetail {
     const billboardGeo = new THREE.PlaneGeometry(3.8, 1.9);
     billboardGeo.setAttribute(
       'panelIndex',
-      new THREE.InstancedBufferAttribute(new Float32Array(Array.from({ length: 12 }, (_, i) => i % 3)), 1),
+      new THREE.InstancedBufferAttribute(new Float32Array(Array.from({ length: SIGN_COUNT }, (_, i) => i % 3)), 1),
     );
-    this.billboards = new THREE.InstancedMesh(billboardGeo, this.billboardMat, 12);
+    this.billboards = new THREE.InstancedMesh(billboardGeo, this.billboardMat, SIGN_COUNT);
     this.billboards.frustumCulled = false;
 
     // Distant flying neon sky-traffic streaks along multi-altitude lanes
@@ -236,7 +240,7 @@ export class EnvironmentDetail {
     this.gantryMat.emissive.set(pal.edge);
     this.billboardMat.color.set(0xffffff);
     const tint = new THREE.Color();
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < SIGN_COUNT; i++) {
       tint.set(i % 3 === 0 ? pal.edge : i % 3 === 1 ? pal.grid : 0xffffff).lerp(new THREE.Color(0xffffff), 0.58);
       this.billboards.setColorAt(i, tint);
     }
@@ -257,7 +261,7 @@ export class EnvironmentDetail {
     let antennaIndex = 0;
     for (let i = 0; i < this.towers.length; i++) {
       const tw = this.towers[i]!;
-      const z = -112 + ((((tw.z + scroll * 0.9) % CITY_SPAN) + CITY_SPAN) % CITY_SPAN);
+      const z = towerZ(tw, scroll);
       for (let band = 0; band < 3; band++) {
         const y = band === 2 ? tw.h - 0.15 : tw.h * (band === 0 ? 0.28 : 0.64);
         d.position.set(tw.x, -0.6 + y, z);
@@ -302,19 +306,18 @@ export class EnvironmentDetail {
     }
     this.gantries.instanceMatrix.needsUpdate = true;
 
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < SIGN_COUNT; i++) {
       const side = i % 2 === 0 ? -1 : 1;
-      const z = -120 + ((((i * 11.3 + scroll * 0.9) % 136) + 136) % 136);
-      const y = 3.3 + (i % 3) * 1.35;
-      d.position.set(side * (7.3 + (i % 3) * 0.8), y, z);
-      d.rotation.set(0, -side * 0.32, 0);
-      const pulse = 0.94 + Math.sin(time * 1.4 + i * 2.1) * 0.04;
-      d.scale.set(pulse, pulse, pulse);
+      const support = Math.floor(i * 12 / SIGN_COUNT);
+      const z = -128 + THREE.MathUtils.euclideanModulo(support * 12 + scroll * 0.9, 144);
+      d.position.set(side * 6.84, 3.22, z + 0.15);
+      d.rotation.set(0, -side * 0.17, 0);
+      d.scale.setScalar(0.77);
       d.updateMatrix();
       this.billboards.setMatrixAt(i, d.matrix);
     }
     this.billboards.instanceMatrix.needsUpdate = true;
-    this.billboardMat.opacity = 0.8 + Math.sin(time * 0.8) * 0.06;
+    this.billboardMat.opacity = 0.71;
 
     // Update sky-traffic lanes (counter-flowing airborne light trails)
     for (let i = 0; i < TRAFFIC_COUNT; i++) {

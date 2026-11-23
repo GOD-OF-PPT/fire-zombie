@@ -625,7 +625,7 @@ export type SimEvent =
   | { type: 'PANTHEON_STAGE_START'; stage: 1 | 2 | 3 | 4; affixName: string; bonusSquad: number }
   | { type: 'PANTHEON_DUAL_BOSS'; primaryId: BossId; coBossId: BossId }
   | { type: 'CORE_REACTOR_AWAKEN'; tier: CoreReactorTier }
-  | { type: 'REACTOR_PULSE_WALL'; x: number; z: number; hits: number; source: 'overdrive' | 'aegis' }
+  | { type: 'REACTOR_PULSE_WALL'; x: number; z: number; hits: number; source: 'overdrive' | 'aegis'; contacts: { x: number; z: number }[] }
   | { type: 'TACTICAL_DROP_SPAWN'; kind: TacticalEventKind; x: number; z: number }
   | { type: 'TACTICAL_DROP_CLAIM'; kind: TacticalEventKind; x: number; z: number; newReactorTier: CoreReactorTier; rewardText?: string }
   | { type: 'WINGMAN_FORMATION_SHIFT'; wingman: WingmanId; formation: WingmanFormation }

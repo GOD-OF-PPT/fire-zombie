@@ -805,6 +805,7 @@ export function triggerCoreReactorDomainPulse(
     world.reactorWallZ = PLAYER_Z - 1.5;
     const wallDmg = Math.round(Math.max(160, world.trueSquadDps * 1.45) * world.mods.damageMult);
     let hits = 0;
+    const impactBands: Array<{ x: number; z: number } | undefined> = [];
 
     // Clear all hostile projectiles in the corridor
     for (let i = world.projectiles.length - 1; i >= 0; i--) {
@@ -822,6 +823,9 @@ export function triggerCoreReactorDomainPulse(
       const e = world.enemies[i];
       if (!e || !e.active || e.consumed || e.bypassed || e.hp <= 0) continue;
       if (e.z >= -46 && e.z <= PLAYER_Z + 1) {
+        // Sample one actual contact per strip of road for the visual sweep.
+        const band = Math.floor((PLAYER_Z + 1 - e.z) / 8);
+        impactBands[band] ??= { x: e.x, z: e.z };
         if (e.shieldHp > 0) e.shieldHp = 0;
         recordDamage(world, 'fusions', Math.min(e.hp, wallDmg));
         damageEnemy(world, e, wallDmg, 1.4, events, { bypassShield: true });
@@ -839,6 +843,7 @@ export function triggerCoreReactorDomainPulse(
 
     events.push({
       type: 'REACTOR_PULSE_WALL',
+      contacts: impactBands.filter((point): point is { x: number; z: number } => point !== undefined),
       x: world.squadX,
       z: PLAYER_Z - 2,
       hits,

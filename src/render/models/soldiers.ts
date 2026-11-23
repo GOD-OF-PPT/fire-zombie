@@ -11,7 +11,6 @@ import type { RigPartDef } from './rig';
 
 const SUIT = 0x192548;
 const SUIT_DARK = 0x0b1022;
-const ARMOR = 0xeaf8ff;
 const CYAN = 0x3ef3ff;
 const GOLD = 0xffc531;
 const GOLD_ARMOR = 0xfff2cc;
@@ -23,6 +22,27 @@ export const WEAPON_GLOW: Record<WeaponId, number> = {
   plasma: 0xff9a3c,
   cryo: 0x9fe6ff,
 };
+
+// Keep the held weapon outside the chest silhouette when viewed from behind the squad.
+export const TROOPER_GRIP: V3 = [0.174, -0.09, -0.19];
+
+/** One enamel command pennant, attached only to the lead infantry actor. */
+export function buildCommandPennant(): THREE.BufferGeometry {
+  const banner = new THREE.Shape();
+  banner.moveTo(0, 0);
+  banner.lineTo(-0.58, -0.09);
+  banner.lineTo(-0.39, -0.22);
+  banner.lineTo(-0.47, -0.40);
+  banner.lineTo(0, -0.32);
+  banner.closePath();
+  const cloth = new THREE.ExtrudeGeometry(banner, { depth: 0.026, bevelEnabled: false });
+  const kit = new GeoBuilder();
+  kit.add(cyl(0.022, 0.037, 0.83, 6), 0x273749, 0, { p: [-0.27, 1.35, 0.15] })
+    .add(cloth, 0xf07737, 0, { p: [-0.27, 1.74, 0.15], r: [0.09, 0.18, -0.06] })
+    .add(box(0.058, 0.27, 0.035), 0xffeac2, 0, { p: [-0.38, 1.60, 0.19], r: [0.09, 0.18, 0.18] })
+    .add(oct(0.058), 0xffc96b, 0, { p: [-0.27, 1.79, 0.15] });
+  return kit.build();
+}
 
 const along = (len: number, r: number, seg = 10): THREE.BufferGeometry => cyl(r, r, len, seg).rotateX(Math.PI / 2);
 
@@ -106,7 +126,7 @@ export interface SoldierModel {
 }
 
 function trooper(heavy: boolean): SoldierModel {
-  const armor = heavy ? GOLD_ARMOR : ARMOR;
+  const armor = heavy ? 0xe4a64a : 0x749bbd;
   const accent = heavy ? GOLD : CYAN;
   const subAccent = heavy ? 0xff7a2e : 0x2b7dff;
   const k = heavy ? 1.32 : 1;
@@ -129,10 +149,9 @@ function trooper(heavy: boolean): SoldierModel {
     .add(box(0.305, 0.052, 0.205), SUIT_DARK, 0, { p: [0, 0.03, 0] })
     .add(box(0.06, 0.038, 0.025), accent, 2.2, { p: [0, 0.03, -0.108] })
     // Detailed camera-facing reactor backpack + winglets
-    .add(box(0.23, 0.23, 0.11), 0x21325c, 0, { p: [0, 0.185, 0.142] })
-    .add(oct(0.045), accent, 2.8, { p: [0, 0.185, 0.202], s: [1, 1.3, 0.5] })
-    .add(box(0.036, 0.16, 0.022), accent, 2.4, { p: [0.068, 0.185, 0.2] })
-    .add(box(0.036, 0.16, 0.022), accent, 2.4, { p: [-0.068, 0.185, 0.2] })
+    .add(box(0.24, 0.23, 0.12), SUIT_DARK, 0, { p: [0, 0.185, 0.142] })
+    .add(cyl(0.095, 0.081, 0.17, 6), armor, 0, { p: [0, 0.196, 0.169], s: [1.12, 1, 0.65] })
+    .add(box(0.13, 0.032, 0.019), accent, 2.1, { p: [0, 0.213, 0.229] })
     .add(box(0.09, 0.03, 0.07), armor, 0, { p: [0.145, 0.26, 0.15], r: [0, 0, -0.38] })
     .add(box(0.09, 0.03, 0.07), armor, 0, { p: [-0.145, 0.26, 0.15], r: [0, 0, 0.38] })
     .add(cyl(0.011, 0.014, 0.17, 6), SUIT_DARK, 0, { p: [0.085, 0.365, 0.15] })
@@ -144,7 +163,8 @@ function trooper(heavy: boolean): SoldierModel {
     .add(sph(0.096, 12, 8), armor, 0, { p: [0.188, 0.275, 0], s: [1.18, 0.88, 1.14] })
     .add(sph(0.09, 12, 8), armor, 0, { p: [-0.185, 0.272, 0], s: [1.15, 0.85, 1.12] })
     .add(box(0.024, 0.024, 0.13), accent, 2.2, { p: [0.205, 0.315, 0] })
-    .add(box(0.024, 0.024, 0.13), accent, 2.2, { p: [-0.205, 0.315, 0] });
+    .add(box(0.024, 0.024, 0.13), accent, 2.2, { p: [-0.205, 0.315, 0] })
+    .add(cyl(0.081, 0.102, 0.058, 6), heavy ? 0xffd785 : 0xc8dbea, 0, { p: [-0.20, 0.325, 0.012], r: [0, 0, 0.32] });
   if (heavy) {
     body
       .add(cyl(0.048, 0.064, 0.17, 10), 0x3a3020, 0, { p: [0.075, 0.1, 0.215] })
@@ -159,11 +179,11 @@ function trooper(heavy: boolean): SoldierModel {
   const head = new GeoBuilder();
   const helmet = heavy ? 0xffa81a : 0x2c78ff;
   head
-    .add(sph(0.162, 16, 12), helmet, 0, { p: [0, 0.115, 0] })
-    .add(sph(0.135, 14, 10), armor, 0, { p: [0, 0.145, 0.025], s: [0.92, 0.85, 0.96] })
+    .add(sph(0.153, 16, 12), helmet, 0, { p: [0, 0.11, 0], s: [1, 0.93, 1.08] })
+    .add(sph(0.135, 14, 10), armor, 0, { p: [0, 0.152, 0.025], s: [0.95, 0.80, 0.98] })
     .add(sph(0.164, 14, 10), SUIT_DARK, 0, { p: [0, 0.072, -0.02], s: [1, 0.55, 1] })
     .add(box(0.215, 0.066, 0.055), accent, 2.8, { p: [0, 0.105, -0.135] })
-    .add(box(0.036, 0.038, 0.31), accent, 2.4, { p: [0, 0.278, 0.01] })
+    .add(box(0.04, 0.025, 0.24), heavy ? 0xffe4a0 : 0xa9c4db, 0, { p: [0, 0.254, 0.01] })
     .add(cyl(0.04, 0.04, 0.055, 10).rotateZ(Math.PI / 2), armor, 0, { p: [0.162, 0.105, 0] })
     .add(cyl(0.04, 0.04, 0.055, 10).rotateZ(Math.PI / 2), armor, 0, { p: [-0.162, 0.105, 0] })
     .add(cyl(0.024, 0.024, 0.062, 10).rotateZ(Math.PI / 2), accent, 2.4, { p: [0.165, 0.105, 0] })
@@ -174,15 +194,15 @@ function trooper(heavy: boolean): SoldierModel {
       .add(tor(0.11, 0.014, 5, 16), GOLD, 2.4, { p: [0, 0.28, 0], r: [Math.PI / 2, 0, 0] });
   }
   const arms = new GeoBuilder();
-  addLimb(arms, [0.18, 0, 0], [0.13, -0.12, -0.12], 0.046, 0.042, SUIT);
-  addLimb(arms, [-0.18, 0, 0], [-0.02, -0.08, -0.22], 0.046, 0.042, SUIT);
+  addLimb(arms, [0.18, 0, 0], TROOPER_GRIP, 0.046, 0.042, SUIT);
+  addLimb(arms, [-0.18, 0, 0], [0.12, -0.085, -0.30], 0.046, 0.042, SUIT);
   arms
-    .add(sph(0.048, 8, 6), armor, 0, { p: [0.12, -0.12, -0.13] })
-    .add(sph(0.048, 8, 6), armor, 0, { p: [-0.01, -0.08, -0.23] });
+    .add(sph(0.048, 8, 6), armor, 0, { p: TROOPER_GRIP })
+    .add(sph(0.048, 8, 6), armor, 0, { p: [0.12, -0.085, -0.30] });
   const weapons = {} as Record<WeaponId, THREE.BufferGeometry>;
   for (const w of ['pulse', 'scatter', 'rail', 'plasma', 'cryo'] as WeaponId[]) {
     const g = buildWeaponGeo(w, 1);
-    g.translate(0.08, -0.1, -0.12);
+    g.translate(...TROOPER_GRIP);
     weapons[w] = g;
   }
   const scaleAll = (geo: THREE.BufferGeometry): THREE.BufferGeometry => geo.scale(k, k, k);
@@ -197,7 +217,7 @@ function trooper(heavy: boolean): SoldierModel {
       { name: 'gun', geo: weapons.pulse, joint: [0, 0.53 * k, 0] },
     ],
     weapons,
-    muzzle: [0.08 * k, 0.45 * k, -0.62 * k],
+    muzzle: [TROOPER_GRIP[0] * k, 0.44 * k, -0.69 * k],
     scale: k,
     height: 0.85 * k,
   };

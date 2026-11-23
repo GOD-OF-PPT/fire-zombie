@@ -13,6 +13,13 @@ export class Infrastructure {
     const b = new GeoBuilder();
     b.add(box(0.8, 0.28, 5.4), 0x293b52, 0, { p: [0, -0.14, 0] });
     b.add(box(0.76, 0.1, 5.1), 0x58677a, 0, { p: [0, 0.02, 0] });
+    // Beam joints and spliced end plates remain visible beside the moving squad.
+    for (const z of [-2.1, 0, 2.1]) {
+      b.add(box(0.2, 0.10, 0.34), 0x617781, 0, { p: [0.32, 0.10, z] })
+        .add(box(0.11, 0.49, 0.15), 0x314659, 0, { p: [0.32, 0.36, z] });
+    }
+    b.add(box(0.105, 0.14, 5.12), 0x7f959e, 0, { p: [0.32, 0.54, 0] })
+      .add(box(0.14, 0.17, 0.44), 0xc19b62, 0, { p: [0.32, 0.54, -2.31] });
     b.add(box(0.42, 0.6, 1.2), 0x1d2b40, 0, { p: [0, 0.35, -1.6] });
     b.add(box(0.5, 0.08, 1.3), 0x718498, 0, { p: [0, 0.67, -1.6] });
     // Recessed heat exchangers and copper conduit.

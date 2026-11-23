@@ -13,7 +13,7 @@ import {
   type Pose,
   type PoseFn,
 } from './proceduralRig';
-import { buildRewardDisplayGeo, buildSoldierModels, buildWeaponGeo, type SoldierModel } from './soldiers';
+import { buildRewardDisplayGeo, buildSoldierModels, buildWeaponGeo, TROOPER_GRIP, type SoldierModel } from './soldiers';
 import { buildOutlineGeometry } from './toon';
 
 /**
@@ -23,8 +23,6 @@ import { buildOutlineGeometry } from './toon';
 
 const WEAPON_IDS: readonly WeaponId[] = ['pulse', 'scatter', 'rail', 'plasma', 'cryo'];
 const REWARD_IDS: readonly RewardId[] = [...WEAPON_IDS, 'blades'];
-/** Hand offset of the soldier gun relative to the arms pivot (matches soldiers.ts at scale 1) */
-const GRIP_OFFSET: readonly [number, number, number] = [0.08, -0.1, -0.12];
 
 function heroTemplate(model: SoldierModel, tier: 1 | 2 | 3, targetHeight: number): ActorTemplate {
   const mech = tier === 3;
@@ -446,7 +444,7 @@ export function buildProceduralLibrary(): GltfLibrary {
   const [trooper, heavy, mech] = buildSoldierModels();
   const enemies = buildProceduralEnemyTemplates();
   const weapons = {} as Record<WeaponId, WeaponMeshDef>;
-  for (const w of WEAPON_IDS) weapons[w] = meshDef(buildWeaponGeo(w, 1).translate(...GRIP_OFFSET));
+  for (const w of WEAPON_IDS) weapons[w] = meshDef(buildWeaponGeo(w, 1).translate(...TROOPER_GRIP));
   const vaultRewards = {} as Record<RewardId, WeaponMeshDef>;
   for (const id of REWARD_IDS) vaultRewards[id] = rewardDef(id);
   return {

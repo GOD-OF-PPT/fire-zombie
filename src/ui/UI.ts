@@ -230,6 +230,8 @@ export class UI {
   private vignette!: HTMLElement;
   private squadBadge!: HTMLElement;
   private squadNum!: HTMLElement;
+  private squadGain!: HTMLElement;
+  private gainUntil = 0;
   private progressFill!: HTMLElement;
   private progressWrap!: HTMLElement;
   private speedBtn!: HTMLButtonElement;
@@ -418,7 +420,7 @@ export class UI {
       </div>
       <div class="drill-cue" data-testid="drill-cue" role="status" hidden></div>
       <div class="endless-hud" data-testid="endless-hud"><b>阶段 1</b><span>首领 0 · 0m</span></div>
-      <div class="squad-badge" data-testid="squad-count"><span class="sq-icon">◆</span><span class="sq-num">1</span></div>
+      <div class="squad-badge" data-testid="squad-count"><span class="sq-icon">◆</span><span class="sq-num">1</span><span class="sq-gain" hidden></span></div>
       <div class="live-telemetry-panel" data-testid="live-telemetry-panel" data-ui-block="1"></div>
       <div class="bottom-dock" data-ui-block="1">
         <button class="aegis-btn ready" data-testid="aegis-btn" aria-label="相位脉冲">
@@ -464,7 +466,7 @@ export class UI {
           <div class="rp-markers" data-testid="rp-markers"></div>
         </div>
       </div>
-      <div class="combo"></div>
+      <div class="combo"><b></b>连杀<small hidden></small></div>
       <div class="hint" data-testid="drag-hint"><div class="hand">👆</div><div>左右拖动控制蜂群</div></div>`);
     this.root.appendChild(this.hud);
     this.progressWrap = this.hud.querySelector('.progress')!;
@@ -496,6 +498,7 @@ export class UI {
     this.feverBadge = this.hud.querySelector('.fever-badge')!;
     this.squadBadge = this.hud.querySelector('.squad-badge')!;
     this.squadNum = this.hud.querySelector('.sq-num')!;
+    this.squadGain = this.squadBadge.querySelector('.sq-gain')!;
     this.resoFill = this.hud.querySelector('.reso-fill')!;
     this.resoWrap = this.hud.querySelector('.reso')!;
     this.resoLabel = this.resoWrap.querySelector('span')!;
@@ -1623,6 +1626,8 @@ export class UI {
   }
 
   showHud(sector: SectorId, endless = false, blitz = false): void {
+    this.gainUntil = 0;
+    this.squadGain.hidden = true;
     this.drillRewardTime = 0;
     this.drillCue.hidden = true;
     this.hud.classList.add('show');
@@ -1758,7 +1763,9 @@ export class UI {
     const rh = this.root.clientHeight || 780;
     const rawX = Number.isFinite(badgePos.x) && badgePos.x > 1 ? badgePos.x : rw * 0.5;
     const rawY = Number.isFinite(badgePos.y) && badgePos.y > 1 ? badgePos.y : rh * 0.74;
-    const bx = Math.max(48, Math.min(rw - 48, rawX));
+    if (snap.simTime >= this.gainUntil) this.squadGain.hidden = true;
+    const margin = this.squadGain.hidden ? 48 : 80;
+    const bx = Math.max(margin, Math.min(rw - margin, rawX));
     const by = Math.max(108, Math.min(rh - 84, rawY));
     this.squadBadge.style.transform = `translate(${bx.toFixed(1)}px, ${by.toFixed(1)}px) translate(-50%, -100%)`;
     const reserve = snap.reserveTroops ?? 0;
@@ -2216,7 +2223,12 @@ export class UI {
     );
   }
 
-  toast(text: Content, ms = 2600): void {
+  hasCombatAnnouncement(): boolean {
+    return this.banner.classList.contains('show') || this.voxHudEl.classList.contains('show');
+  }
+
+  toast(text: Content, ms = 2600, tutorial = false): void {
+    this.toastEl.classList.toggle('tutorial', tutorial);
     render(this.toastEl, text);
     this.toastEl.classList.remove('show');
     void this.toastEl.offsetWidth;
@@ -2225,10 +2237,23 @@ export class UI {
     this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('show'), ms);
   }
 
-  combo(n: number): void {
-    render(this.comboEl, html`<b>${n}</b> 连杀`);
-    this.comboEl.classList.remove('show');
-    void this.comboEl.offsetWidth;
+  showGateGain(gain: number, streak: number, streams: number, simTime: number): void {
+    const note = [streak ? `连门×${streak}` : '', streams ? `弹幕×${streams}` : ''].filter(Boolean).join(' · ');
+    render(this.squadGain, html`<b>+${gain}</b>${note}`);
+    this.squadGain.hidden = false;
+    this.gainUntil = simTime + 1.1;
+    this.squadGain.animate([{ translate: '0 4px', opacity: 0.55 }, { translate: '0 0', opacity: 1 }], 150);
+  }
+
+  pulseResonance(): void {
+    this.resoWrap.animate([{ outline: '2px solid #ffdf70' }, { outline: '2px solid transparent' }], 380);
+  }
+
+  combo(n: number, burst = 0): void {
+    this.comboEl.querySelector('b')!.textContent = String(n);
+    const batch = this.comboEl.querySelector('small')!;
+    if (burst > 0) batch.textContent = `歼灭 ×${burst}`;
+    if (burst > 0 || !this.comboEl.classList.contains('show')) batch.hidden = burst === 0;
     this.comboEl.classList.add('show');
     this.comboEl.classList.toggle('hot', n >= 15);
     if (this.comboTimer !== null) clearTimeout(this.comboTimer);
@@ -2335,7 +2360,7 @@ export class UI {
     this.flash.style.transition = 'none';
     this.flash.style.opacity = String(Math.min(0.95, scaled * 0.94));
     void this.flash.offsetWidth;
-    this.flash.style.transition = 'opacity 0.32s cubic-bezier(0.22, 1, 0.36, 1)';
+    this.flash.style.transition = 'opacity 0.22s cubic-bezier(0.22, 1, 0.36, 1)';
     this.flash.style.opacity = '0';
 
     this.nukeScorch.style.background =
@@ -2353,7 +2378,7 @@ export class UI {
     this.nukeScorch.style.transition = 'none';
     this.nukeScorch.style.opacity = String(Math.min(0.9, scaled * 0.86));
     void this.nukeScorch.offsetWidth;
-    this.nukeScorch.style.transition = 'opacity 2.2s ease-out';
+    this.nukeScorch.style.transition = 'opacity 0.85s ease-out';
     this.nukeScorch.style.opacity = '0';
   }
 
@@ -2377,7 +2402,7 @@ export class UI {
       this.nukeScorchTimer = null;
     }
     const pIdx = (Math.max(1, salvoIndex) - 1) % 3;
-    // Stage 1: Blinding core flash that clears swiftly (~260ms) so the mushroom cloud, orbital beam & screen quake shine!
+    // The core flashes on impact; the second shockwave only lights the edges.
     this.flash.style.background =
       pIdx === 1
         ? 'radial-gradient(circle at 50% 42%, rgba(248,255,255,0.98) 0%, rgba(130,248,255,0.94) 48%, rgba(36,120,255,0.86) 100%)'
@@ -2387,7 +2412,7 @@ export class UI {
     this.flash.style.transition = 'none';
     this.flash.style.opacity = String(Math.min(0.96, scaled * 0.96));
     void this.flash.offsetWidth;
-    this.flash.style.transition = 'opacity 0.28s cubic-bezier(0.22, 1, 0.36, 1)';
+    this.flash.style.transition = 'opacity 0.20s cubic-bezier(0.22, 1, 0.36, 1)';
     this.flash.style.opacity = '0';
 
     // Stage 2: Searing radiation edge vignette matched to the active warhead spectrum!
@@ -2407,14 +2432,13 @@ export class UI {
     this.nukeScorch.style.opacity = String(Math.min(0.92, scaled * 0.88));
     void this.nukeScorch.offsetWidth;
     this.nukeScorch.style.transition = 'opacity 0.24s ease-out';
-    this.nukeScorch.style.opacity = String(Math.min(0.68, scaled * 0.64));
+    this.nukeScorch.style.opacity = String(scaled * 0.38);
     this.nukeScorchTimer = window.setTimeout(() => {
       this.nukeScorchTimer = null;
-      // Secondary pulse on shockwave Wave 2 slam, then long organic thermal decay
       this.nukeScorch.style.transition = 'none';
-      this.nukeScorch.style.opacity = String(Math.min(0.86, scaled * 0.80));
+      this.nukeScorch.style.opacity = String(scaled * 0.48);
       void this.nukeScorch.offsetWidth;
-      this.nukeScorch.style.transition = 'opacity 1.65s ease-out';
+      this.nukeScorch.style.transition = 'opacity 0.55s ease-out';
       this.nukeScorch.style.opacity = '0';
     }, 240);
   }

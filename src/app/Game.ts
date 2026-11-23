@@ -179,8 +179,6 @@ export class Game {
   private bulletTimeDur = 0.22;
   private killBatchTimer = 0;
   private killBatchCount = 0;
-  private killBatchX = 0;
-  private killBatchZ = 0;
   private hintCooldown = 0;
   private bossWarned = false;
   private hazardSeen = new Set<number>();
@@ -1222,13 +1220,12 @@ export class Game {
     if (this.critFloatClock > 0) this.critFloatClock = Math.max(0, this.critFloatClock - dt);
     if (this.specialFloatClock > 0) this.specialFloatClock = Math.max(0, this.specialFloatClock - dt);
     if (this.hintCooldown > 0) this.hintCooldown = Math.max(0, this.hintCooldown - dt);
-    // Tier-2 Feedback: coalesce rapid horde kills into ONE crisp aggregated `歼灭 ×N` callout (never per-hit number spam!)
+    // Report a burst with the combo counter after the hits in that burst have settled.
     if (this.killBatchTimer > 0) {
       this.killBatchTimer -= dt;
       if (this.killBatchTimer <= 0) {
         if (this.killBatchCount >= 5 && !snap.boss) {
-          const p = this.worldToScreen(this.killBatchX, 1.85, Math.max(-38, this.killBatchZ));
-          this.ui.floatText(p.x, p.y, `歼灭 ×${this.killBatchCount}`, 'small', 0.78, 1.0);
+          this.ui.combo(this.combo, this.killBatchCount);
         }
         this.killBatchCount = 0;
       }
@@ -1300,12 +1297,13 @@ export class Game {
 
   private hint(key: string): void {
     if (this.hintCooldown > 0 || this.hintsThisRun.has(key) || this.save.seenHints.includes(key)) return;
+    if (key !== 'hazard' && this.ui.hasCombatAnnouncement()) return;
     this.hintsThisRun.add(key);
     this.save.seenHints.push(key);
     this.hintCooldown = 3.6;
     writeSave(this.save);
     const html = HINTS[key];
-    if (html) this.ui.toast(html, 2700);
+    if (html) this.ui.toast(html, 2700, key !== 'hazard');
   }
 
   // ------------------------------------------------------------------ events → feedback
@@ -1315,6 +1313,10 @@ export class Game {
     let fatalBurstsLeft = 16;
     let impactBurstsLeft = 28;
     let frameHitCount = 0;
+    let gateGain = 0;
+    let streak = 0;
+    let streams = 0;
+    let comboMilestone = false;
     for (let i = 0; i < events.length; i++) {
       if (events[i]!.type === 'ENEMY_HIT') frameHitCount++;
     }
@@ -1385,7 +1387,7 @@ export class Game {
             this.addScore(420);
             this.ui.showBanner(
               html`<div class="b-kicker">⚡ CORE FUSION ONLINE</div><div class="b-title" style="color:${f.color}">${f.glyph} ${f.name}</div><div class="b-sub">${f.desc}</div>`,
-              'od',
+              'od pickup',
               1850,
             );
           }
@@ -1566,7 +1568,7 @@ export class Game {
             this.ui.doFlash('rgba(255,197,49,0.45)', 0.3);
             this.addScore(520);
             const p = this.worldToScreen(ev.x, 2.3, ev.z);
-            this.ui.floatText(p.x, p.y, `★ 悬赏大奖 +${ev.squadGain}人 · 升阶！`, 'gold', 1.25);
+            this.ui.floatText(p.x, p.y, `★ 悬赏 +${ev.squadGain}`, 'gold', 1);
           }
           break;
         }
@@ -1649,8 +1651,8 @@ export class Game {
         case 'GATE_STREAK': {
           fx.ring(snap.squadX, PLAYER_Z, 0xffd84a, 4.4, 0.48);
           if (live) {
-            const p = this.worldToScreen(snap.squadX, 2.35, PLAYER_Z - 1.1);
-            this.ui.floatText(p.x, p.y - 18, `连门 ×${ev.streak} · 额外 +${ev.bonus}!`, 'gold', 1.02);
+            gateGain += ev.bonus;
+            streak = ev.streak;
           }
           break;
         }
@@ -1755,7 +1757,7 @@ export class Game {
             this.ui.showBanner(
               html`<div class="b-kicker">☢ THERMONUCLEAR ANNIHILATION · SALVO ×${salvoIdx}</div><div class="b-title" style="color:${titleColor}">☢ ${salvoTag}聚变核爆 · 贯通清屏 ×${ev.kills}！</div><div class="b-sub">天基裁决光柱与星环冲击波横扫地平线${bossSub}</div>`,
               'od',
-              2150,
+              1150,
             );
           }
           break;
@@ -2014,18 +2016,15 @@ export class Game {
               this.addScore(meta.score);
               if ((snap.nukeBlastTimer ?? 0) < 2.2) {
                 this.killBatchCount += 1;
-                this.killBatchX = ev.x;
-                this.killBatchZ = ev.z;
                 if (this.killBatchTimer <= 0) this.killBatchTimer = 0.30;
               }
-              if (this.combo >= 10 && this.combo % 10 === 0) this.ui.combo(this.combo);
+              if (this.combo >= 10 && this.combo % 10 === 0) comboMilestone = true;
               if (ev.kind === 'siphon') {
                 const p = this.worldToScreen(ev.x, 1.5, ev.z);
                 this.ui.floatText(p.x, p.y, '门数值 +6', 'gold', 1);
               } else if (ev.kind === 'necromancer' && this.specialFloatClock <= 0) {
                 this.specialFloatClock = 1.1;
-                const p = this.worldToScreen(ev.x, 1.65, ev.z);
-                this.ui.floatText(p.x, p.y, '超载充能!', 'gain', 0.72);
+                this.ui.pulseResonance();
               } else if (
                 (ev.kind === 'bastion' || ev.kind === 'glacier' || ev.kind === 'brood') &&
                 this.specialFloatClock <= 0 &&
@@ -2093,12 +2092,12 @@ export class Game {
             fx.burst(snap.squadX, 0.8, PLAYER_Z, 0x19f5a8, 56, { speed: 8.5, size: 0.45, life: 0.6, up: 1 });
             fx.ring(snap.squadX, PLAYER_Z, 0x19f5a8, 3.8, 0.45);
             if (live) {
-              this.ui.floatText(p.x + 78, p.y - 6, `+${ev.delta}`, 'gain', 1.1);
+              gateGain += ev.delta;
               const prevCount = Math.max(1, snap.squadCount - ev.delta);
               const prevStreams = getVolleyStreamCount(snap.weapon, snap.weaponLevel, prevCount);
               const nextStreams = getVolleyStreamCount(snap.weapon, snap.weaponLevel, snap.squadCount);
               if (nextStreams > prevStreams) {
-                this.ui.floatText(p.x, p.y - 34, `弹幕 ×${nextStreams}！`, 'gold', 0.95);
+                streams = nextStreams;
               }
               a.gatePass(true, ev.delta);
               this.addScore(ev.delta * SCORE.gateGainPerUnit);
@@ -2195,7 +2194,7 @@ export class Game {
                 1500,
               );
             } else {
-              this.ui.showBanner(html`<div class="b-kicker">RESONANCE OVERDRIVE</div><div class="b-title">共鸣超载！</div><div class="b-sub">射速 ×1.5 · 穿透 +1</div>`, 'od', 1300);
+              this.ui.showBanner(html`<div class="b-title">共鸣超载</div><div class="b-sub">射速 ×1.5 · 穿透 +1</div>`, 'od pickup', 1050);
             }
             a.overdrive();
             a.radioComms('overdrive');
@@ -2437,14 +2436,13 @@ export class Game {
           break;
         }
         case 'REACTOR_PULSE_WALL': {
-          fx.ring(snap.squadX, ev.z, 0x62f4ff, 12.5, 0.75);
+          this.renderer.markReactorSweep(ev.contacts);
+          fx.ring(snap.squadX, ev.z, 0x62f4ff, 3.8, 0.31);
           this.renderer.triggerCinematicImpact(0.012, 0.24, snap.squadX, ev.z);
           if (live) {
             a.spatialThreatCue('reactor_wall', snap.squadX, 1.2, ev.z);
             this.input.rumble(0.65, 0.7, 160);
             this.addScore(320 + ev.hits * 20);
-            const p = this.worldToScreen(snap.squadX, 2.5, PLAYER_Z - 1.5);
-            this.ui.floatText(p.x, p.y, '🌊 反应堆Ⅲ阶 · 脉冲墙横扫!', 'gold', 1.12);
           }
           break;
         }
@@ -2567,7 +2565,7 @@ export class Game {
             a.nirvanaCataclysm(0);
             a.playVocoderChoir('nirvana');
             if (ev.kills >= 2) a.nukeChainShatter(ev.kills);
-            this.ui.showLetterbox(1550);
+            this.ui.showLetterbox(900);
             this.ui.doNirvanaFlash(ev.archetype, 1.0);
             this.addScore(780 + ev.kills * 38 + Math.round(ev.bossDamage * 0.45));
             const titleCol =
@@ -2579,27 +2577,26 @@ export class Game {
             this.ui.showBanner(
               html`<div class="b-kicker">☀️ OVERLIMIT NIRVANA · 二阶终焉奥义解放</div><div class="b-title" style="color:${titleCol}">${meta.glyph} ${meta.name}！</div><div class="b-sub">七重天基神罚柱贯穿全桥 · 歼敌 ×${ev.kills}${ev.bossDamage > 0 ? ` · 首领重创 -${ev.bossDamage}` : ''}</div>`,
               'od',
-              2350,
+              1150,
             );
           }
           break;
         }
         case 'NIRVANA_WAVE_PULSE': {
-          this.renderer.triggerNirvanaCataclysmVfx(snap.squadX, PLAYER_Z, ev.archetype, ev.wave);
+          this.renderer.triggerNirvanaCataclysmVfx(ev.x, ev.z, ev.archetype, ev.wave);
           if (live) {
             a.nirvanaCataclysm(ev.wave);
             if (ev.kills >= 2) a.hordeDeathChorus(ev.kills, 0, -22);
             this.input.rumble(0.82, 0.75, 280);
-            this.ui.doFlash('rgba(255, 240, 175, 0.42)', 0.24);
             this.addScore(180 + ev.kills * 28 + Math.round(ev.bossDamage * 0.35));
             if (ev.kills > 0 || ev.bossDamage > 0) {
-              const p = this.worldToScreen(snap.squadX, 2.6, PLAYER_Z - 2.0);
+              const p = this.worldToScreen(ev.x, 1.8, ev.z);
               this.ui.floatText(
                 p.x,
                 p.y,
-                ev.bossDamage > 0 ? `☀️ 神罚第${ev.wave + 1}波 · 首领-${ev.bossDamage}!` : `☀️ 神罚第${ev.wave + 1}波 · 歼敌×${ev.kills}!`,
-                'gold',
-                1.05,
+                ev.bossDamage > 0 ? `余震 -${ev.bossDamage}` : `余震 ×${ev.kills}`,
+                'small',
+                0.6,
               );
             }
           }
@@ -2673,6 +2670,8 @@ export class Game {
           break;
       }
     }
+    if (gateGain > 0) this.ui.showGateGain(gateGain, streak, streams, snap.simTime);
+    if (comboMilestone) this.ui.combo(this.combo);
   }
 
   private finishRun(victory: boolean, snap: SimSnapshot, reason: NonNullDefeatReason | null, extracted = false): void {
